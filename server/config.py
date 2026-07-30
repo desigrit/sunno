@@ -53,7 +53,10 @@ class Settings:
 
     # --- Speaker labelling ---
     enable_speakers: bool = True
-    speaker_model: str = "wespeaker_en_voxceleb_CAM++_LM.onnx"
+    # WeSpeaker CAM++ trained on VoxCeleb. Renamed from the upstream filename, which contains
+    # "++" — MakeAppx percent-encodes those into the MSIX part name, and relying on the
+    # installer to decode them back is a needless hazard for a path resolved by literal name.
+    speaker_model: str = "speaker-embedding-campplus-en.onnx"
     speaker_threshold: float = 0.50
     max_speakers: int = 8
     # Embeddings need ~2-3 s of speech to be dependable; guard against short turns.

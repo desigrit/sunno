@@ -210,6 +210,17 @@
                 </StackPanel>
             </Grid>
         </Border>
+        <!-- Actionable errors, chiefly the microphone-blocked case. The whole reason this
+             app is packaged is the per-app microphone toggle, so the state that toggle
+             creates must be explained rather than dumped as PortAudio diagnostics. -->
+        <InfoBar x:Name="MicInfoBar" Grid.Row="1" Severity="Warning" IsOpen="False"
+                 IsClosable="True" VerticalAlignment="Top" Margin="16,8,16,0">
+            <InfoBar.ActionButton>
+                <HyperlinkButton x:Name="MicSettingsLink" Content="Open Settings"
+                                 Click="OnOpenMicSettings" />
+            </InfoBar.ActionButton>
+        </InfoBar>
+
         <!-- first run: choose and download a speech model -->
         <Grid x:Name="SetupOverlay" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed"
               Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">

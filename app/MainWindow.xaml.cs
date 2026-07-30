@@ -76,6 +76,8 @@ public sealed partial class MainWindow : Window
             Application.Current.Exit();
         };
 
+        CheckMicrophoneCapability();
+
         var error = _backend.Start(
             device: _settings.DeviceIndex?.ToString(),
             model: _settings.Model,
@@ -189,14 +191,88 @@ public sealed partial class MainWindow : Window
         if (st.Running is bool running) SetRunning(running);
         _backendLoading = st.State == "loading";
 
+        if (st.State == "error")
+        {
+            ShowActionableError(st);
+            StatusText.Text = st.Code == "mic_denied" ? "Microphone blocked" : "Error";
+            return;
+        }
+
+        MicInfoBar.IsOpen = false;
         StatusText.Text = st.State switch
         {
             "loading" => $"Loading {st.Model}…",
             "stopped" => "Stopped · microphone released",
             "listening" => ShortDeviceName(st.Device) ?? "Listening",
-            "error" => st.Message ?? "Error",
             _ => st.State,
         };
+    }
+
+    /// <summary>
+    /// Explain a failure the user can actually act on. A hard-of-hearing user staring at a
+    /// blank transcript needs "microphone access is off" and a way to fix it, not a PortAudio
+    /// error dump.
+    /// </summary>
+    private void ShowActionableError(StatusEvent st)
+    {
+        switch (st.Code)
+        {
+            case "mic_denied":
+                MicInfoBar.Severity = InfoBarSeverity.Warning;
+                MicInfoBar.Title = "Microphone access is off";
+                MicInfoBar.Message =
+                    "Windows is blocking microphone access for Live Captions, so nothing can " +
+                    "be transcribed. Turn it on under Privacy & security › Microphone.";
+                MicSettingsLink.Visibility = Visibility.Visible;
+                break;
+
+            case "mic_unavailable":
+                MicInfoBar.Severity = InfoBarSeverity.Warning;
+                MicInfoBar.Title = "Microphone unavailable";
+                MicInfoBar.Message =
+                    (st.Message ?? "The microphone could not be opened.") +
+                    " Try choosing a different microphone below.";
+                MicSettingsLink.Visibility = Visibility.Collapsed;
+                break;
+
+            default:
+                MicInfoBar.Severity = InfoBarSeverity.Error;
+                MicInfoBar.Title = "Something went wrong";
+                MicInfoBar.Message = st.Message ?? "Unknown error.";
+                MicSettingsLink.Visibility = Visibility.Collapsed;
+                break;
+        }
+        MicInfoBar.IsOpen = true;
+    }
+
+    private async void OnOpenMicSettings(object sender, RoutedEventArgs e) =>
+        await Windows.System.Launcher.LaunchUriAsync(
+            new Uri("ms-settings:privacy-microphone"));
+
+    /// <summary>
+    /// Check the microphone capability before starting capture, so the app can explain a
+    /// blocked microphone up front instead of failing opaquely.
+    ///
+    /// AppCapability requires package identity; unpackaged builds cannot call it at all, so
+    /// this is a no-op there and the runtime error path above is the only signal.
+    /// </summary>
+    private void CheckMicrophoneCapability()
+    {
+        try
+        {
+            var status = Windows.Security.Authorization.AppCapabilityAccess
+                .AppCapability.Create("microphone").CheckAccess();
+
+            if (status != Windows.Security.Authorization.AppCapabilityAccess
+                    .AppCapabilityAccessStatus.Allowed)
+            {
+                ShowActionableError(new StatusEvent("error", false, null, null, null, "mic_denied"));
+            }
+        }
+        catch
+        {
+            // Unpackaged build (no package identity) — nothing to check.
+        }
     }
 
     /// <summary>Device strings carry format detail that's too long for the status line.</summary>

@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from . import cuda_setup  # noqa: F401  (must precede ctranslate2 import)
-from .audio import MicrophoneStream, WavFileStream, print_input_devices
+from .audio import MicrophoneOpenError, MicrophoneStream, WavFileStream, print_input_devices
 from .config import Settings
 from .paths import bundled_model, data_dir, speaker_profiles_path, ui_dir
 from .pipeline import CaptionPipeline, SessionController
@@ -360,6 +360,19 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                             )
                             print(f"Listening on: {stream.device_name}", flush=True)
                             pipeline.run(stream.frames(lambda: controller.is_running))
+                    except MicrophoneOpenError as exc:
+                        # Surface a distinguishable code so the UI can offer the right fix
+                        # rather than showing a wall of PortAudio diagnostics.
+                        emit({
+                            "type": "error",
+                            "code": "mic_denied" if exc.access_denied else "mic_unavailable",
+                            "message": str(exc),
+                            "detail": exc.detail(),
+                            "running": False,
+                        })
+                        print(f"[error] {exc}\n  {exc.detail()}", flush=True)
+                        controller.pause()
+                        continue
                     except Exception as exc:
                         emit({"type": "error", "message": str(exc), "running": False})
                         print(f"[error] {exc}", flush=True)

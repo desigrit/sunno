@@ -9,7 +9,8 @@ public sealed record CaptionEvent(
     string Type, int Id, string? Text, int? SpeakerId, string? Speaker,
     int? Clarity, double LatencyMs);
 
-public sealed record StatusEvent(string State, bool? Running, string? Model, string? Device, string? Message);
+public sealed record StatusEvent(string State, bool? Running, string? Model, string? Device,
+                                 string? Message, string? Code = null);
 
 public sealed record LevelEvent(double Db, bool Speaking);
 
@@ -139,7 +140,8 @@ public sealed class CaptionClient : IAsyncDisposable
                 break;
             case "error":
                 Status?.Invoke(new StatusEvent("error", GetBool(root, "running"), null, null,
-                                               GetString(root, "message")));
+                                               GetString(root, "message"),
+                                               GetString(root, "code")));
                 break;
             case "roster":
             {

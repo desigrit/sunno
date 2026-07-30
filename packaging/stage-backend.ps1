@@ -30,9 +30,11 @@ New-Item -ItemType Directory -Path $py -Force | Out-Null
 
 Write-Host "Staging interpreter from $baseHome"
 
-# Interpreter core. Excludes docs, tcl/tk, the test suite and bundled installers - none are
-# reachable from the backend and they are ~60 MB.
-$excludeDirs = @("Doc", "tcl", "Lib\test", "Lib\tkinter", "Lib\idlelib", "Lib\lib2to3", "Scripts")
+# Interpreter core. Excludes docs, tcl/tk, the test suite and the base install's own
+# site-packages — the venv's packages are overlaid below, and the base copy would otherwise
+# drag pip/setuptools in behind them.
+$excludeDirs = @("Doc", "tcl", "Lib\test", "Lib\tkinter", "Lib\idlelib", "Lib\lib2to3",
+                 "Scripts", "Lib\site-packages")
 robocopy $baseHome $py /E /NFL /NDL /NJH /NJS /NC /NS /NP `
   /XD $($excludeDirs | ForEach-Object { Join-Path $baseHome $_ }) `
   /XF "python*._pth" | Out-Null
@@ -43,10 +45,39 @@ $targetSite = Join-Path $py "Lib\site-packages"
 New-Item -ItemType Directory -Path $targetSite -Force | Out-Null
 
 Write-Host "Staging site-packages"
-$pkgExclude = @("pip", "setuptools", "pkg_resources", "wheel", "pefile", "__pycache__")
-robocopy $site $targetSite /E /NFL /NDL /NJH /NJS /NC /NS /NP `
-  /XD $($pkgExclude | ForEach-Object { Join-Path $site $_ }) nvidia | Out-Null
+# Development-only packages that must not reach the package:
+#   pip/setuptools/wheel - nothing installs at runtime
+#   scipy (+ scipy.libs)  - 129 MB, replaced by the hand-rolled biquad in preprocess.py
+#   PIL                   - icon generation only (packaging/make_icon.py)
+#   pefile                - CUDA import analysis only (packaging/cuda_decide.py)
+#   nvidia                - staged separately, from the allow-list
+$pkgExclude = @(
+  "pip", "pip-*", "setuptools", "setuptools-*", "pkg_resources", "wheel", "wheel-*",
+  "scipy", "scipy.libs", "scipy-*",
+  "PIL", "pillow-*", "Pillow-*",
+  "pefile", "pefile-*",
+  "nvidia", "nvidia_*",
+  "__pycache__"
+)
+# robocopy /XD takes a flat, space-separated list; passing a nested array silently drops
+# entries, which is how scipy/PIL/pip leaked into the first package build.
+$xd = @()
+foreach ($name in $pkgExclude) {
+  Get-ChildItem $site -Directory -Filter $name -ErrorAction SilentlyContinue |
+    ForEach-Object { $xd += $_.FullName }
+}
+$xd += (Join-Path $site "nvidia")
+
+$args = @($site, $targetSite, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS", "/NP",
+          "/XD") + $xd + @("__pycache__")
+& robocopy @args | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed staging site-packages ($LASTEXITCODE)" }
+
+# Fail loudly if anything dev-only still made it through, rather than shipping it quietly.
+foreach ($banned in @("scipy", "PIL", "pip", "pefile")) {
+  $leak = Join-Path $targetSite $banned
+  if (Test-Path $leak) { throw "Dev-only package '$banned' leaked into the staged payload at $leak" }
+}
 
 # CUDA: copy only what the import graph proves is reachable.
 if (-not $SkipCuda) {
@@ -76,7 +107,9 @@ Copy-Item (Join-Path $repo "ui") (Join-Path $Destination "ui") -Recurse -Force
 
 $models = Join-Path $Destination "models"
 New-Item -ItemType Directory -Path $models -Force | Out-Null
-$speakerModel = "wespeaker_en_voxceleb_CAM++_LM.onnx"   # config.py default; the others are benchmarks
+# Explicit single file, not a directory copy: models/ also holds ~130 MB of benchmark
+# models that must not silently inflate the package.
+$speakerModel = "speaker-embedding-campplus-en.onnx"   # matches config.py's default
 Copy-Item (Join-Path $repo "models\$speakerModel") (Join-Path $models $speakerModel) -Force
 
 $size = (Get-ChildItem $Destination -Recurse -File | Measure-Object Length -Sum).Sum / 1MB

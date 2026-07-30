@@ -12,19 +12,30 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <!-- Built unpackaged for fast iteration; the MSIX build flips this to MSIX.
-         Keeping both working from one codebase is deliberate. -->
-    <WindowsPackageType>None</WindowsPackageType>
-    <!-- Unpackaged apps otherwise require the Windows App SDK runtime to be pre-installed;
-         self-contained bundles it so the build runs on a clean machine. -->
+    <!-- Unpackaged by default for fast iteration (dotnet run / F5). The MSIX build passes
+         -p:PackageForMsix=true, which switches off the bootstrapper path. Self-contained in
+         both cases so the Windows App SDK runtime need not be pre-installed. -->
+    <WindowsPackageType Condition="'$(PackageForMsix)' == 'true'">None</WindowsPackageType>
+    <WindowsPackageType Condition="'$(PackageForMsix)' != 'true'">None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
+    <!-- Packaging is done by packaging/build-msix.ps1 with MakeAppx over the published
+         output, not by the MSBuild appx targets, so no AppxManifest lives in the project. -->
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260710003" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.8249" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Tile/logo assets for MSIX, plus the .ico used by the unpackaged exe. -->
+    <Content Include="Assets\**\*.png" />
+    <Content Include="Assets\AppIcon.ico" />
   </ItemGroup>
 
 </Project>

@@ -191,22 +191,55 @@ plain omnidirectional mic, which captures every room reflection equally.
 ## Layout
 
 ```
-server/
-  app.py         entry point: WebSocket + static UI server, CLI
+server/          Python backend
+  app.py         entry point: WebSocket + static UI server, model gating, CLI
   pipeline.py    VAD state machine, session control, two-pass ASR worker
   asr.py         faster-whisper wrapper (provisional/final passes, context, clarity)
   speaker.py     online speaker labelling with naming and persistence
-  preprocess.py  conservative audio conditioning (high-pass, level, DC)
+  models.py      model catalog + first-run download with progress
+  preprocess.py  conservative audio conditioning (high-pass biquad, level, DC)
   vad.py         streaming Silero VAD with state carried across frames
   audio.py       microphone capture, format negotiation, resampling; WAV replay
+  paths.py       read-only install vs writable LocalAppData split
   config.py      tunable settings
-  cuda_setup.py  registers the bundled NVIDIA DLLs on Windows
-ui/
-  index.html, app.js, style.css
-models/
-  wespeaker_en_voxceleb_CAM++_LM.onnx   speaker embeddings (28 MB)
-  speakers.json                          named speakers, created on first rename
+  cuda_setup.py  registers the bundled NVIDIA DLLs; fails loudly if mis-staged
+app/             WinUI 3 (C#) frontend
+  MainWindow.*   captions, speakers pane, command bar, first-run setup
+  Services/      BackendHost, CaptionClient, ChildProcessJob, AppSettings
+  Assets/        generated icon set (see packaging/make_icon.py)
+ui/              browser client, served over HTTP for the phone/handheld route
+packaging/
+  make_icon.py       generates the .ico and the full MSIX asset set
+  cuda_allowlist.txt CUDA DLLs proven reachable by import analysis
+  stage-backend.ps1  stages a self-contained Python runtime + backend
+  build-msix.ps1     publishes, stages, packs and signs the MSIX
+  Package.appxmanifest
 ```
+
+## Packaging
+
+```powershell
+cd packaging
+.\build-msix.ps1
+```
+
+Produces a signed `out\LiveCaptions.msix` (~794 MB). The script deliberately stops before
+installing: installing a self-signed package requires adding its certificate to
+LocalMachine Trusted People, which is a machine-wide trust change, so it prints the two
+elevated commands rather than running them.
+
+**What is and isn't in the package.** The app, a self-contained Python 3.12 runtime, the
+backend, the browser UI and the 28 MB speaker-embedding model ship inside. The 2.9 GB
+Whisper model does not — it is downloaded on first run into the user's cache, which keeps
+the package small and the install directory read-only-safe.
+
+**CUDA payload.** The pip NVIDIA wheels total 1,984 MB; only 828 MB ships. Parsing the PE
+import tables (static, delay-load and string-literal `LoadLibrary` targets) of ctranslate2,
+onnxruntime and sherpa-onnx shows the entire dependency chain is
+`ctranslate2 → cublas64_12 → cublasLt64_12 → nvrtc`. Nothing reaches cuDNN; CTranslate2's
+own bundled `cudnn64_9.dll` is vestigial. Confirmed empirically too — transcripts are
+byte-identical with the cuDNN tree removed. Regenerate the allow-list with
+`packaging/cuda_decide.py` if dependencies change.
 
 ## Tuning
 

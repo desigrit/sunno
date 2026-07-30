@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <!-- Publisher must match the signing certificate's subject DN exactly, or installation
+       fails with a signature mismatch. For Store submission this is replaced by the
+       identity assigned in Partner Center. -->
+  <Identity
+    Name="LiveCaptions.Offline"
+    Publisher="CN=LiveCaptionsDev"
+    Version="1.0.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Live Captions</DisplayName>
+    <PublisherDisplayName>Live Captions</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>Offline live captioning. Speech is transcribed on your PC and never leaves the device.</Description>
+  </Properties>
+
+  <Dependencies>
+    <!-- Matches TargetPlatformMinVersion in LiveCaptions.csproj. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0"
+                        MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <!-- Windows.FullTrustApplication: a normal Win32 process, not an AppContainer app.
+         Required so the backend can load CUDA DLLs and talk to a localhost socket without
+         a loopback exemption. -->
+    <Application Id="App"
+                 Executable="LiveCaptions.exe"
+                 EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Live Captions"
+        Description="Offline live captioning for conversations around you."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile
+          Wide310x150Logo="Assets\Wide310x150Logo.png"
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#1F8A70" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- runFullTrust is what keeps this out of AppContainer (see EntryPoint above). -->
+    <rescap:Capability Name="runFullTrust" />
+
+    <!-- The reason this app is packaged at all: with package identity plus this capability,
+         Live Captions gets its OWN entry and toggle under Settings > Privacy & security >
+         Microphone, and can query AppCapability before capturing. Unpackaged Win32 apps
+         share a single blanket "let desktop apps access your microphone" switch. This app
+         records other people in the user's home, so per-app attribution and a visible
+         in-use indicator are correctness requirements, not polish. -->
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>

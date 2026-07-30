@@ -65,6 +65,48 @@ def _ensure_com_initialized() -> None:
         print(f"[audio] CoInitializeEx returned 0x{hr & 0xFFFFFFFF:08X}", file=sys.stderr)
 
 
+# Windows returns E_ACCESSDENIED (0x80070005) from IAudioClient::Initialize when the
+# microphone privacy setting blocks the caller. PortAudio surfaces it inside a generic
+# "Unanticipated host error" string, so match on the code and on the text WASAPI uses.
+_ACCESS_DENIED_MARKERS = (
+    "-2147024891",          # 0x80070005 as a signed 32-bit int
+    "0x80070005",
+    "access is denied",
+    "accessdenied",
+    "audclnt_e_device_in_use",
+)
+
+
+class MicrophoneOpenError(RuntimeError):
+    """Raised when no candidate format could open the device.
+
+    Distinguishes "Windows is blocking microphone access" from "the device is broken or
+    busy", because the two need completely different advice and this app is useless to its
+    user until the microphone works.
+    """
+
+    def __init__(self, device, failures: list[str]) -> None:
+        self.device = device
+        self.failures = failures
+        blob = " ".join(failures).lower()
+        self.access_denied = any(m in blob for m in _ACCESS_DENIED_MARKERS)
+
+        if self.access_denied:
+            message = (
+                "Microphone access is blocked for this app. Open Settings > Privacy & "
+                "security > Microphone and allow access."
+            )
+        else:
+            message = (
+                f"Could not open input device {device!r}. "
+                "It may be unplugged or in use by another app."
+            )
+        super().__init__(message)
+
+    def detail(self) -> str:
+        return "\n  ".join(self.failures)
+
+
 class MicrophoneStream:
     """Yields mono float32 frames of exactly FRAME_SAMPLES at SAMPLE_RATE.
 
@@ -161,11 +203,7 @@ class MicrophoneStream:
             self._stream = stream
             return self
 
-        raise RuntimeError(
-            f"could not open input device {self.device!r}.\n  "
-            + "\n  ".join(failures)
-            + "\nRun with --list-devices to see available inputs."
-        )
+        raise MicrophoneOpenError(self.device, failures)
 
     def __exit__(self, *exc) -> None:
         if self._stream is not None:
