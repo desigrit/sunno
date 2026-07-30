@@ -2,11 +2,17 @@ faster-whisper
 sounddevice
 soxr
 numpy
-scipy
+
 websockets
 onnxruntime>=1.17
 sherpa-onnx
 
-# CUDA runtime for CTranslate2 (CUDA 12 + cuDNN 9)
+# CUDA runtime for CTranslate2 (CUDA 12).
+#
+# cuDNN is installed for development but is NOT shipped in the MSIX package: parsing the
+# import tables of ctranslate2/onnxruntime/sherpa-onnx shows the only NVIDIA dependency is
+# cublas64_12.dll (-> cublasLt64_12.dll -> nvrtc). Verified empirically too - transcripts are
+# byte-identical with the cuDNN tree removed. It stays here so packaging/cuda_decide.py can
+# re-derive the allow-list from a complete set if a future CTranslate2 starts needing it.
 nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*

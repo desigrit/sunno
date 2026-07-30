@@ -296,6 +296,18 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         await model_ready.wait()
         settings.model_size = chosen_model
 
+        # Fail loudly and early if the CUDA payload is mis-staged, rather than surfacing an
+        # opaque ctranslate2 DLL load error once the user is already mid-conversation.
+        if settings.device == "cuda":
+            from .cuda_setup import register_cuda_dlls
+
+            try:
+                register_cuda_dlls(required=True)
+            except RuntimeError as exc:
+                emit({"type": "error", "message": str(exc), "running": False})
+                print(f"[fatal] {exc}", flush=True)
+                raise
+
         print(f"\nLoading Whisper {settings.model_size} ({settings.compute_type}) on "
               f"{settings.device} ...")
         emit({"type": "status", "state": "loading", "model": settings.model_size})
