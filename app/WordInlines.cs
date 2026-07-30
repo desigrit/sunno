@@ -61,29 +61,20 @@ public static class WordInlines
         block.PointerMoved += OnPointerMoved;
         block.PointerExited -= OnPointerExited;
         block.PointerExited += OnPointerExited;
-        block.Unloaded -= OnBlockUnloaded;
-        block.Unloaded += OnBlockUnloaded;
 
         Render(block, line);
-    }
-
-    /// <summary>
-    /// Release the line as soon as its container leaves the tree.
-    ///
-    /// The transcript trims old lines, and the container is destroyed without the attached
-    /// property ever being reset, so nothing else would drop the association.
-    /// </summary>
-    private static void OnBlockUnloaded(object sender, RoutedEventArgs e)
-    {
-        if (sender is not RichTextBlock block) return;
-        if (GetLine(block) is not CaptionLine line) return;
-        line.PropertyChanged -= OnLinePropertyChanged;
-        _owners.Remove(line);
     }
 
     // Weak on the key, so a trimmed CaptionLine and its RichTextBlock become collectable
     // together. A plain dictionary here leaked one entry — and one visual subtree — per
     // finalised utterance, which matters in an app designed to run for hours.
+    //
+    // Deliberately no Unloaded hook to detach eagerly. Unloaded can fire for a block that is
+    // still showing a current line (theme change, an ancestor collapsing), and detaching then
+    // would unsubscribe PropertyChanged with nothing to re-attach it — the line would silently
+    // stop updating, so a provisional caption would never upgrade to its final text. The weak
+    // key already bounds growth without that risk, and the PropertyChanged handler is static,
+    // so the subscription cannot keep the block alive either.
     private static readonly ConditionalWeakTable<CaptionLine, RichTextBlock> _owners = new();
 
     private static void OnLinePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)

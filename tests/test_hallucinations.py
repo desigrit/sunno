@@ -39,6 +39,11 @@ SHOULD_BLOCK = [
     "Please subscribe to our channel",
     "  Subtitles by the Amara.org community  ",
     "\u201cSubtitling by SUBS Hamburg\u201d",
+    # Credits that slipped through an earlier, stricter-looking version of this filter.
+    "Please subscribe to our channel and hit the bell now.",
+    "\u266a Subtitles by NanoStudio \u266a",
+    "Thanks for watching! Subtitles by NanoStudio",
+    "Subtitles by Steamteam",
 ]
 
 # Ordinary speech. Deleting any of these would be a worse bug than the one the filter exists
@@ -52,6 +57,15 @@ SHOULD_PASS = [
     "This edition was translated by someone who really understood the original",
     "I think the transcript by the court reporter had errors in it",
     "Translated by my grandmother, the poem finally made sense to me",
+    # Short sentences that OPEN with a credit phrase but attribute to ordinary words rather
+    # than a name — the collocations a start-anchored filter alone would eat.
+    "Subtitles by default are off.",
+    "Translated by my sister.",
+    "Transcription by hand takes forever.",
+    "Subtitles by themselves don't help much.",
+    "Subscribe to that podcast, it's really good.",
+    "Subscribe to whichever plan works for you.",
+    "Translated by the court reporter, apparently.",
     # Plain speech mentioning the same subject matter.
     "Can you turn the subtitles on for this film?",
     "I was transcribing the meeting notes yesterday",

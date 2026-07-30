@@ -163,10 +163,14 @@ public sealed class BackendHost : IDisposable
             if (!_job.Assign(_process))
             {
                 // Never leave an unsupervised capture process behind: a backend outside the
-                // job survives a killed UI still holding the microphone open.
+                // job survives a killed UI still holding the microphone open. Suppress the
+                // Exited handler first, or this deliberate kill would also be announced as a
+                // crash on top of the error this returns.
+                _stopping = true;
                 try { _process.Kill(entireProcessTree: true); } catch { /* already gone */ }
                 _process.Dispose();
                 _process = null;
+                _stopping = false;
                 return "Could not supervise the speech engine; not starting it.";
             }
             _process.BeginOutputReadLine();

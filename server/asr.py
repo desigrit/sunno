@@ -30,55 +30,79 @@ class Transcript:
 
 
 # Whisper was trained on subtitled video, so over near-silence it reproduces the caption
-# credits that pad such files. Two separate rules, because the risk is asymmetric: putting
-# words nobody said into the transcript is bad, but silently deleting a sentence someone did
-# say is worse for a user who is relying on this to follow a conversation.
+# credits that pad such files. Three rules, because the risk is asymmetric: putting words
+# nobody said into the transcript is bad, but silently deleting a sentence someone did say is
+# worse for a user who is relying on this to follow a conversation.
 #
-# 1. Tokens that are never speech in this setting — an org or a URL. Safe to match anywhere.
+# 1. Tokens that are never speech in this setting — an org, a URL, or a subscribe-to-channel
+#    plea. Safe to match anywhere, at any length.
 _HALLUCINATION_TOKENS = re.compile(
     r"""
     amara\.org
   | castingwords
   | zeoranger
+  | nanostudio
   | www\.\w+\.\w+
   | \bsubs\s+hamburg\b
+  | \bsubscribe\s+to\s+(?:my|our|the|this)\s+channel\b
     """,
     re.IGNORECASE | re.VERBOSE,
 )
 
-# 2. Credit phrasings, which DO occur in ordinary speech ("the book was translated by
-#    Tolkien himself"). These only count when the segment opens with them and is short —
-#    the shape of a caption credit, not of a sentence about one.
-_HALLUCINATION_OPENERS = re.compile(
+# 2. Credit phrasings, which also occur in ordinary speech ("the book was translated by
+#    Tolkien", "subtitles by default are off", "transcription by hand takes forever"). Three
+#    conditions must hold together before this counts as boilerplate:
+#      * the sentence OPENS with the phrase — "the subtitles by that studio" is speech;
+#      * it is short — a credit is terse, a sentence about one usually isn't;
+#      * the attribution is a proper noun — credits name a studio or handle, whereas speech
+#        says "by my sister", "by hand", "by default", "by the court reporter".
+#    The last condition is what rescues the common collocations, and it is why the original
+#    text is inspected rather than a lower-cased copy.
+_CREDIT_OPENER = re.compile(
     r"""
-    ^(?:please\s+)?           # politeness prefix seen in "Please subscribe to our channel"
-    (?:
-        subtitl\w*\s+by
-      | subs\s+by
-      | transcription\s+by
-      | transcript\w*\s+by
-      | translated\s+by
-      | subscribe\s+to\b
-    )
+    ^(?:please\s+)?
+    (?:subtitl\w*|subs|transcription|transcript\w*|translated)
+    \s+by\s+
+    (?P<who>\S+)
     """,
     re.IGNORECASE | re.VERBOSE,
 )
 
 # Credits are terse. A longer sentence that merely opens with "Translated by ..." is much
-# more likely to be speech, so length is the second half of the test.
+# more likely to be speech, so length is part of the test.
 _MAX_CREDIT_WORDS = 8
+
+# Leading decoration seen around credits: quotes, dashes, brackets and the music notes that
+# subtitle files use to mark theme music.
+_CREDIT_TRIM = "\"'“‘‚„([{-–—*_ \t♪♫†‡"
+
+_SENTENCE_SPLIT = re.compile(r"[.!?…]+")
+
+
+def _sentence_is_credit(sentence: str) -> bool:
+    stripped = sentence.strip().lstrip(_CREDIT_TRIM).strip()
+    if not stripped or len(stripped.split()) > _MAX_CREDIT_WORDS:
+        return False
+
+    match = _CREDIT_OPENER.match(stripped)
+    if match is None:
+        return False
+
+    # A proper noun (or an ALLCAPS handle) marks an attribution; anything lower-case is
+    # almost certainly ordinary speech.
+    who = match.group("who").lstrip(_CREDIT_TRIM)
+    return bool(who) and who[:1].isupper()
 
 
 def _looks_like_caption_credit(text: str) -> bool:
     """Whether a segment is boilerplate rather than something a person said."""
-    stripped = text.strip().lstrip("\"'“‘([-–— ").strip()
-    if not stripped:
+    if not text or not text.strip():
         return False
-    if _HALLUCINATION_TOKENS.search(stripped):
+    if _HALLUCINATION_TOKENS.search(text):
         return True
-    if len(stripped.split()) > _MAX_CREDIT_WORDS:
-        return False
-    return bool(_HALLUCINATION_OPENERS.match(stripped))
+    # Checked per sentence so a credit tacked onto the end ("Thanks for watching! Subtitles
+    # by NanoStudio") is still recognised, without letting a mid-sentence mention count.
+    return any(_sentence_is_credit(part) for part in _SENTENCE_SPLIT.split(text))
 
 
 def _clarity_from_logprob(avg_logprob: float) -> int:
