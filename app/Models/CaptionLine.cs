@@ -16,6 +16,8 @@ public sealed class CaptionLine : INotifyPropertyChanged
     private int? _speakerId;
     private bool _isSelf;
     private int? _clarity;
+    private IReadOnlyList<CaptionWord> _words = Array.Empty<CaptionWord>();
+    private DateTimeOffset? _spokenAt;
 
     // Not init-only: the XAML type-info generator emits a plain setter assignment.
     public int UtteranceId { get; set; }
@@ -91,6 +93,32 @@ public sealed class CaptionLine : INotifyPropertyChanged
     public string DisplayLabel => _isSelf ? "You" : _speakerLabel ?? string.Empty;
     public bool ShowClarity => _isSelf && _isFinal && _clarity is not null;
 
+    /// <summary>
+    /// Per-word confidence, used to mark uncertain words. Empty on provisional lines, which
+    /// are replaced within a second anyway and aren't worth the extra decode work.
+    /// </summary>
+    public IReadOnlyList<CaptionWord> Words
+    {
+        get => _words;
+        set => Set(ref _words, value);
+    }
+
+    /// <summary>When the utterance was spoken, not when it finished decoding.</summary>
+    public DateTimeOffset? SpokenAt
+    {
+        get => _spokenAt;
+        set
+        {
+            if (Set(ref _spokenAt, value)) Notify(nameof(TimeLabel));
+        }
+    }
+
+    public string TimeLabel => _spokenAt?.ToLocalTime().ToString("HH:mm") ?? string.Empty;
+
+    /// <summary>Plain text for the clipboard, including who said it and when.</summary>
+    public string ToPlainText() =>
+        HasSpeaker ? $"[{TimeLabel}] {DisplayLabel}: {Text}" : Text;
+
     /// <summary>Palette index so each speaker keeps a stable colour.</summary>
     public int ColourIndex => (_speakerId ?? 0) % 8;
 
@@ -110,3 +138,20 @@ public sealed class CaptionLine : INotifyPropertyChanged
 
 /// <summary>A speaker the backend has discovered, or that the user has named.</summary>
 public sealed record SpeakerInfo(int Id, string Label, bool Named, bool IsSelf);
+
+/// <summary>
+/// One decoded word and how sure the model was of it.
+///
+/// <paramref name="Probability"/> is faster-whisper's per-word probability. Measured on clean
+/// speech these sit at 0.97-1.00, while genuinely ambiguous words drop sharply, so the
+/// threshold has a wide gap to sit in.
+/// </summary>
+public sealed record CaptionWord(string Text, double Probability)
+{
+    public const double UncertainBelow = 0.55;
+
+    public bool IsUncertain => Probability < UncertainBelow;
+
+    /// <summary>Percentage, for display on hover.</summary>
+    public double Confidence => Probability * 100.0;
+}

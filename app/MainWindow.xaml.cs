@@ -11,6 +11,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using Windows.Security.Authorization.AppCapabilityAccess;
@@ -76,6 +77,8 @@ public sealed partial class MainWindow : Window
     /// "this model never loads" from "something broke after it had been working".
     /// </summary>
     private bool _engineReadyThisSession;
+    /// <summary>Consent as read once at startup; re-reading it later proved fatal.</summary>
+    private AppCapabilityAccessStatus? _micStatus;
     /// <summary>Whether the InfoBar's action can still raise the dialog, or must fall back to
     /// Settings because Windows will not prompt a second time.</summary>
     private bool _micCanPrompt;
@@ -95,10 +98,13 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
+        App.Trace("MainWindow ctor: InitializeComponent");
         InitializeComponent();
+        App.Trace("MainWindow ctor: XAML loaded");
         _ui = DispatcherQueue.GetForCurrentThread();
 
         ConfigureWindow();
+        App.Trace("MainWindow ctor: window configured");
 
         _client.Partial += ev => _ui.TryEnqueue(() => OnPartial(ev));
         _client.Final += ev => _ui.TryEnqueue(() => OnFinal(ev));
@@ -129,6 +135,7 @@ public sealed partial class MainWindow : Window
         // the microphone would already be live behind our own consent dialog, which would make
         // asking dishonest.
         var micStatus = MicrophoneAccess.Check();
+        _micStatus = micStatus;
         _lastGoodModel = _settings.Model;
         _micGranted = (micStatus is null or AppCapabilityAccessStatus.Allowed)
                       && _settings.MicrophoneAsked;
@@ -140,8 +147,10 @@ public sealed partial class MainWindow : Window
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused);
         if (!string.IsNullOrEmpty(error)) StatusText.Text = error;
+        App.Trace($"backend.Start -> {(string.IsNullOrEmpty(error) ? "ok" : error)}");
         _client.Start();
         _ = LoadDevicesAsync();
+        App.Trace("MainWindow ctor: backend started");
 
         // Consent is asked from the content's Loaded event rather than window activation: a
         // window that is shown without being focused still needs to ask, otherwise the backend
@@ -150,6 +159,7 @@ public sealed partial class MainWindow : Window
         {
             root.Loaded += (_, _) =>
             {
+                App.Trace("content Loaded");
                 if (_micPromptDone) return;
                 _micPromptDone = true;
                 _ = EnsureMicrophoneAccessAsync();
@@ -157,10 +167,34 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Load the title-bar icon straight off disk.
+    ///
+    /// Not ms-appx:/// — that resolves through the package resource index, and the packaging
+    /// script copies Assets in after publish, so they are present as files but absent from
+    /// resources.pri. Reading the file directly works identically packaged and unpackaged.
+    /// </summary>
+    private void ApplyTitleBarIcon()
+    {
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "Assets",
+                                    "Square44x44Logo.targetsize-32.png");
+            if (File.Exists(path))
+                TitleBarIcon.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
+        }
+        catch (Exception ex)
+        {
+            // A missing icon is cosmetic; the title bar still reads correctly without it.
+            System.Diagnostics.Debug.WriteLine($"title bar icon skipped: {ex.Message}");
+        }
+    }
+
     /// <summary>Mica, extended title bar and a medium default size, matching inbox apps.</summary>
     private void ConfigureWindow()
     {
         Title = "Sunno";
+        ApplyTitleBarIcon();
 
         if (MicaController.IsSupported())
             SystemBackdrop = new MicaBackdrop { Kind = MicaKind.Base };
@@ -230,6 +264,11 @@ public sealed partial class MainWindow : Window
         line.SpeakerLabel = ev.Speaker;
         line.Clarity = ev.Clarity;
         line.IsSelf = ev.SpeakerId is int id && FindSpeaker(id) is { IsSelf: true };
+        if (ev.StartedAt is double epoch && epoch > 0)
+            line.SpokenAt = DateTimeOffset.FromUnixTimeMilliseconds((long)(epoch * 1000));
+        // Assigned after Text so the inline builder overwrites the plain text, not the
+        // reverse — the attached property fires on assignment, not on render.
+        if (ev.Words is { Count: > 0 }) line.Words = ev.Words;
         line.IsFinal = isFinal;
     }
 
@@ -238,6 +277,32 @@ public sealed partial class MainWindow : Window
         if (_provisional is not null && _currentUtterance == id) Lines.Remove(_provisional);
         _provisional = null;
         _currentUtterance = -1;
+    }
+
+    /// <summary>Remember which line was right-clicked, so Copy knows what to copy.</summary>
+    private void OnTranscriptRightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: CaptionLine line }) _contextLine = line;
+    }
+
+    private CaptionLine? _contextLine;
+
+    private void OnCopyLine(object sender, RoutedEventArgs e)
+    {
+        if (_contextLine is null) return;
+        CopyToClipboard(_contextLine.ToPlainText());
+    }
+
+    private void OnCopyAll(object sender, RoutedEventArgs e) =>
+        CopyToClipboard(string.Join(Environment.NewLine,
+            Lines.Where(l => l.IsFinal).Select(l => l.ToPlainText())));
+
+    private static void CopyToClipboard(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+        package.SetText(text);
+        Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
     }
 
     private void Trim()
@@ -253,7 +318,10 @@ public sealed partial class MainWindow : Window
     private void OnLevel(LevelEvent lv)
     {
         if (!_running) return;
-        LevelBar.Value = Math.Clamp((lv.Db + 60) / 60.0, 0, 1) * 100;
+        // The bar is 26px tall and fills from the bottom, so the level maps to a height
+        // rather than a ProgressBar value.
+        var fraction = Math.Clamp((lv.Db + 60) / 60.0, 0, 1);
+        LevelFill.Height = fraction * 26.0;
     }
 
     private void OnStatus(StatusEvent st)
@@ -357,6 +425,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void OnBackendCrashed(string message)
     {
+        App.Trace($"backend crashed: {message.Split('\n')[0]}");
         _backendLoading = false;
 
         // A crash while switching means the new model never came up. Fall back to something
@@ -474,14 +543,12 @@ public sealed partial class MainWindow : Window
         }
         if (_micCanPrompt)
         {
-            // Recovering from our own "not now" needs no OS round trip — the OS never denied us.
-            if (_micDeclined)
-            {
-                _micDeclined = false;
-                ApplyMicrophoneStatus(MicrophoneAccess.Check());
-                return;
-            }
-            ApplyMicrophoneStatus(await MicrophoneAccess.RequestAsync());
+            // No OS round trip in either branch. A declined dialog was our own decision, not
+            // the OS's, and RequestAccessAsync is a proven no-op for a full-trust packaged
+            // app — it returns Allowed without prompting. Re-querying consent here also
+            // reintroduces the repeat-CheckAccess call that killed the process.
+            _micDeclined = false;
+            ApplyMicrophoneStatus(_micStatus);
             return;
         }
         await Windows.System.Launcher.LaunchUriAsync(
@@ -500,12 +567,13 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private async Task EnsureMicrophoneAccessAsync()
     {
-        var status = MicrophoneAccess.Check();
-
-        // UserPromptRequired means "never asked", not "refused" — the state the previous
-        // CheckAccess-only code mislabelled as a denial.
-        if (status == AppCapabilityAccessStatus.UserPromptRequired)
-            status = await MicrophoneAccess.RequestAsync();
+        // Deliberately reuses the status read during construction rather than calling
+        // CheckAccess again. A second call from inside the Loaded handler reproducibly took
+        // the process down with a stowed exception in Microsoft.UI.Xaml, and re-reading buys
+        // nothing: consent cannot change in the ~100 ms between the two, and AccessChanged
+        // covers any change afterwards.
+        var status = _micStatus;
+        App.Trace($"mic: reusing status={status}");
 
         if (!_settings.MicrophoneAsked && status is null or AppCapabilityAccessStatus.Allowed)
             await AskForMicrophoneAsync();
@@ -514,6 +582,7 @@ public sealed partial class MainWindow : Window
 
         // Notice a later grant from Settings, so the fallback isn't a dead end that needs a relaunch.
         MicrophoneAccess.Changed += OnMicAccessChanged;
+        App.Trace("mic: done");
     }
 
     /// <summary>Ask once, in two sentences, with the honest answer to "where does my voice go".</summary>
@@ -550,7 +619,13 @@ public sealed partial class MainWindow : Window
     private bool _micDeclined;
 
     private void OnMicAccessChanged() =>
-        _ui.TryEnqueue(() => ApplyMicrophoneStatus(MicrophoneAccess.Check()));
+        _ui.TryEnqueue(() =>
+        {
+            // The event itself is the signal that access changed; re-reading is what the
+            // event exists to make safe, and by here we are off the Loaded path.
+            _micStatus = MicrophoneAccess.Check();
+            ApplyMicrophoneStatus(_micStatus);
+        });
 
     /// <summary>
     /// Render a consent status. Each denial has a different remedy, so they can't share one
@@ -559,6 +634,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void ApplyMicrophoneStatus(AppCapabilityAccessStatus? status)
     {
+        App.Trace($"ApplyMicrophoneStatus({status}) declined={_micDeclined}");
         // Null means no package identity (an unpackaged dev build). There is no consent state
         // to honour, so let the backend's runtime error be the only signal.
         if (status is null or AppCapabilityAccessStatus.Allowed)
@@ -702,12 +778,6 @@ public sealed partial class MainWindow : Window
     }
 
     private void OnMicInfoClosed(InfoBar sender, object args) => _infoSticky = false;
-
-    private void OnModelSectionExpanding(Expander sender, ExpanderExpandingEventArgs args) =>
-        HeaderModelName.Visibility = Visibility.Collapsed;
-
-    private void OnModelSectionCollapsed(Expander sender, ExpanderCollapsedEventArgs args) =>
-        HeaderModelName.Visibility = Visibility.Visible;
 
     /// <summary>Keep the collapsed header's summary in step with what's actually loaded.</summary>
     private void UpdateHeaderModelName()
@@ -934,7 +1004,7 @@ public sealed partial class MainWindow : Window
 
         if (!running)
         {
-            LevelBar.Value = 0;
+            LevelFill.Height = 0;
             if (_provisional is not null) Lines.Remove(_provisional);
             _provisional = null;
             _currentUtterance = -1;
@@ -1060,6 +1130,7 @@ public sealed partial class MainWindow : Window
 
     private async Task LoadDevicesAsync()
     {
+        App.Trace("LoadDevicesAsync start");
         // The backend needs a moment to bind its HTTP port on a cold start.
         for (var attempt = 0; attempt < 40; attempt++)
         {

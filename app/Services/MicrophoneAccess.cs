@@ -36,11 +36,14 @@ internal static class MicrophoneAccess
 
             // Checked rather than caught: AppCapability requires package identity, and an
             // unpackaged dev build hitting this is expected, not exceptional.
-            if (!BackendHost.IsPackaged()) return null;
+            App.Trace("MicrophoneAccess: IsPackaged?");
+            if (!BackendHost.IsPackaged()) { App.Trace("MicrophoneAccess: unpackaged"); return null; }
 
             try
             {
+                App.Trace("MicrophoneAccess: AppCapability.Create");
                 _capability = AppCapability.Create("microphone");
+                App.Trace("MicrophoneAccess: created");
             }
             catch (Exception ex)
             {
@@ -62,7 +65,11 @@ internal static class MicrophoneAccess
     {
         try
         {
-            return Capability?.CheckAccess();
+            var cap = Capability;
+            App.Trace($"MicrophoneAccess: cap={(cap is null ? "null" : "ok")}, calling CheckAccess");
+            var result = cap?.CheckAccess();
+            App.Trace($"MicrophoneAccess: CheckAccess -> {result}");
+            return result;
         }
         catch (Exception ex)
         {

@@ -107,3 +107,15 @@ class Settings:
             "please subscribe.",
         )
     )
+
+    # Segments the model itself scores as more likely silence than speech. Real speech in
+    # this app measures around 0.002, so 0.6 only catches material the model is already
+    # unsure is speech at all. faster-whisper's own no_speech_threshold is not enough on its
+    # own: it suppresses only when the log-prob check ALSO fails, and hallucinated caption
+    # credits are decoded confidently.
+    drop_no_speech_above: float = 0.6
+
+    # Below this, a word is shown as uncertain. Chosen from measurement: on a clean decode
+    # words sit at 0.97-1.00, while genuinely ambiguous ones drop sharply (a misheard leading
+    # article measured 0.19), so the gap is wide and 0.55 sits well inside it.
+    low_confidence_below: float = 0.55

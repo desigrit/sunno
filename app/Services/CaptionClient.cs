@@ -7,7 +7,8 @@ namespace Sunno.Services;
 
 public sealed record CaptionEvent(
     string Type, int Id, string? Text, int? SpeakerId, string? Speaker,
-    int? Clarity, double LatencyMs);
+    int? Clarity, double LatencyMs,
+    double? StartedAt = null, IReadOnlyList<CaptionWord>? Words = null);
 
 public sealed record StatusEvent(string State, bool? Running, string? Model, string? Device,
                                  string? Message, string? Code = null);
@@ -124,7 +125,8 @@ public sealed class CaptionClient : IAsyncDisposable
                 var ev = new CaptionEvent(
                     type!, GetInt(root, "id") ?? 0, GetString(root, "text"),
                     GetInt(root, "speaker_id"), GetString(root, "speaker"),
-                    GetInt(root, "clarity"), GetDouble(root, "latency_ms") ?? 0);
+                    GetInt(root, "clarity"), GetDouble(root, "latency_ms") ?? 0,
+                    GetDouble(root, "started_at"), ParseWords(root));
                 if (type == "partial") Partial?.Invoke(ev); else Final?.Invoke(ev);
                 break;
             }
@@ -188,6 +190,26 @@ public sealed class CaptionClient : IAsyncDisposable
         SendAsync(new { cmd = "download_model", model });
 
     public Task RequestModelsAsync() => SendAsync(new { cmd = "list_models" });
+
+    /// <summary>
+    /// Per-word confidence, present on finals only. Materialised into records here rather than
+    /// held as JsonElements: those are views over the JsonDocument's pooled buffer and throw
+    /// once it is disposed, which happens before the UI thread ever sees them.
+    /// </summary>
+    private static IReadOnlyList<CaptionWord>? ParseWords(JsonElement root)
+    {
+        if (!root.TryGetProperty("words", out var words) ||
+            words.ValueKind != JsonValueKind.Array) return null;
+
+        var list = new List<CaptionWord>();
+        foreach (var w in words.EnumerateArray())
+        {
+            var text = GetString(w, "t");
+            if (text is null) continue;
+            list.Add(new CaptionWord(text, GetDouble(w, "p") ?? 1.0));
+        }
+        return list.Count == 0 ? null : list;
+    }
 
     /// <summary>
     /// Both model_required and model_catalog carry the same catalogue shape; the difference is

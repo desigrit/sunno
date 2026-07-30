@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from . import cuda_setup  # noqa: F401  (must precede ctranslate2 import)
 from .config import SAMPLE_RATE, Settings
+
+
+@dataclass
+class Word:
+    text: str
+    probability: float
 
 
 @dataclass
@@ -19,6 +26,27 @@ class Transcript:
     latency_ms: float
     is_final: bool
     clarity: int | None = None  # 0-100, how confidently the model decoded this
+    words: list[Word] = field(default_factory=list)
+
+
+# Whisper was trained on subtitled video, so over near-silence it reproduces the caption
+# credits that pad such files. Matched as substrings on normalised text because the exact
+# wording varies ("Subtitling by SUBS Hamburg", "Subtitles by the Amara.org community").
+# Anchored fragments only - a bare "subtitles" would eat legitimate speech about subtitles.
+_HALLUCINATION_PATTERNS = re.compile(
+    r"""
+    subtitl\w*\s+by             # subtitles by / subtitling by
+  | subs\s+by
+  | transcription\s+by
+  | transcript\w*\s+by
+  | translated\s+by
+  | amara\.org
+  | castingwords
+  | subscribe\s+to\s+\w+\s+channel
+  | www\.\w+\.\w+              # a bare URL is never speech in this setting
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 def _clarity_from_logprob(avg_logprob: float) -> int:
@@ -101,9 +129,17 @@ class WhisperEngine:
             no_speech_threshold=cfg.no_speech_threshold,
             log_prob_threshold=cfg.log_prob_threshold,
             compression_ratio_threshold=cfg.compression_ratio_threshold,
-            word_timestamps=False,
+            # Measured at ~2.7% on a 9.5 s clip (941 ms vs 916 ms best-of-3), which is inside
+            # run-to-run noise, and it is the only source of per-word confidence.
+            word_timestamps=is_final,
         )
-        collected = list(segments)
+        # Drop segments the model itself thinks are silence. faster-whisper's own
+        # no_speech_threshold only suppresses when the log-prob check also fails, which lets
+        # confidently-decoded boilerplate over silence straight through.
+        collected = [
+            seg for seg in segments
+            if seg.no_speech_prob < cfg.drop_no_speech_above
+        ]
         text = " ".join(seg.text.strip() for seg in collected).strip()
 
         clarity = None
@@ -114,17 +150,30 @@ class WhisperEngine:
             weighted = sum(s.avg_logprob * w for s, w in zip(collected, weights))
             clarity = _clarity_from_logprob(weighted / sum(weights))
 
+        cleaned = self._clean(text)
+        words: list[Word] = []
+        if cleaned and is_final:
+            words = [
+                Word(w.word, float(w.probability))
+                for seg in collected
+                for w in (seg.words or [])
+            ]
+
         return Transcript(
-            text=self._clean(text),
+            text=cleaned,
             duration_s=len(audio) / SAMPLE_RATE,
             latency_ms=(time.perf_counter() - started) * 1000.0,
             is_final=is_final,
             clarity=clarity,
+            words=words,
         )
 
     def _clean(self, text: str) -> str:
         """Drop known Whisper hallucinations that appear over near-silence."""
-        if text.lower().strip() in self.settings.hallucinations:
+        stripped = text.lower().strip()
+        if stripped in self.settings.hallucinations:
+            return ""
+        if _HALLUCINATION_PATTERNS.search(stripped):
             return ""
         return text
 

@@ -75,6 +75,7 @@ class _Job:
     is_final: bool
     speaker_id: int | None = None
     speaker_label: str | None = None
+    started_at: float = 0.0
 
 
 class AsrWorker:
@@ -170,6 +171,12 @@ class AsrWorker:
                     "clarity": result.clarity,
                     "latency_ms": round(result.latency_ms, 1),
                     "duration_s": round(result.duration_s, 2),
+                    # When the utterance was spoken, not when decoding finished, so a
+                    # timestamp reflects the conversation rather than our queue depth.
+                    "started_at": job.started_at,
+                    "words": [
+                        {"t": w.text, "p": round(w.probability, 3)} for w in result.words
+                    ],
                 }
             )
 
@@ -211,6 +218,7 @@ class CaptionPipeline:
 
         self._utterance_id = 0
         self._last_level_at = 0.0
+        self._roster_signature: tuple = ()
         self._stop = threading.Event()
         self._reset_segmentation()
 
@@ -222,6 +230,7 @@ class CaptionPipeline:
         self._last_partial_at = 0.0
         self._current_speaker = None
         self._current_label = None
+        self._utterance_started_at = 0.0
         self._pre_roll.clear()
         self._vad.reset()
 
@@ -298,6 +307,7 @@ class CaptionPipeline:
         self._speech_run = 0
         self._silence_run = 0
         self._utterance_id += 1
+        self._utterance_started_at = time.time()
         self._buffer = list(self._pre_roll)  # keep word onsets
         self._pre_roll.clear()
         self._last_partial_at = 0.0
@@ -312,7 +322,8 @@ class CaptionPipeline:
         audio = self._condition(np.concatenate(self._buffer))
         self._worker.submit_partial(
             _Job(self._utterance_id, audio, is_final=False,
-                 speaker_id=self._current_speaker, speaker_label=self._current_label)
+                 speaker_id=self._current_speaker, speaker_label=self._current_label,
+                 started_at=self._utterance_started_at)
         )
 
     def _finalise(self, continued: bool = False) -> None:
@@ -327,7 +338,8 @@ class CaptionPipeline:
             speaker_id, label = self._resolve_speaker(audio)
             self._worker.submit_final(
                 _Job(self._utterance_id, audio, is_final=True,
-                     speaker_id=speaker_id, speaker_label=label)
+                     speaker_id=speaker_id, speaker_label=label,
+                     started_at=self._utterance_started_at)
             )
         else:
             self._emit({"type": "discard", "id": self._utterance_id})
@@ -353,11 +365,26 @@ class CaptionPipeline:
         except Exception as exc:
             self._emit({"type": "error", "message": f"speaker id failed: {exc}"})
             return None, None
+
+        # identify() can enrol someone new, and nothing else announces that. Without this the
+        # transcript shows "Speaker 2" while the Speakers pane still reads as empty.
+        self._publish_roster_if_changed()
+
         if speaker_id is None:
             return None, None
         self._current_speaker = speaker_id
         self._current_label = self._speaker.label(speaker_id)
         return speaker_id, self._current_label
+
+    def _publish_roster_if_changed(self) -> None:
+        if self._speaker is None:
+            return
+        roster = self._speaker.roster()
+        signature = tuple((r["id"], r["label"], r["is_self"]) for r in roster)
+        if signature == self._roster_signature:
+            return
+        self._roster_signature = signature
+        self._emit({"type": "roster", "speakers": roster})
 
     def _publish_level(self, frame: np.ndarray, prob: float, now: float) -> None:
         if now - self._last_level_at < 0.1:  # ~10 Hz is plenty for a meter

@@ -16,6 +16,11 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
+        // First-chance catches exceptions the moment they're thrown, including ones that are
+        // swallowed later or that become stowed exceptions and kill the process without ever
+        // reaching UnhandledException.
+        AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
+            Trace($"FIRST-CHANCE {e.Exception.GetType().Name}: {e.Exception.Message}");
         UnhandledException += (_, e) =>
         {
             Log(e.Exception);
@@ -37,26 +42,50 @@ public partial class App : Application
         catch { /* nothing useful to do if even logging fails */ }
     }
 
+    /// <summary>
+    /// Startup breadcrumbs.
+    ///
+    /// A XAML failure on the UI thread becomes a stowed exception (0xC000027B) that kills the
+    /// process without reaching UnhandledException, so the only way to find out how far
+    /// startup got is to record it as it happens.
+    /// </summary>
+    public static void Trace(string stage)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(CrashLog)!);
+            File.AppendAllText(Path.Combine(Path.GetDirectoryName(CrashLog)!, "startup-trace.log"),
+                $"{DateTime.Now:HH:mm:ss.fff}  {stage}{Environment.NewLine}");
+        }
+        catch { /* diagnostics must never break startup */ }
+    }
+
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         try
         {
+            Trace("OnLaunched");
             // One backend per machine: a second instance would spawn a second Python child that
             // cannot bind port 8766, so it dies and leaves a dead-looking window behind. Hand the
             // activation to the running instance and get out of the way instead.
             var primary = AppInstance.FindOrRegisterForKey("Sunno");
             if (!primary.IsCurrent)
             {
+                Trace("redirecting to primary");
                 RedirectAndExit(primary);
                 return;
             }
             primary.Activated += (_, _) => _window?.DispatcherQueue.TryEnqueue(BringToFront);
 
+            Trace("creating MainWindow");
             _window = new MainWindow();
+            Trace("activating MainWindow");
             _window.Activate();
+            Trace("activated");
         }
         catch (Exception ex)
         {
+            Trace($"OnLaunched THREW: {ex.GetType().Name}: {ex.Message}");
             Log(ex);
             throw;
         }
