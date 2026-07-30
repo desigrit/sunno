@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Downloaded model weights (fetched at first run, 100s of MB)
+models/*.onnx
+models/*.tar.bz2
+models/sherpa-onnx-*/
+models/speakers.json
+
+# Build output
+app/bin/
+app/obj/
+packaging/staging/
+packaging/out/
+*.msix
+*.pfx
+*.cer
+
+# Recordings / scratch
+testdata/

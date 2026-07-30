@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Application
+    x:Class="LiveCaptions.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Speaker palette. Everything else uses system theme resources so the app
+                 follows light/dark, high contrast and the user accent colour. Mid-tone
+                 hues, legible on both light and dark Mica. -->
+            <SolidColorBrush x:Key="Speaker0" Color="#2AA198" />
+            <SolidColorBrush x:Key="Speaker1" Color="#4C8DDA" />
+            <SolidColorBrush x:Key="Speaker2" Color="#D08442" />
+            <SolidColorBrush x:Key="Speaker3" Color="#A672D0" />
+            <SolidColorBrush x:Key="Speaker4" Color="#D169B5" />
+            <SolidColorBrush x:Key="Speaker5" Color="#6FA33C" />
+            <SolidColorBrush x:Key="Speaker6" Color="#D9534F" />
+            <SolidColorBrush x:Key="Speaker7" Color="#C9A227" />
+
+            <SolidColorBrush x:Key="ClarityGood" Color="#2E8B57" />
+            <SolidColorBrush x:Key="ClarityMid" Color="#B26A00" />
+            <SolidColorBrush x:Key="ClarityLow" Color="#C42B1C" />
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

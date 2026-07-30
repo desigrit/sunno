@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Live Captions</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="bar">
+      <span id="dot" class="dot" data-state="connecting" title="Connection"></span>
+      <span id="state">connecting</span>
+      <div id="meter" title="Input level"><div id="meterFill"></div></div>
+      <span id="latency" class="muted"></span>
+      <div class="spacer"></div>
+      <button id="toggle" class="primary" title="Start or stop transcribing (Space)">
+        <span id="toggleIcon" class="icon"></span><span id="toggleLabel">Stop</span>
+      </button>
+      <button id="smaller" title="Smaller text (-)">A&minus;</button>
+      <button id="bigger" title="Larger text (+)">A+</button>
+      <button id="clear" title="Clear transcript">Clear</button>
+    </header>
+
+    <main id="captions" aria-live="polite" aria-atomic="false">
+      <p id="placeholder" class="placeholder">Waiting for speech&hellip;</p>
+    </main>
+
+    <div id="speakerMenu" hidden>
+      <label for="speakerName">Speaker name</label>
+      <input id="speakerName" type="text" maxlength="24" placeholder="e.g. Priya" />
+      <label class="check"><input id="speakerIsSelf" type="checkbox" /> This is me</label>
+      <p class="hint">Your own lines are shown fainter, with a clarity score.</p>
+      <label for="speakerMerge">Same person as</label>
+      <select id="speakerMerge"><option value="">— nobody —</option></select>
+      <p class="hint">Use this if one person was split into two speakers.</p>
+      <div class="row">
+        <button id="speakerSave" class="primary-action">Save</button>
+        <button id="speakerCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
