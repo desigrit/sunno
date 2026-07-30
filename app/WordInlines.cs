@@ -3,6 +3,7 @@ using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Media;
 using Sunno.Models;
 
 namespace Sunno;
@@ -52,14 +53,37 @@ public static class WordInlines
                     continue;
                 }
 
-                // Underline via a Span wrapping the run. Deliberately no Foreground override
-                // and no per-inline tooltip: a Span is not a FrameworkElement, so
-                // ToolTipService cannot attach to it, and theme brushes are not reliably
-                // resolvable from Application.Current.Resources. Both of those crashed the
-                // app with an opaque stowed exception. The scores go on the TextBlock.
-                var span = new Span { TextDecorations = Windows.UI.Text.TextDecorations.Underline };
-                span.Inlines.Add(new Run { Text = word.Text });
-                block.Inlines.Add(span);
+                // faster-whisper prefixes each word with the space that preceded it, so
+                // styling word.Text wholesale underlines the gap before the word too. Split
+                // the padding out and style only the word itself.
+                var text = word.Text;
+                var start = 0;
+                while (start < text.Length && char.IsWhiteSpace(text[start])) start++;
+                var end = text.Length;
+                while (end > start && char.IsWhiteSpace(text[end - 1])) end--;
+
+                if (start > 0)
+                    block.Inlines.Add(new Run { Text = text[..start] });
+
+                var core = text[start..end];
+                if (core.Length > 0)
+                {
+                    // Italic and underlined in grey: three quiet signals rather than one loud
+                    // one, so an uncertain word is noticeable when looked for and ignorable
+                    // when reading. The underline takes the Foreground colour — there is no
+                    // separate decoration brush — so the grey applies to both.
+                    var span = new Span
+                    {
+                        TextDecorations = Windows.UI.Text.TextDecorations.Underline,
+                        FontStyle = Windows.UI.Text.FontStyle.Italic,
+                        Foreground = UncertainBrush(),
+                    };
+                    span.Inlines.Add(new Run { Text = core });
+                    block.Inlines.Add(span);
+                }
+
+                if (end < text.Length)
+                    block.Inlines.Add(new Run { Text = text[end..] });
             }
 
             var uncertain = words.Where(w => w.IsUncertain).ToList();
@@ -82,5 +106,28 @@ public static class WordInlines
                 // Nothing further to do; the caption stays as whatever it was.
             }
         }
+    }
+
+    private static Brush? _uncertainBrush;
+
+    /// <summary>
+    /// Grey for uncertain words. Prefers the theme's secondary text brush so it tracks light
+    /// and dark, but falls back to a fixed mid grey that reads on both — a missing resource
+    /// key faults at render time as an opaque stowed exception, which is not worth risking
+    /// for a styling detail.
+    /// </summary>
+    private static Brush UncertainBrush()
+    {
+        if (_uncertainBrush is not null) return _uncertainBrush;
+
+        if (Application.Current?.Resources is { } resources &&
+            resources.TryGetValue("TextFillColorSecondaryBrush", out var found) &&
+            found is Brush themed)
+        {
+            return _uncertainBrush = themed;
+        }
+
+        return _uncertainBrush = new SolidColorBrush(
+            new Windows.UI.Color { A = 255, R = 0x8A, G = 0x8A, B = 0x8A });
     }
 }

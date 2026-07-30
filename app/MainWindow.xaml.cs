@@ -13,6 +13,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Graphics;
 using Windows.Security.Authorization.AppCapabilityAccess;
 
@@ -170,6 +171,9 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// Load the title-bar icon straight off disk.
     ///
+    /// The unplated variant, which is what the taskbar draws: the plated one carries a solid
+    /// accent backplate that looks wrong against Mica in a title bar.
+    ///
     /// Not ms-appx:/// — that resolves through the package resource index, and the packaging
     /// script copies Assets in after publish, so they are present as files but absent from
     /// resources.pri. Reading the file directly works identically packaged and unpackaged.
@@ -179,7 +183,7 @@ public sealed partial class MainWindow : Window
         try
         {
             var path = Path.Combine(AppContext.BaseDirectory, "Assets",
-                                    "Square44x44Logo.targetsize-32.png");
+                                    "Square44x44Logo.targetsize-32_altform-unplated.png");
             if (File.Exists(path))
                 TitleBarIcon.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
         }
@@ -779,6 +783,78 @@ public sealed partial class MainWindow : Window
 
     private void OnMicInfoClosed(InfoBar sender, object args) => _infoSticky = false;
 
+    private bool _modelSectionOpen;
+
+    /// <summary>
+    /// Open or close the model list with a single eased height animation.
+    ///
+    /// Layout properties need <c>EnableDependentAnimation</c> — without it the animation is
+    /// silently dropped and the panel jumps, which is the exact jarring motion this replaced.
+    /// The list is measured while collapsed because the ScrollViewer gives its child unbounded
+    /// height, so the target is known before the animation starts.
+    /// </summary>
+    private void OnToggleModelSection(object sender, RoutedEventArgs e)
+    {
+        _modelSectionOpen = !_modelSectionOpen;
+
+        var target = 0.0;
+        if (_modelSectionOpen)
+        {
+            ModelOptions.Measure(new Windows.Foundation.Size(
+                ModelPanel.ActualWidth > 0 ? ModelPanel.ActualWidth : 240, double.PositiveInfinity));
+            target = ModelOptions.DesiredSize.Height;
+        }
+
+        AnimateModelPanel(target);
+        AnimateChevron(_modelSectionOpen ? 180 : 0);
+    }
+
+    private void AnimateModelPanel(double toHeight)
+    {
+        var animation = new DoubleAnimation
+        {
+            To = toHeight,
+            Duration = new Duration(TimeSpan.FromMilliseconds(220)),
+            EnableDependentAnimation = true,
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        Storyboard.SetTarget(animation, ModelPanel);
+        Storyboard.SetTargetProperty(animation, "Height");
+
+        var story = new Storyboard();
+        story.Children.Add(animation);
+        story.Begin();
+    }
+
+    private void AnimateChevron(double angle)
+    {
+        var animation = new DoubleAnimation
+        {
+            To = angle,
+            Duration = new Duration(TimeSpan.FromMilliseconds(220)),
+            EnableDependentAnimation = true,
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        Storyboard.SetTarget(animation, ModelChevronRotate);
+        Storyboard.SetTargetProperty(animation, "Angle");
+
+        var story = new Storyboard();
+        story.Children.Add(animation);
+        story.Begin();
+    }
+
+    /// <summary>
+    /// Keep an open panel sized to its content, so a row changing height mid-download doesn't
+    /// leave the list clipped or floating above empty space.
+    /// </summary>
+    private void ResizeModelPanelIfOpen()
+    {
+        if (!_modelSectionOpen) return;
+        ModelOptions.Measure(new Windows.Foundation.Size(
+            ModelPanel.ActualWidth > 0 ? ModelPanel.ActualWidth : 240, double.PositiveInfinity));
+        ModelPanel.Height = ModelOptions.DesiredSize.Height;
+    }
+
     /// <summary>Keep the collapsed header's summary in step with what's actually loaded.</summary>
     private void UpdateHeaderModelName()
     {
@@ -815,6 +891,8 @@ public sealed partial class MainWindow : Window
             _suppressModelEvent = false;
         }
         UpdateHeaderModelName();
+        // The catalogue just arrived or changed, so an open panel's content height moved.
+        ResizeModelPanelIfOpen();
     }
 
     /// <summary>

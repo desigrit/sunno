@@ -16,11 +16,6 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
-        // First-chance catches exceptions the moment they're thrown, including ones that are
-        // swallowed later or that become stowed exceptions and kill the process without ever
-        // reaching UnhandledException.
-        AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
-            Trace($"FIRST-CHANCE {e.Exception.GetType().Name}: {e.Exception.Message}");
         UnhandledException += (_, e) =>
         {
             Log(e.Exception);
@@ -43,22 +38,32 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Startup breadcrumbs.
+    /// Startup breadcrumbs, rewritten each launch.
     ///
     /// A XAML failure on the UI thread becomes a stowed exception (0xC000027B) that kills the
     /// process without reaching UnhandledException, so the only way to find out how far
-    /// startup got is to record it as it happens.
+    /// startup got is to record it as it happens. This is what located the repeated
+    /// AppCapability.CheckAccess call that made the packaged app unlaunchable.
     /// </summary>
     public static void Trace(string stage)
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(CrashLog)!);
-            File.AppendAllText(Path.Combine(Path.GetDirectoryName(CrashLog)!, "startup-trace.log"),
-                $"{DateTime.Now:HH:mm:ss.fff}  {stage}{Environment.NewLine}");
+            var dir = Path.GetDirectoryName(CrashLog)!;
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "startup-trace.log");
+            // Truncate on the first write of each launch so the file stays a single startup.
+            if (!_traceStarted)
+            {
+                _traceStarted = true;
+                File.WriteAllText(path, $"--- {DateTime.Now:O} ---{Environment.NewLine}");
+            }
+            File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff}  {stage}{Environment.NewLine}");
         }
         catch { /* diagnostics must never break startup */ }
     }
+
+    private static bool _traceStarted;
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {

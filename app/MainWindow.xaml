@@ -92,87 +92,101 @@
                                Style="{StaticResource CaptionTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
 
-                    <!-- Model picker. A flyout rather than an inline expander: the pane's
-                         speaker list is a star-sized row, so expanding in place resized it
-                         instantly while the expander animated its own content, which read as
-                         a whip. A flyout changes no layout at all. -->
-                    <Button x:Name="ModelSection" Grid.Row="2"
-                            Margin="8,6,8,8" Padding="8,6"
-                            HorizontalAlignment="Stretch"
-                            HorizontalContentAlignment="Stretch"
-                            Background="Transparent" BorderThickness="0"
-                            AutomationProperties.Name="Speech model">
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Spacing="0">
-                                <TextBlock Text="Speech model"
-                                           Style="{StaticResource BodyStrongTextBlockStyle}"
-                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                <TextBlock x:Name="HeaderModelName"
-                                           FontSize="11.5" LineHeight="15"
-                                           TextTrimming="CharacterEllipsis"
-                                           TextWrapping="NoWrap"
-                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                            </StackPanel>
-                            <FontIcon Grid.Column="1" Glyph="&#xE70E;" FontSize="10"
-                                      VerticalAlignment="Center"
-                                      Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                        </Grid>
+                    <!-- Model picker: an inline expander animating its own height.
+                         Not a WinUI Expander - that sits in an Auto row above a star-sized
+                         speaker list, so the row snapped to its final size while the expander
+                         animated its content, which read as a whip. Here one eased animation
+                         drives the height, and the star row follows it frame by frame.
+                         The list stays in the tree at zero height, so its items are already
+                         realised before the section opens. -->
+                    <StackPanel Grid.Row="2" Margin="0,2,0,6">
+                        <Button x:Name="ModelToggle" Click="OnToggleModelSection"
+                                Margin="8,0,8,0" Padding="8,6"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch"
+                                Background="Transparent" BorderThickness="0"
+                                AutomationProperties.Name="Speech model">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Spacing="0">
+                                    <TextBlock Text="Speech model"
+                                               Style="{StaticResource BodyStrongTextBlockStyle}"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock x:Name="HeaderModelName"
+                                               FontSize="11.5" LineHeight="15"
+                                               TextTrimming="CharacterEllipsis"
+                                               TextWrapping="NoWrap"
+                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                </StackPanel>
+                                <FontIcon x:Name="ModelChevron" Grid.Column="1"
+                                          Glyph="&#xE70D;" FontSize="10"
+                                          VerticalAlignment="Center"
+                                          RenderTransformOrigin="0.5,0.5"
+                                          Foreground="{ThemeResource TextFillColorTertiaryBrush}">
+                                    <FontIcon.RenderTransform>
+                                        <RotateTransform x:Name="ModelChevronRotate" Angle="0" />
+                                    </FontIcon.RenderTransform>
+                                </FontIcon>
+                            </Grid>
+                        </Button>
 
-                        <Button.Flyout>
-                            <Flyout Placement="Top" ShouldConstrainToRootBounds="False">
-                                <Flyout.FlyoutPresenterStyle>
-                                    <Style TargetType="FlyoutPresenter">
-                                        <Setter Property="Padding" Value="4" />
-                                        <Setter Property="MinWidth" Value="260" />
-                                        <Setter Property="MaxWidth" Value="300" />
-                                    </Style>
-                                </Flyout.FlyoutPresenterStyle>
-
-                                <ItemsControl x:Name="ModelOptions" ItemsSource="{x:Bind Models}"
-                                              AutomationProperties.Name="Speech models">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="models:ModelRow">
-                                            <RadioButton GroupName="SpeechModel" Margin="0,1"
-                                                         MinWidth="0" MinHeight="0"
-                                                         HorizontalAlignment="Stretch"
-                                                         HorizontalContentAlignment="Stretch"
-                                                         IsChecked="{x:Bind IsSelected, Mode=OneWay}"
-                                                         IsEnabled="{x:Bind IsEnabled, Mode=OneWay}"
-                                                         Checked="OnModelChecked"
-                                                         Tag="{x:Bind Id}"
-                                                         ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}"
-                                                         AutomationProperties.Name="{x:Bind Name}">
-                                                <StackPanel Spacing="0" Padding="0,2,0,2">
-                                                    <TextBlock Text="{x:Bind Name}"
-                                                               FontSize="13" LineHeight="17"
-                                                               Style="{StaticResource BodyTextBlockStyle}"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               TextWrapping="NoWrap" />
-                                                    <TextBlock Text="{x:Bind Status, Mode=OneWay}"
-                                                               Visibility="{x:Bind StatusVisibility, Mode=OneWay}"
-                                                               FontSize="11.5" LineHeight="15"
-                                                               Style="{StaticResource CaptionTextBlockStyle}"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               TextWrapping="NoWrap"
-                                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                                                    <ProgressBar Height="2" Margin="0,5,4,5"
-                                                                 Visibility="{x:Bind BusyVisibility, Mode=OneWay}"
-                                                                 IsIndeterminate="{x:Bind IsIndeterminate, Mode=OneWay}"
-                                                                 Value="{x:Bind Progress, Mode=OneWay}"
-                                                                 Minimum="0" Maximum="100"
-                                                                 HorizontalAlignment="Stretch" />
-                                                </StackPanel>
-                                            </RadioButton>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </Flyout>
-                        </Button.Flyout>
-                    </Button>
+                        <!-- A ScrollViewer purely because it clips: a Border or Grid with a
+                             constrained Height still paints its overflowing children.
+                             Horizontal must be Disabled rather than Hidden — Hidden still
+                             measures the content at infinite width, so TextTrimming never
+                             engages and long names hard-clip at the pane edge instead of
+                             ellipsing. Vertical stays Hidden so content can exceed the
+                             animated height and simply be clipped. -->
+                        <ScrollViewer x:Name="ModelPanel" Height="0"
+                                      VerticalScrollMode="Disabled"
+                                      VerticalScrollBarVisibility="Hidden"
+                                      HorizontalScrollMode="Disabled"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl x:Name="ModelOptions" ItemsSource="{x:Bind Models}"
+                                          Margin="12,2,18,6"
+                                          VerticalAlignment="Top"
+                                          AutomationProperties.Name="Speech models">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="models:ModelRow">
+                                        <RadioButton GroupName="SpeechModel" Margin="0,1"
+                                                     MinWidth="0" MinHeight="0"
+                                                     HorizontalAlignment="Stretch"
+                                                     HorizontalContentAlignment="Stretch"
+                                                     IsChecked="{x:Bind IsSelected, Mode=OneWay}"
+                                                     IsEnabled="{x:Bind IsEnabled, Mode=OneWay}"
+                                                     Checked="OnModelChecked"
+                                                     Tag="{x:Bind Id}"
+                                                     ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}"
+                                                     AutomationProperties.Name="{x:Bind Name}">
+                                            <StackPanel Spacing="0" Padding="0,1,0,1">
+                                                <TextBlock Text="{x:Bind Name}"
+                                                           FontSize="12.5" LineHeight="16"
+                                                           Style="{StaticResource BodyTextBlockStyle}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           TextWrapping="NoWrap" />
+                                                <TextBlock Text="{x:Bind Status, Mode=OneWay}"
+                                                           Visibility="{x:Bind StatusVisibility, Mode=OneWay}"
+                                                           FontSize="11" LineHeight="14"
+                                                           Style="{StaticResource CaptionTextBlockStyle}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           TextWrapping="NoWrap"
+                                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                                <ProgressBar Height="2" Margin="0,5,4,5"
+                                                             Visibility="{x:Bind BusyVisibility, Mode=OneWay}"
+                                                             IsIndeterminate="{x:Bind IsIndeterminate, Mode=OneWay}"
+                                                             Value="{x:Bind Progress, Mode=OneWay}"
+                                                             Minimum="0" Maximum="100"
+                                                             HorizontalAlignment="Stretch" />
+                                            </StackPanel>
+                                        </RadioButton>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
                 </Grid>
             </Border>
 
