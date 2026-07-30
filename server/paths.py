@@ -11,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-APP_NAME = "LiveCaptions"
+APP_NAME = "Sunno"
 
 # Read-only: ships with the app (models, UI assets).
 INSTALL_ROOT = Path(__file__).resolve().parent.parent
@@ -24,7 +24,7 @@ def is_packaged() -> bool:
 
 def data_dir() -> Path:
     """Writable per-user directory for profiles, caches and logs."""
-    override = os.environ.get("LIVECAPTIONS_DATA_DIR")
+    override = os.environ.get("Sunno_DATA_DIR")
     if override:
         path = Path(override)
     elif sys.platform == "win32":

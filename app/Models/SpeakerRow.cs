@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace LiveCaptions.Models;
+namespace Sunno.Models;
 
 /// <summary>A row in the Speakers pane. Observable so renames update in place.</summary>
 public sealed class SpeakerRow : INotifyPropertyChanged

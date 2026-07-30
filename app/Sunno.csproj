@@ -7,7 +7,7 @@
          justifies packaging this as MSIX - is only available from 18362. Advertising 17763
          would claim support on an OS where that check throws. -->
     <TargetPlatformMinVersion>10.0.18362.0</TargetPlatformMinVersion>
-    <RootNamespace>LiveCaptions</RootNamespace>
+    <RootNamespace>Sunno</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

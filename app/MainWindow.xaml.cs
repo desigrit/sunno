@@ -3,8 +3,8 @@ using System.Collections.ObjectModel;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
-using LiveCaptions.Models;
-using LiveCaptions.Services;
+using Sunno.Models;
+using Sunno.Services;
 using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
@@ -15,7 +15,7 @@ using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using Windows.Security.Authorization.AppCapabilityAccess;
 
-namespace LiveCaptions;
+namespace Sunno;
 
 /// <summary>A microphone the backend can capture from.</summary>
 public sealed record AudioDevice(int Index, string Name, string HostApi);
@@ -59,6 +59,8 @@ public sealed partial class MainWindow : Window
     /// <summary>Whether the InfoBar's action can still raise the dialog, or must fall back to
     /// Settings because Windows will not prompt a second time.</summary>
     private bool _micCanPrompt;
+    /// <summary>The backend died; stop reporting progress that will never happen.</summary>
+    private bool _backendFatal;
 
     /// <summary>Caption text size; the item templates read this.</summary>
     public static double CaptionSize { get; private set; } = 26;
@@ -84,6 +86,7 @@ public sealed partial class MainWindow : Window
         _client.DownloadProgress += p => _ui.TryEnqueue(() => OnDownloadProgress(p));
         _client.DownloadComplete += _ => _ui.TryEnqueue(OnDownloadComplete);
         _client.DownloadFailed += msg => _ui.TryEnqueue(() => OnDownloadFailed(msg));
+        _backend.Crashed += msg => _ui.TryEnqueue(() => OnBackendCrashed(msg));
 
         Closed += (_, _) =>
         {
@@ -121,7 +124,7 @@ public sealed partial class MainWindow : Window
     /// <summary>Mica, extended title bar and a medium default size, matching inbox apps.</summary>
     private void ConfigureWindow()
     {
-        Title = "Live Captions";
+        Title = "Sunno";
 
         if (MicaController.IsSupported())
             SystemBackdrop = new MicaBackdrop { Kind = MicaKind.Base };
@@ -270,7 +273,7 @@ public sealed partial class MainWindow : Window
                 MicInfoBar.Severity = InfoBarSeverity.Warning;
                 MicInfoBar.Title = "Microphone access is off";
                 MicInfoBar.Message =
-                    "Windows is blocking microphone access for Live Captions, so nothing can " +
+                    "Windows is blocking microphone access for Sunno, so nothing can " +
                     "be transcribed. Turn it on under Privacy & security › Microphone.";
                 MicActionLink.Content = "Open Settings";
                 MicActionLink.Visibility = Visibility.Visible;
@@ -295,10 +298,40 @@ public sealed partial class MainWindow : Window
         MicInfoBar.IsOpen = true;
     }
 
+    /// <summary>
+    /// The backend died. Say so plainly and point at the log — a user who is relying on this to
+    /// follow a conversation must never be left watching a spinner that will never resolve.
+    /// </summary>
+    private void OnBackendCrashed(string message)
+    {
+        _backendFatal = true;
+        _backendLoading = false;
+        StatusText.Text = "Speech engine stopped";
+
+        _micProblem = false;
+        _micCanPrompt = false;
+        MicInfoBar.Severity = InfoBarSeverity.Error;
+        MicInfoBar.Title = "The speech engine stopped";
+        MicInfoBar.Message = $"{message}\n\nDetails were written to {BackendHost.LogPath}";
+        MicActionLink.Content = "Copy details";
+        MicActionLink.Visibility = Visibility.Visible;
+        MicInfoBar.IsOpen = true;
+        _crashDetail = $"{message}\n\nLog: {BackendHost.LogPath}";
+    }
+
+    private string? _crashDetail;
+
     private async void OnMicAction(object sender, RoutedEventArgs e)
     {
         // The same button means different things depending on whether Windows will still
         // prompt: asking again is useless once the answer has been recorded.
+        if (_crashDetail is not null)
+        {
+            var data = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            data.SetText(_crashDetail);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(data);
+            return;
+        }
         if (_micCanPrompt)
         {
             ApplyMicrophoneStatus(await MicrophoneAccess.RequestAsync());
@@ -373,7 +406,7 @@ public sealed partial class MainWindow : Window
                 _micCanPrompt = true;
                 MicInfoBar.Title = "Allow microphone access";
                 MicInfoBar.Message =
-                    "Live Captions needs your microphone to transcribe what people say. " +
+                    "Sunno needs your microphone to transcribe what people say. " +
                     "Audio is processed on this PC and never leaves it.";
                 break;
 
@@ -381,7 +414,7 @@ public sealed partial class MainWindow : Window
                 _micCanPrompt = false;
                 MicInfoBar.Title = "Microphone access is off";
                 MicInfoBar.Message =
-                    "Microphone access for Live Captions is turned off, so nothing can be " +
+                    "Microphone access for Sunno is turned off, so nothing can be " +
                     "transcribed. Turn it back on under Privacy & security › Microphone.";
                 break;
 
@@ -443,6 +476,9 @@ public sealed partial class MainWindow : Window
             TryStartCapture();
             return;
         }
+        // A dead backend also looks "disconnected", and its reconnect attempts would otherwise
+        // paint over the real explanation with a reassuring one.
+        if (_backendFatal) return;
         // On a cold start the socket isn't up yet because the model is still loading.
         // "Starting…" is more truthful than "Reconnecting…" for a first run.
         StatusText.Text = _backendLoading ? "Starting the speech engine…" : "Reconnecting…";

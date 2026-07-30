@@ -1,4 +1,4 @@
-# Builds a signed MSIX for Live Captions.
+# Builds a signed MSIX for Sunno.
 #
 # Deliberately stops short of INSTALLING the package. Installing a self-signed MSIX requires
 # adding the certificate to LocalMachine Trusted People, which is a machine-wide trust change
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Stop"
 $root     = Split-Path -Parent $PSScriptRoot
 $staging  = Join-Path $PSScriptRoot "staging\package"
 $out      = Join-Path $PSScriptRoot "out"
-$appProj  = Join-Path $root "app\LiveCaptions.csproj"
+$appProj  = Join-Path $root "app\Sunno.csproj"
 
 function Find-SdkTool([string]$name) {
   $pkg = Get-ChildItem "$env:USERPROFILE\.nuget\packages\microsoft.windows.sdk.buildtools" `
@@ -68,6 +68,19 @@ if (-not $SkipPublish) {
     -p:PublishReadyToRun=false `
     -o "$staging" 2>&1 | Where-Object { $_ -match 'error|Error' }
   if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
+
+  # The Windows App SDK ships its own onnxruntime (Windows ML) at the package root. We never
+  # call any ML API from C#, but a packaged process searches the package root for DLLs, so
+  # sherpa-onnx's _sherpa_onnx.pyd bound to this copy instead of the 1.27 it ships beside
+  # itself and died with an access violation the moment speaker labelling initialised. The
+  # staged tree never hit it because only an installed package searches that directory.
+  foreach ($dll in @("onnxruntime.dll", "onnxruntime_providers_shared.dll")) {
+    $victim = Join-Path $staging $dll
+    if (Test-Path $victim) {
+      Remove-Item $victim -Force
+      Write-Host "  removed $dll (conflicts with sherpa-onnx)" -ForegroundColor DarkGray
+    }
+  }
 }
 
 # ---------------------------------------------------------------- backend
@@ -122,8 +135,18 @@ $size = (Get-ChildItem $staging -Recurse -File | Measure-Object Length -Sum).Sum
 Write-Host ("Payload staged: {0:N0} MB" -f $size)
 
 # ---------------------------------------------------------------- pack
-$msix = Join-Path $out "LiveCaptions.msix"
+$msix = Join-Path $out "Sunno.msix"
 if (Test-Path $msix) { Remove-Item $msix -Force }
+
+# A second onnxruntime.dll at the package root hijacks sherpa-onnx's own copy and crashes the
+# backend with an access violation only once installed — never in the staged tree. Fail the
+# build rather than ship a package whose speech engine dies on launch.
+$rootOnnx = Get-ChildItem $staging -Filter "onnxruntime*.dll" -File -ErrorAction SilentlyContinue
+if ($rootOnnx) {
+  throw "onnxruntime DLLs at the package root would collide with sherpa-onnx: " +
+        ($rootOnnx.Name -join ', ')
+}
+
 Write-Host "Packing..." -ForegroundColor Cyan
 # MakeAppx emits a line per file (9k+). Redirect to a log rather than filtering the live
 # pipeline: truncating that pipeline detaches the process mid-pack and leaves a 0-byte file.
@@ -143,18 +166,18 @@ $cert = Get-ChildItem Cert:\CurrentUser\My |
 if (-not $cert) {
   Write-Host "Creating self-signed certificate $CertSubject" -ForegroundColor Cyan
   $cert = New-SelfSignedCertificate -Type Custom -Subject $CertSubject `
-            -KeyUsage DigitalSignature -FriendlyName "Live Captions (development)" `
+            -KeyUsage DigitalSignature -FriendlyName "Sunno (development)" `
             -CertStoreLocation "Cert:\CurrentUser\My" `
             -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
 }
 
 $pfx = Join-Path $out "LiveCaptionsDev.pfx"
 $cer = Join-Path $out "LiveCaptionsDev.cer"
-$pwd = ConvertTo-SecureString -String "livecaptions-dev" -Force -AsPlainText
+$pwd = ConvertTo-SecureString -String "Sunno-dev" -Force -AsPlainText
 Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pwd | Out-Null
 Export-Certificate  -Cert $cert -FilePath $cer | Out-Null
 
-& $signtool sign /fd SHA256 /a /f $pfx /p "livecaptions-dev" $msix
+& $signtool sign /fd SHA256 /a /f $pfx /p "Sunno-dev" $msix
 if ($LASTEXITCODE -ne 0) { throw "signtool failed ($LASTEXITCODE)" }
 
 $mb = (Get-Item $msix).Length / 1MB
@@ -167,4 +190,4 @@ Write-Host "       Import-Certificate -FilePath `"$cer`" -CertStoreLocation Cert
 Write-Host "  2. Install the package:"
 Write-Host "       Add-AppxPackage -Path `"$msix`""
 Write-Host ""
-Write-Host "  Uninstall with: Get-AppxPackage *LiveCaptions* | Remove-AppxPackage"
+Write-Host "  Uninstall with: Get-AppxPackage *Sunno* | Remove-AppxPackage"

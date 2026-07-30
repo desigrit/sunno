@@ -1,4 +1,4 @@
-# Live Captions
+# Sunno
 
 Offline, real-time speech-to-text captioning. Audio never leaves the machine — no network
 calls, no API keys, no per-minute cost.
@@ -237,7 +237,7 @@ cd packaging
 .\build-msix.ps1
 ```
 
-Produces a signed `out\LiveCaptions.msix` (~794 MB). The script deliberately stops before
+Produces a signed `out\Sunno.msix` (~794 MB). The script deliberately stops before
 installing: installing a self-signed package requires adding its certificate to
 LocalMachine Trusted People, which is a machine-wide trust change, so it prints the two
 elevated commands rather than running them.

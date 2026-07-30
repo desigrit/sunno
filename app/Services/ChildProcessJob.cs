@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace LiveCaptions.Services;
+namespace Sunno.Services;
 
 /// <summary>
 /// Ties child processes to the lifetime of this process using a Windows Job Object.

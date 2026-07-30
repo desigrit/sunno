@@ -1,4 +1,4 @@
-# Live Captions launcher.
+# Sunno launcher.
 #   .\run.ps1                      # default mic
 #   .\run.ps1 -Device 27           # specific input device
 #   .\run.ps1 -ListDevices         # show input devices and exit
@@ -65,7 +65,7 @@ try {
   ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
   if ($browser) {
-    $profileDir = Join-Path $env:LOCALAPPDATA "LiveCaptions\browser-profile"
+    $profileDir = Join-Path $env:LOCALAPPDATA "Sunno\browser-profile"
     $ui = Start-Process -FilePath $browser -PassThru -ArgumentList @(
       "--app=$url", "--window-size=760,340", "--user-data-dir=`"$profileDir`""
     )
@@ -93,7 +93,7 @@ public static class TopMost {
   }
 
   Write-Host ""
-  Write-Host "  Live Captions running. Close this window or press Ctrl+C to stop." -ForegroundColor Green
+  Write-Host "  Sunno running. Close this window or press Ctrl+C to stop." -ForegroundColor Green
   if ($Lan) {
     $ip = (Get-NetIPAddress -AddressFamily IPv4 |
            Where-Object { $_.PrefixOrigin -in 'Dhcp','Manual' -and $_.IPAddress -ne '127.0.0.1' } |

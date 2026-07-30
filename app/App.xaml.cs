@@ -1,6 +1,6 @@
 using Microsoft.UI.Xaml;
 
-namespace LiveCaptions;
+namespace Sunno;
 
 public partial class App : Application
 {
@@ -9,7 +9,7 @@ public partial class App : Application
     /// <summary>Startup/XAML failures otherwise surface only as an opaque 0xc000027b crash.</summary>
     private static readonly string CrashLog = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "LiveCaptions", "startup-error.log");
+        "Sunno", "startup-error.log");
 
     public App()
     {

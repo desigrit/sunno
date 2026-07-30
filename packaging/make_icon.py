@@ -1,4 +1,4 @@
-"""Generate the Live Captions app icon: a .ico for the window/taskbar and the full MSIX
+"""Generate the Sunno app icon: a .ico for the window/taskbar and the full MSIX
 asset set.
 
 Design: a speech bubble containing three caption lines, the last one short — the shape a

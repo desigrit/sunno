@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace LiveCaptions.Services;
+namespace Sunno.Services;
 
 /// <summary>
 /// User choices that must survive a restart: which model was downloaded, and which
@@ -19,7 +19,7 @@ public sealed class AppSettings
 
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "LiveCaptions", "settings.json");
+        "Sunno", "settings.json");
 
     public static AppSettings Load()
     {

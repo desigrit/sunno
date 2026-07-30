@@ -1,9 +1,9 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
-using LiveCaptions.Models;
+using Sunno.Models;
 
-namespace LiveCaptions.Services;
+namespace Sunno.Services;
 
 public sealed record CaptionEvent(
     string Type, int Id, string? Text, int? SpeakerId, string? Speaker,

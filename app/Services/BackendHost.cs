@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace LiveCaptions.Services;
+namespace Sunno.Services;
 
 /// <summary>
 /// Owns the Python captioning backend as a child process.
@@ -17,6 +17,16 @@ public sealed class BackendHost : IDisposable
     private readonly object _logLock = new();
 
     public event Action<string>? Output;
+
+    /// <summary>
+    /// Raised when the backend exits without being asked to. Without this a crashed backend is
+    /// indistinguishable from a slow-loading one: the socket simply never opens and the UI sits
+    /// on "Starting the speech engine…" forever.
+    /// </summary>
+    public event Action<string>? Crashed;
+
+    /// <summary>Set during Dispose so a deliberate shutdown isn't reported as a crash.</summary>
+    private bool _stopping;
 
     public bool IsRunning => _process is { HasExited: false };
 
@@ -122,6 +132,13 @@ public sealed class BackendHost : IDisposable
         _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         _process.OutputDataReceived += (_, e) => Record(e.Data);
         _process.ErrorDataReceived += (_, e) => Record(e.Data);
+        _process.Exited += (_, _) =>
+        {
+            if (_stopping) return;
+            var code = -1;
+            try { code = _process?.ExitCode ?? -1; } catch { /* raced with disposal */ }
+            Crashed?.Invoke(DescribeExit(code));
+        };
 
         try
         {
@@ -148,8 +165,43 @@ public sealed class BackendHost : IDisposable
         {
             _log.Add(line);
             if (_log.Count > 500) _log.RemoveAt(0);
+            AppendToLogFile(line);
         }
         Output?.Invoke(line);
+    }
+
+    /// <summary>
+    /// Mirror backend output to disk. A native crash in a bundled .pyd produces no Python
+    /// traceback and no window, so without a file on disk the only evidence is a Windows Error
+    /// Reporting entry the user will never think to look for.
+    /// </summary>
+    private static void AppendToLogFile(string line)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss} {line}{Environment.NewLine}");
+        }
+        catch { /* logging must never take the app down */ }
+    }
+
+    public static string LogPath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Sunno", "backend.log");
+
+    /// <summary>Turn an exit code into something a non-developer can act on.</summary>
+    private string DescribeExit(int code)
+    {
+        // 0xC0000005 and friends arrive as a negative exit code: the backend was terminated by
+        // the OS rather than exiting, which means a native fault in a bundled module.
+        var native = code is < 0 or > 0x40000000;
+        var tail = string.Join(Environment.NewLine, RecentLog().TakeLast(6));
+
+        var reason = native
+            ? $"The speech engine stopped unexpectedly (0x{code:X8})."
+            : $"The speech engine exited with code {code}.";
+
+        return string.IsNullOrWhiteSpace(tail) ? reason : $"{reason}\n{tail}";
     }
 
     public IReadOnlyList<string> RecentLog()
@@ -159,6 +211,7 @@ public sealed class BackendHost : IDisposable
 
     public void Dispose()
     {
+        _stopping = true;
         if (_process is not null)
         {
             try

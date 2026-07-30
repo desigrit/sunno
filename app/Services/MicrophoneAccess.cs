@@ -2,7 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Windows.Security.Authorization.AppCapabilityAccess;
 
-namespace LiveCaptions.Services;
+namespace Sunno.Services;
 
 /// <summary>
 /// Microphone consent, as Windows actually models it.

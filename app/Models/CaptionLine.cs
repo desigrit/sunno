@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace LiveCaptions.Models;
+namespace Sunno.Models;
 
 /// <summary>
 /// One line in the transcript. Mutable because a line starts out provisional and is upgraded
