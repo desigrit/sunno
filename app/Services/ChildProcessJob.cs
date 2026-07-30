@@ -45,6 +45,13 @@ public sealed class ChildProcessJob : IDisposable
         catch { return false; }
     }
 
+    /// <summary>
+    /// True once disposed, after which Assign can never succeed again. Callers that restart a
+    /// child must check this rather than silently starting an untracked process — a capture
+    /// process outside the job outlives a killed UI still holding the microphone.
+    /// </summary>
+    public bool IsDisposed => _handle == IntPtr.Zero;
+
     public void Dispose()
     {
         if (_handle == IntPtr.Zero) return;

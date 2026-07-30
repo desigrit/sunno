@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
@@ -44,25 +45,46 @@ public static class WordInlines
         if (d is not RichTextBlock block) return;
 
         if (e.OldValue is CaptionLine previous)
+        {
             previous.PropertyChanged -= OnLinePropertyChanged;
+            _owners.Remove(previous);
+        }
 
         if (e.NewValue is not CaptionLine line) return;
 
         block.SetValue(RangesProperty, null);
         line.PropertyChanged += OnLinePropertyChanged;
-        _owners[line] = block;
+        _owners.Remove(line);
+        _owners.Add(line, block);
 
         block.PointerMoved -= OnPointerMoved;
         block.PointerMoved += OnPointerMoved;
         block.PointerExited -= OnPointerExited;
         block.PointerExited += OnPointerExited;
+        block.Unloaded -= OnBlockUnloaded;
+        block.Unloaded += OnBlockUnloaded;
 
         Render(block, line);
     }
 
-    // A caption line outlives its container only briefly, and the transcript is capped, so a
-    // plain map is adequate and avoids the ceremony of weak references.
-    private static readonly Dictionary<CaptionLine, RichTextBlock> _owners = new();
+    /// <summary>
+    /// Release the line as soon as its container leaves the tree.
+    ///
+    /// The transcript trims old lines, and the container is destroyed without the attached
+    /// property ever being reset, so nothing else would drop the association.
+    /// </summary>
+    private static void OnBlockUnloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not RichTextBlock block) return;
+        if (GetLine(block) is not CaptionLine line) return;
+        line.PropertyChanged -= OnLinePropertyChanged;
+        _owners.Remove(line);
+    }
+
+    // Weak on the key, so a trimmed CaptionLine and its RichTextBlock become collectable
+    // together. A plain dictionary here leaked one entry — and one visual subtree — per
+    // finalised utterance, which matters in an app designed to run for hours.
+    private static readonly ConditionalWeakTable<CaptionLine, RichTextBlock> _owners = new();
 
     private static void OnLinePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -165,7 +187,10 @@ public static class WordInlines
             var pointer = block.GetPositionFromPoint(point);
             var offset = pointer.Offset;
 
-            var hit = ranges.FirstOrDefault(r => offset >= r.Start && offset <= r.End);
+            // ContentEnd is the position just past the last character, so the end is exclusive.
+            // Inclusive on both sides would make adjacent words overlap at their shared
+            // boundary and report whichever happened to be found first.
+            var hit = ranges.FirstOrDefault(r => offset >= r.Start && offset < r.End);
             if (hit is null)
             {
                 ToolTipService.SetToolTip(block, null);

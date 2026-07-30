@@ -99,6 +99,14 @@ public sealed class BackendHost : IDisposable
     {
         if (IsRunning) return "already running";
 
+        // Dispose latches _stopping and permanently closes the job object. Starting after a
+        // Dispose would therefore produce a child that is neither crash-reported nor tied to
+        // kill-on-close — a capture process able to outlive a killed UI with the microphone
+        // still open. Refuse rather than start something unsafe; use Restart to cycle.
+        if (_job.IsDisposed)
+            return "Backend host has been shut down; restart the app.";
+        _stopping = false;
+
         var python = FindPython();
         var root = FindBackendRoot();
         if (python is null) return "Python backend not found.";
@@ -152,7 +160,15 @@ public sealed class BackendHost : IDisposable
             _process.Start();
             // Tie the child to this process at the kernel level, so the microphone is
             // released even if the UI is killed rather than closed cleanly.
-            _job.Assign(_process);
+            if (!_job.Assign(_process))
+            {
+                // Never leave an unsupervised capture process behind: a backend outside the
+                // job survives a killed UI still holding the microphone open.
+                try { _process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+                _process.Dispose();
+                _process = null;
+                return "Could not supervise the speech engine; not starting it.";
+            }
             _process.BeginOutputReadLine();
             _process.BeginErrorReadLine();
         }

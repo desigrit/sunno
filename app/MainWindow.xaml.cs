@@ -1301,14 +1301,25 @@ public sealed partial class MainWindow : Window
 
         // Switching capture device means restarting the backend; the model reload is the slow
         // part, so say so rather than appear hung.
+        //
+        // Restart, never Dispose+Start. Dispose tears down the job object permanently and
+        // latches _stopping, so a Start afterwards leaves the new capture process untied to
+        // kill-on-close (it would outlive a killed UI still holding the microphone) and with
+        // crash reporting silently dead for the rest of the session.
         StatusText.Text = device.Loopback ? "Switching to system audio…" : "Switching microphone…";
-        _backend.Dispose();
-        var error = _backend.Start(
+
+        _captureRequested = false;
+        _connected = false;
+        _engineReadyThisSession = false;
+        _startedPaused = !_micGranted || _micDeclined;
+
+        var error = _backend.Restart(
             device: device.Loopback ? null : device.Index.ToString(),
             model: _settings.Model,
             vocabulary: _settings.Vocabulary,
+            startStopped: _startedPaused,
             loopbackDevice: device.Loopback ? device.Index : null);
-        if (!string.IsNullOrEmpty(error)) StatusText.Text = error;
+        if (!string.IsNullOrEmpty(error)) ShowFatalBackendError(error);
     }
 
     // ---------- commands ----------

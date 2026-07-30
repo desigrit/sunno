@@ -4,12 +4,16 @@ Standalone script, like tests/test_biquad.py - run it directly:
 
     python tests\\test_hallucinations.py
 
-Needs no model and no GPU: it exercises the pattern matching only, which is the part that
+Needs no model and no GPU: it exercises the text classification only, which is the part that
 can silently over- or under-match as phrases are added.
 
-The failure this protects against is asymmetric. Letting boilerplate through puts sentences
-nobody said into a transcript someone is relying on to follow a conversation; matching too
-broadly deletes real speech. Both cases are covered below.
+The failure this protects against is asymmetric, and the more dangerous direction is the one
+that is easy to miss. Letting boilerplate through puts sentences nobody said into a transcript
+someone is relying on to follow a conversation. Deleting real speech is worse: the user cannot
+tell it happened. An earlier version of this filter matched "translated by" anywhere in a
+segment and dropped the whole segment, so "The book was translated by Tolkien himself"
+vanished silently. The SHOULD_PASS list below therefore deliberately includes the "<word> by"
+constructions that an earlier, narrower test avoided.
 """
 
 import sys
@@ -17,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server.asr import _HALLUCINATION_PATTERNS  # noqa: E402
+from server.asr import _looks_like_caption_credit  # noqa: E402
 from server.config import Settings  # noqa: E402
 
 # Caption credits Whisper reproduces over near-silence, having been trained on subtitled
@@ -33,11 +37,22 @@ SHOULD_BLOCK = [
     "www.mooji.org",
     "Subscribe to my channel",
     "Please subscribe to our channel",
+    "  Subtitles by the Amara.org community  ",
+    "\u201cSubtitling by SUBS Hamburg\u201d",
 ]
 
-# Ordinary speech that happens to mention the same words. Deleting any of these would be a
-# worse bug than the one the filter exists to fix.
+# Ordinary speech. Deleting any of these would be a worse bug than the one the filter exists
+# to fix, because it is invisible to the person reading the transcript.
 SHOULD_PASS = [
+    # The class that a naive "contains" filter destroys.
+    "The poem was translated by my grandmother",
+    "The book was translated by Tolkien himself",
+    "The subtitles by that studio were really good",
+    "My cousin does transcription by hand for the courts",
+    "This edition was translated by someone who really understood the original",
+    "I think the transcript by the court reporter had errors in it",
+    "Translated by my grandmother, the poem finally made sense to me",
+    # Plain speech mentioning the same subject matter.
     "Can you turn the subtitles on for this film?",
     "I was transcribing the meeting notes yesterday",
     "She subscribed to three newsletters",
@@ -54,12 +69,12 @@ def main() -> int:
     failures = []
 
     for text in SHOULD_BLOCK:
-        if not _HALLUCINATION_PATTERNS.search(text.lower()):
-            failures.append(f"should have been blocked but was not: {text!r}")
+        if not _looks_like_caption_credit(text):
+            failures.append(f"boilerplate was not blocked: {text!r}")
 
     for text in SHOULD_PASS:
-        if _HALLUCINATION_PATTERNS.search(text.lower()):
-            failures.append(f"real speech was wrongly blocked: {text!r}")
+        if _looks_like_caption_credit(text):
+            failures.append(f"REAL SPEECH WAS DELETED: {text!r}")
 
     # The exact-match list is applied separately, lower-cased and stripped, so entries must
     # already be in that form or they can never match.
@@ -82,7 +97,7 @@ def main() -> int:
         return 1
 
     print("\nALL PASS")
-    print(f"({len(SHOULD_BLOCK)} blocked, {len(SHOULD_PASS)} passed through, "
+    print(f"({len(SHOULD_BLOCK)} blocked, {len(SHOULD_PASS)} real sentences kept, "
           f"{len(settings.hallucinations)} list entries, 2 thresholds)")
     return 0
 

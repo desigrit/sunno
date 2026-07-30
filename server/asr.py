@@ -30,23 +30,55 @@ class Transcript:
 
 
 # Whisper was trained on subtitled video, so over near-silence it reproduces the caption
-# credits that pad such files. Matched as substrings on normalised text because the exact
-# wording varies ("Subtitling by SUBS Hamburg", "Subtitles by the Amara.org community").
-# Anchored fragments only - a bare "subtitles" would eat legitimate speech about subtitles.
-_HALLUCINATION_PATTERNS = re.compile(
+# credits that pad such files. Two separate rules, because the risk is asymmetric: putting
+# words nobody said into the transcript is bad, but silently deleting a sentence someone did
+# say is worse for a user who is relying on this to follow a conversation.
+#
+# 1. Tokens that are never speech in this setting — an org or a URL. Safe to match anywhere.
+_HALLUCINATION_TOKENS = re.compile(
     r"""
-    subtitl\w*\s+by             # subtitles by / subtitling by
-  | subs\s+by
-  | transcription\s+by
-  | transcript\w*\s+by
-  | translated\s+by
-  | amara\.org
+    amara\.org
   | castingwords
-  | subscribe\s+to\s+\w+\s+channel
-  | www\.\w+\.\w+              # a bare URL is never speech in this setting
+  | zeoranger
+  | www\.\w+\.\w+
+  | \bsubs\s+hamburg\b
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+# 2. Credit phrasings, which DO occur in ordinary speech ("the book was translated by
+#    Tolkien himself"). These only count when the segment opens with them and is short —
+#    the shape of a caption credit, not of a sentence about one.
+_HALLUCINATION_OPENERS = re.compile(
+    r"""
+    ^(?:please\s+)?           # politeness prefix seen in "Please subscribe to our channel"
+    (?:
+        subtitl\w*\s+by
+      | subs\s+by
+      | transcription\s+by
+      | transcript\w*\s+by
+      | translated\s+by
+      | subscribe\s+to\b
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Credits are terse. A longer sentence that merely opens with "Translated by ..." is much
+# more likely to be speech, so length is the second half of the test.
+_MAX_CREDIT_WORDS = 8
+
+
+def _looks_like_caption_credit(text: str) -> bool:
+    """Whether a segment is boilerplate rather than something a person said."""
+    stripped = text.strip().lstrip("\"'“‘([-–— ").strip()
+    if not stripped:
+        return False
+    if _HALLUCINATION_TOKENS.search(stripped):
+        return True
+    if len(stripped.split()) > _MAX_CREDIT_WORDS:
+        return False
+    return bool(_HALLUCINATION_OPENERS.match(stripped))
 
 
 def _clarity_from_logprob(avg_logprob: float) -> int:
@@ -173,7 +205,7 @@ class WhisperEngine:
         stripped = text.lower().strip()
         if stripped in self.settings.hallucinations:
             return ""
-        if _HALLUCINATION_PATTERNS.search(stripped):
+        if _looks_like_caption_credit(text):
             return ""
         return text
 
