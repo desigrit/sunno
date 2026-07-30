@@ -56,6 +56,23 @@ public sealed partial class MainWindow : Window
     /// <summary>Guards against sending start twice when consent and the socket both settle.</summary>
     private bool _captureRequested;
     private bool _micPromptDone;
+    /// <summary>
+    /// The model we know actually loads. A switch is only committed once the new backend comes
+    /// back up, so a model that fails to load can never become the persisted choice.
+    /// </summary>
+    private string _lastGoodModel = string.Empty;
+    /// <summary>
+    /// True only between restarting the backend and it reconnecting. Distinguishes a real
+    /// post-restart reconnect from an incidental socket drop during a long download, which
+    /// would otherwise be mistaken for the switch completing.
+    /// </summary>
+    private bool _awaitingSwitchReconnect;
+    /// <summary>Stops a failed fallback from bouncing between models forever.</summary>
+    private bool _recoveringModel;
+    /// <summary>The model to fall back to when a stored choice turns out not to load.</summary>
+    private const string DefaultModel = "large-v3";
+    /// <summary>Keeps an explanatory notice up until the user dismisses it themselves.</summary>
+    private bool _infoSticky;
     /// <summary>Whether the InfoBar's action can still raise the dialog, or must fall back to
     /// Settings because Windows will not prompt a second time.</summary>
     private bool _micCanPrompt;
@@ -109,6 +126,7 @@ public sealed partial class MainWindow : Window
         // the microphone would already be live behind our own consent dialog, which would make
         // asking dishonest.
         var micStatus = MicrophoneAccess.Check();
+        _lastGoodModel = _settings.Model;
         _micGranted = (micStatus is null or AppCapabilityAccessStatus.Allowed)
                       && _settings.MicrophoneAsked;
         _startedPaused = !_micGranted;
@@ -254,7 +272,10 @@ public sealed partial class MainWindow : Window
         if (st.State == "listening")
         {
             _micProblem = false;
-            MicInfoBar.IsOpen = false;
+            // A sticky notice explains something the user did that didn't take effect, so it
+            // outlives the recovery it describes — otherwise the model silently snaps back
+            // with no explanation at all.
+            if (!_infoSticky) MicInfoBar.IsOpen = false;
             ShowReadyState();
         }
 
@@ -324,8 +345,57 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void OnBackendCrashed(string message)
     {
-        _backendFatal = true;
         _backendLoading = false;
+
+        // A crash while switching means the new model never came up. Fall back to the last
+        // model known to load instead of leaving the app dead — and never persist the choice
+        // that broke it, or every future launch would reload it and crash again.
+        if (_switchingTo is { } failed)
+        {
+            _switchingTo = null;
+            _awaitingSwitchReconnect = false;
+            foreach (var m in Models) { m.IsBusy = false; m.Refresh(); }
+            SelectModelRow(_lastGoodModel);
+
+            if (!_recoveringModel && failed != _lastGoodModel && _lastGoodModel.Length > 0)
+            {
+                _recoveringModel = true;
+                var failedName = Models.FirstOrDefault(m => m.Id == failed)?.Name ?? failed;
+
+                MicInfoBar.Severity = InfoBarSeverity.Warning;
+                MicInfoBar.Title = $"{failedName} couldn't be loaded";
+                MicInfoBar.Message = "Switching back to the model that was working.";
+                MicActionLink.Visibility = Visibility.Collapsed;
+                MicInfoBar.IsOpen = true;
+                _infoSticky = true;
+
+                _ = SwitchModelAsync(_lastGoodModel);
+                return;
+            }
+        }
+        else if (!_recoveringModel && _settings.Model != DefaultModel && Models.Count > 0)
+        {
+            // Crashing outside a switch, on a model we persisted, means the stored choice
+            // itself is bad — the state an interrupted or unverified switch can leave behind.
+            // Fall back to the recommended model once instead of crashing identically on
+            // every future launch, which this user has no way to escape from inside the app.
+            _recoveringModel = true;
+            _settings.Model = DefaultModel;
+            _settings.Save();
+            _lastGoodModel = DefaultModel;
+
+            MicInfoBar.Severity = InfoBarSeverity.Warning;
+            MicInfoBar.Title = "That model wouldn't load";
+            MicInfoBar.Message = "Falling back to Whisper large-v3.";
+            MicActionLink.Visibility = Visibility.Collapsed;
+            MicInfoBar.IsOpen = true;
+            _infoSticky = true;
+
+            _ = SwitchModelAsync(DefaultModel);
+            return;
+        }
+
+        _backendFatal = true;
         StatusText.Text = "Speech engine stopped";
 
         _micProblem = false;
@@ -520,6 +590,21 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Populate the picker lazily — the catalogue costs a Hub round trip.</summary>
+    private void OnMicInfoClosed(InfoBar sender, object args) => _infoSticky = false;
+
+    private void OnModelSectionExpanding(Expander sender, ExpanderExpandingEventArgs args) =>
+        HeaderModelName.Visibility = Visibility.Collapsed;
+
+    private void OnModelSectionCollapsed(Expander sender, ExpanderCollapsedEventArgs args) =>
+        HeaderModelName.Visibility = Visibility.Visible;
+
+    /// <summary>Keep the collapsed header's summary in step with what's actually loaded.</summary>
+    private void UpdateHeaderModelName()
+    {
+        var active = Models.FirstOrDefault(m => m.IsSelected);
+        HeaderModelName.Text = active?.Name ?? string.Empty;
+    }
+
     private void OnModelCatalog(string current, IReadOnlyList<ModelOption> options)
     {
         _suppressModelEvent = true;
@@ -546,6 +631,7 @@ public sealed partial class MainWindow : Window
         {
             _suppressModelEvent = false;
         }
+        UpdateHeaderModelName();
     }
 
     /// <summary>
@@ -563,8 +649,9 @@ public sealed partial class MainWindow : Window
         var row = Models.FirstOrDefault(m => m.Id == id);
         if (row is null || id == _settings.Model || _switchingTo is not null) return;
 
+        // Claimed up front so a second click is ignored while the download runs, which can
+        // take minutes; SwitchModelAsync re-asserts it for the paths that don't come via here.
         _switchingTo = id;
-        row.IsBusy = true;
 
         if (!row.Available)
         {
@@ -581,14 +668,11 @@ public sealed partial class MainWindow : Window
     private async Task SwitchModelAsync(string id)
     {
         var row = Models.FirstOrDefault(m => m.Id == id);
-        if (row is not null)
-        {
-            row.IsBusy = true;
-            row.Status = "Loading…";
-        }
+        row?.ShowLoading();
 
-        _settings.Model = id;
-        _settings.Save();
+        // Set here rather than at every call site, so the recovery paths can't forget it and
+        // leave OnConnection unable to recognise the switch completing.
+        _switchingTo = id;
 
         ShowLoadingState($"Loading {row?.Name ?? id}");
 
@@ -597,7 +681,11 @@ public sealed partial class MainWindow : Window
         _captureRequested = false;
         _connected = false;
         _startedPaused = !_micGranted || _micDeclined;
+        _awaitingSwitchReconnect = true;
 
+        // Deliberately NOT persisted yet. A model that downloads but fails to load would
+        // otherwise become the choice reloaded on every future launch, turning one bad switch
+        // into a crash loop with no way out from inside the app.
         var error = _backend.Restart(
             device: _settings.DeviceIndex?.ToString(),
             model: id,
@@ -607,7 +695,9 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrEmpty(error))
         {
             _switchingTo = null;
+            _awaitingSwitchReconnect = false;
             if (row is not null) { row.IsBusy = false; row.Refresh(); }
+            SelectModelRow(_lastGoodModel);
             StatusText.Text = error;
             return;
         }
@@ -667,12 +757,28 @@ public sealed partial class MainWindow : Window
             // dropped on a closed socket, so this is the other half of that handshake.
             TryStartCapture();
 
-            // A reconnect after a model switch is the switch completing.
-            if (_switchingTo is { } finished)
+            // A reconnect after a restart is the switch completing. Guarded on the restart flag
+            // rather than on _switchingTo alone: during a long download the socket is still on
+            // the old backend, and a transient drop there would otherwise be reported as a
+            // successful switch that never happened.
+            if (_awaitingSwitchReconnect && _switchingTo is { } finished)
             {
+                _awaitingSwitchReconnect = false;
                 _switchingTo = null;
+                _recoveringModel = false;
+
+                // Only now is the choice known to work, so only now is it safe to persist.
+                _lastGoodModel = finished;
+                _settings.Model = finished;
+                _settings.Save();
+
                 var row = Models.FirstOrDefault(m => m.Id == finished);
-                if (row is not null) { row.IsBusy = false; row.Status = "In use"; }
+                if (row is not null)
+                {
+                    row.Available = true;
+                    row.Refresh();
+                    row.Status = "In use";
+                }
                 SelectModelRow(finished);
                 foreach (var other in Models.Where(m => m.Id != finished)) other.Refresh();
             }
@@ -850,6 +956,7 @@ public sealed partial class MainWindow : Window
         {
             _suppressModelEvent = false;
         }
+        UpdateHeaderModelName();
     }
 
     // ---------- devices ----------
@@ -944,8 +1051,25 @@ public sealed partial class MainWindow : Window
 
     // ---------- commands ----------
 
-    private async void OnToggleCapture(object sender, RoutedEventArgs e) =>
+    /// <summary>
+    /// Starting capture by hand is consent in its own right. Without this, a user who chose
+    /// "Not now" and later pressed the button would be captioning while the app still believed
+    /// it was declined — and the next model switch would silently stop captions again.
+    /// </summary>
+    private async void OnToggleCapture(object sender, RoutedEventArgs e)
+    {
+        if (!_running)
+        {
+            _micDeclined = false;
+            _micGranted = true;
+            if (_micProblem && MicInfoBar.Severity == InfoBarSeverity.Informational)
+            {
+                _micProblem = false;
+                MicInfoBar.IsOpen = false;
+            }
+        }
         await _client.ToggleAsync();
+    }
 
     private void OnBigger(object sender, RoutedEventArgs e) => SetFontSize(CaptionSize + 3);
     private void OnSmaller(object sender, RoutedEventArgs e) => SetFontSize(CaptionSize - 3);

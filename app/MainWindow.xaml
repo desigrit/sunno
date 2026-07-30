@@ -89,18 +89,51 @@
                                Style="{StaticResource CaptionTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
 
-                    <!-- Model picker. Deliberately not a card: it sits in the same pane as
-                         Speakers and reads as another section of it, not a control panel. -->
-                    <StackPanel Grid.Row="2" Margin="0,8,0,4">
-                        <Border Height="1" Margin="16,0,16,10"
-                                Background="{ThemeResource CardStrokeColorDefaultBrush}" />
+                    <!-- Model picker. An Expander for the collapse behaviour, chevron and
+                         keyboard support, but with the card chrome stripped so it reads as
+                         another section of this pane rather than a control panel. -->
+                    <Expander x:Name="ModelSection" Grid.Row="2"
+                              Margin="8,6,8,6" Padding="0"
+                              HorizontalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              IsExpanded="False"
+                              Expanding="OnModelSectionExpanding"
+                              Collapsed="OnModelSectionCollapsed">
+                        <Expander.Resources>
+                            <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="Transparent" />
+                            <SolidColorBrush x:Key="ExpanderHeaderBorderBrush" Color="Transparent" />
+                            <SolidColorBrush x:Key="ExpanderHeaderPointerOverBackground" Color="Transparent" />
+                            <SolidColorBrush x:Key="ExpanderHeaderPressedBackground" Color="Transparent" />
+                            <SolidColorBrush x:Key="ExpanderHeaderDisabledBackground" Color="Transparent" />
+                            <SolidColorBrush x:Key="ExpanderContentBackground" Color="Transparent" />
+                            <SolidColorBrush x:Key="ExpanderContentBorderBrush" Color="Transparent" />
+                            <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
+                            <Thickness x:Key="ExpanderContentBorderThickness">0</Thickness>
+                            <Thickness x:Key="ExpanderContentDownBorderThickness">0</Thickness>
+                            <Thickness x:Key="ExpanderContentPadding">0</Thickness>
+                            <Thickness x:Key="ExpanderHeaderPadding">8,0,0,0</Thickness>
+                            <x:Double x:Key="ExpanderMinHeight">34</x:Double>
+                        </Expander.Resources>
 
-                        <TextBlock Text="Speech model" Margin="16,0,16,6"
-                                   Style="{StaticResource BodyStrongTextBlockStyle}"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Expander.Header>
+                            <StackPanel Spacing="0">
+                                <TextBlock Text="Speech model"
+                                           Style="{StaticResource BodyStrongTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <!-- Only while collapsed: once the list is open the selected
+                                     radio already says this, and repeating it adds noise.
+                                     Stacked rather than inline because model names are long
+                                     and the pane is 240px. -->
+                                <TextBlock x:Name="HeaderModelName"
+                                           FontSize="11.5" LineHeight="15"
+                                           TextTrimming="CharacterEllipsis"
+                                           TextWrapping="NoWrap"
+                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            </StackPanel>
+                        </Expander.Header>
 
                         <ItemsControl x:Name="ModelOptions" ItemsSource="{x:Bind Models}"
-                                      Margin="12,0,8,8"
+                                      Margin="4,2,8,6"
                                       AutomationProperties.Name="Speech models">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="models:ModelRow">
@@ -119,23 +152,31 @@
                                                        Style="{StaticResource BodyTextBlockStyle}"
                                                        TextTrimming="CharacterEllipsis"
                                                        TextWrapping="NoWrap" />
-                                            <StackPanel Orientation="Horizontal" Spacing="5">
-                                                <ProgressRing Width="10" Height="10"
-                                                              IsActive="{x:Bind IsBusy, Mode=OneWay}"
-                                                              Visibility="{x:Bind BusyVisibility, Mode=OneWay}" />
-                                                <TextBlock Text="{x:Bind Status, Mode=OneWay}"
-                                                           FontSize="11" LineHeight="14"
-                                                           Style="{StaticResource CaptionTextBlockStyle}"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           TextWrapping="NoWrap"
-                                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                                            </StackPanel>
+
+                                            <!-- The second line is either the caption or, while
+                                                 the model is being fetched, a bar that simply
+                                                 fills. Progress a glance can read, without a
+                                                 number to watch. -->
+                                            <TextBlock Text="{x:Bind Status, Mode=OneWay}"
+                                                       Visibility="{x:Bind StatusVisibility, Mode=OneWay}"
+                                                       FontSize="11" LineHeight="14"
+                                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       TextWrapping="NoWrap"
+                                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+
+                                            <ProgressBar Height="2" Margin="0,5,4,5"
+                                                         Visibility="{x:Bind BusyVisibility, Mode=OneWay}"
+                                                         IsIndeterminate="{x:Bind IsIndeterminate, Mode=OneWay}"
+                                                         Value="{x:Bind Progress, Mode=OneWay}"
+                                                         Minimum="0" Maximum="100"
+                                                         HorizontalAlignment="Stretch" />
                                         </StackPanel>
                                     </RadioButton>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                    </StackPanel>
+                    </Expander>
                 </Grid>
             </Border>
 
@@ -272,7 +313,8 @@
              app is packaged is the per-app microphone toggle, so the state that toggle
              creates must be explained rather than dumped as PortAudio diagnostics. -->
         <InfoBar x:Name="MicInfoBar" Grid.Row="1" Severity="Warning" IsOpen="False"
-                 IsClosable="True" VerticalAlignment="Top" Margin="16,8,16,0">
+                 IsClosable="True" VerticalAlignment="Top" Margin="16,8,16,0"
+                 CloseButtonClick="OnMicInfoClosed">
             <InfoBar.ActionButton>
                 <HyperlinkButton x:Name="MicActionLink" Content="Open Settings"
                                  Click="OnMicAction" />

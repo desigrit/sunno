@@ -15,6 +15,8 @@ public sealed class ModelRow : INotifyPropertyChanged
 {
     private bool _isSelected;
     private bool _isBusy;
+    private bool _isIndeterminate;
+    private double _progress;
     private bool _available;
     private string _status = string.Empty;
 
@@ -44,8 +46,22 @@ public sealed class ModelRow : INotifyPropertyChanged
         {
             if (!Set(ref _isBusy, value)) return;
             Notify(nameof(BusyVisibility));
+            Notify(nameof(StatusVisibility));
             Notify(nameof(IsEnabled));
         }
+    }
+
+    /// <summary>A reload has no measurable progress; a download does.</summary>
+    public bool IsIndeterminate
+    {
+        get => _isIndeterminate;
+        set => Set(ref _isIndeterminate, value);
+    }
+
+    public double Progress
+    {
+        get => _progress;
+        set => Set(ref _progress, value);
     }
 
     public string Status
@@ -54,15 +70,36 @@ public sealed class ModelRow : INotifyPropertyChanged
         set => Set(ref _status, value);
     }
 
+    /// <summary>The bar replaces the caption rather than crowding in beside it.</summary>
     public Visibility BusyVisibility => _isBusy ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility StatusVisibility => _isBusy ? Visibility.Collapsed : Visibility.Visible;
 
     /// <summary>A model mid-download can't be chosen again without confusing the backend.</summary>
     public bool IsEnabled => !_isBusy;
 
     /// <summary>Restore the resting caption after a download finishes or is abandoned.</summary>
-    public void Refresh() => Status = _available ? Detail : $"{FormatSize(ApproxMb)} download";
+    public void Refresh()
+    {
+        IsBusy = false;
+        IsIndeterminate = false;
+        Progress = 0;
+        Status = _available ? Detail : $"{FormatSize(ApproxMb)} download";
+    }
 
-    public void ShowProgress(double percent) => Status = $"Downloading… {percent:0}%";
+    /// <summary>Fetching bytes: a bar that fills, with no number to watch.</summary>
+    public void ShowProgress(double percent)
+    {
+        IsIndeterminate = false;
+        Progress = Math.Clamp(percent, 0, 100);
+        IsBusy = true;
+    }
+
+    /// <summary>Loading into the engine: real work, but nothing meaningful to measure.</summary>
+    public void ShowLoading()
+    {
+        IsIndeterminate = true;
+        IsBusy = true;
+    }
 
     private static string FormatSize(int mb) =>
         mb >= 1024 ? $"{mb / 1024.0:0.#} GB" : $"{mb} MB";
