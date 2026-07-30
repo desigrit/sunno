@@ -14,8 +14,13 @@ public sealed class SpeakerRow : INotifyPropertyChanged
     public string Label
     {
         get => _label;
-        set => Set(ref _label, value);
+        set { if (Set(ref _label, value)) Notify(nameof(Tooltip)); }
     }
+
+    /// <summary>Full name plus the affordance, since long names trim in a 240px pane.</summary>
+    public string Tooltip => string.IsNullOrWhiteSpace(_label)
+        ? "Click to rename or mark as you"
+        : $"{_label}\nClick to rename or mark as you";
 
     public bool IsSelf
     {
@@ -29,10 +34,14 @@ public sealed class SpeakerRow : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     {
-        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        if (EqualityComparer<T>.Default.Equals(field, value)) return false;
         field = value;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        Notify(name);
+        return true;
     }
+
+    private void Notify(string? name) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }

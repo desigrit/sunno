@@ -364,6 +364,10 @@ public sealed partial class MainWindow : Window
         // that broke it, or every future launch would reload it and crash again.
         if (_switchingTo is { } failed)
         {
+            // Distinguishes a crash while the target was still downloading from one while it
+            // was loading. Only the latter is evidence the target itself is bad.
+            var wasLoading = _awaitingSwitchReconnect;
+
             _switchingTo = null;
             _awaitingSwitchReconnect = false;
             foreach (var m in Models) { m.IsBusy = false; m.Refresh(); }
@@ -373,7 +377,8 @@ public sealed partial class MainWindow : Window
             if (fallback is not null)
             {
                 _recoveringModel = true;
-                RaiseFallbackNotice(failed, fallback);
+                if (wasLoading) RaiseFallbackNotice(failed, fallback);
+                else RaiseDownloadInterruptedNotice(failed, fallback);
                 _ = SwitchModelAsync(fallback);
                 return;
             }
@@ -397,10 +402,23 @@ public sealed partial class MainWindow : Window
         }
 
         _backendFatal = true;
+        ShowFatalBackendError(message);
+    }
+
+    /// <summary>
+    /// Report a backend we cannot recover from. Split out so the restart path can reuse it:
+    /// a failed restart has already killed the old process, so silently returning would leave
+    /// "Reconnecting…" on screen forever with nothing left to reconnect to.
+    /// </summary>
+    private void ShowFatalBackendError(string message)
+    {
+        _backendFatal = true;
+        _backendLoading = false;
         StatusText.Text = "Speech engine stopped";
 
         _micProblem = false;
         _micCanPrompt = false;
+        _infoSticky = false;
         MicInfoBar.Severity = InfoBarSeverity.Error;
         MicInfoBar.Title = "The speech engine stopped";
         MicInfoBar.Message = $"{message}\n\nDetails were written to {BackendHost.LogPath}";
@@ -421,6 +439,23 @@ public sealed partial class MainWindow : Window
         MicInfoBar.Severity = InfoBarSeverity.Warning;
         MicInfoBar.Title = $"{failedName} couldn't be loaded";
         MicInfoBar.Message = $"Using {fallbackName} instead.";
+        MicActionLink.Visibility = Visibility.Collapsed;
+        MicInfoBar.IsOpen = true;
+        _infoSticky = true;
+    }
+
+    /// <summary>
+    /// The engine died while the chosen model was still downloading, so the model itself is not
+    /// implicated — saying it "couldn't be loaded" would be a guess, and a wrong one.
+    /// </summary>
+    private void RaiseDownloadInterruptedNotice(string targetId, string fallbackId)
+    {
+        var targetName = Models.FirstOrDefault(m => m.Id == targetId)?.Name ?? targetId;
+        var fallbackName = Models.FirstOrDefault(m => m.Id == fallbackId)?.Name ?? fallbackId;
+
+        MicInfoBar.Severity = InfoBarSeverity.Warning;
+        MicInfoBar.Title = $"Download of {targetName} was interrupted";
+        MicInfoBar.Message = $"Still using {fallbackName}. Selecting it again resumes the download.";
         MicActionLink.Visibility = Visibility.Collapsed;
         MicInfoBar.IsOpen = true;
         _infoSticky = true;
@@ -679,6 +714,8 @@ public sealed partial class MainWindow : Window
     {
         var active = Models.FirstOrDefault(m => m.IsSelected);
         HeaderModelName.Text = active?.Name ?? string.Empty;
+        // The header trims too, and it's the only thing visible while collapsed.
+        ToolTipService.SetToolTip(HeaderModelName, active?.Tooltip);
     }
 
     private void OnModelCatalog(string current, IReadOnlyList<ModelOption> options)
@@ -773,9 +810,13 @@ public sealed partial class MainWindow : Window
         {
             _switchingTo = null;
             _awaitingSwitchReconnect = false;
+            _recoveringModel = false;
             if (row is not null) { row.IsBusy = false; row.Refresh(); }
             SelectModelRow(_lastGoodModel);
-            StatusText.Text = error;
+            // Restart already killed the old backend before failing to start the new one, so
+            // nothing is running. Reporting it as fatal beats an endless "Reconnecting…" to a
+            // process that no longer exists.
+            ShowFatalBackendError(error);
             return;
         }
 

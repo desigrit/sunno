@@ -67,7 +67,7 @@
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="models:SpeakerRow">
                                 <Grid ColumnSpacing="10" Padding="4,7"
-                                      ToolTipService.ToolTip="Click to rename or mark as you">
+                                      ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
@@ -145,6 +145,7 @@
                                                  IsEnabled="{x:Bind IsEnabled, Mode=OneWay}"
                                                  Checked="OnModelChecked"
                                                  Tag="{x:Bind Id}"
+                                                 ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}"
                                                  AutomationProperties.Name="{x:Bind Name}">
                                         <StackPanel Spacing="0" Padding="0,1,0,1">
                                             <TextBlock Text="{x:Bind Name}"

@@ -29,7 +29,26 @@ public sealed class ModelRow : INotifyPropertyChanged
     public bool Available
     {
         get => _available;
-        set { if (Set(ref _available, value)) Refresh(); }
+        set
+        {
+            if (!Set(ref _available, value)) return;
+            Notify(nameof(Tooltip));
+            Refresh();
+        }
+    }
+
+    /// <summary>
+    /// Full text for hover, because the pane is 240px and both the name and the description
+    /// routinely trim. Includes the download size, which the caption line only shows while the
+    /// model is absent and hides entirely once a download starts.
+    /// </summary>
+    public string Tooltip
+    {
+        get
+        {
+            var text = string.IsNullOrEmpty(Detail) ? Name : $"{Name}\n{Detail}";
+            return _available ? text : $"{text}\n{FormatSize(ApproxMb)} download";
+        }
     }
 
     public bool IsSelected
