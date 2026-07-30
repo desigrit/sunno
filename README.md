@@ -56,6 +56,20 @@ winget install --id Python.Python.3.12 --scope user
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+For development — running the tests or rebuilding the icon and CUDA allow-list — also
+install `requirements-dev.txt`. Those packages (scipy, pefile, Pillow) are deliberately kept
+out of the shipped payload; `stage-backend.ps1` fails the build if they appear in it.
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe tests\test_biquad.py     # standalone script, not pytest
+```
+
+`test_biquad.py` guards the scipy removal: it compares the hand-rolled high-pass against
+`scipy.signal.sosfilt` across impulse, noise, DC, sines, clipping and a synthetic
+speech-plus-rumble signal, and checks that filter state does not leak between utterances. It
+reports how many signals it ran; the count is higher when `testdata/verify.wav` is present.
+
 ## Usage
 
 | Command | Effect |

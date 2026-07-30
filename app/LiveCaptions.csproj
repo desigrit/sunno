@@ -3,7 +3,10 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <!-- 1903 (18362), not 1809: AppCapability.Create - the microphone pre-flight check that
+         justifies packaging this as MSIX - is only available from 18362. Advertising 17763
+         would claim support on an OS where that check throws. -->
+    <TargetPlatformMinVersion>10.0.18362.0</TargetPlatformMinVersion>
     <RootNamespace>LiveCaptions</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>
@@ -25,7 +28,6 @@
          the MSBuild appx targets, so no AppxManifest lives in the project. -->
     <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
     <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
-    <EnableMsixToolingValidation>false</EnableMsixToolingValidation>
   </PropertyGroup>
 
   <ItemGroup>

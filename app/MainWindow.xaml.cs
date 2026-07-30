@@ -289,9 +289,14 @@ public sealed partial class MainWindow : Window
                 ShowActionableError(new StatusEvent("error", false, null, null, null, "mic_denied"));
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Unpackaged build (no package identity) — nothing to check.
+            // Two distinct cases land here, and neither should be fatal:
+            //   * no package identity (unpackaged dev build) - nothing to check;
+            //   * the API is missing on an older OS than the manifest floor.
+            // Either way the backend still reports mic_denied at capture time, so this is a
+            // pre-flight nicety rather than the only signal.
+            System.Diagnostics.Debug.WriteLine($"AppCapability check skipped: {ex.Message}");
         }
     }
 

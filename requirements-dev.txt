@@ -1,0 +1,16 @@
+# Development-only dependencies. NOT shipped in the MSIX package - packaging/stage-backend.ps1
+# excludes these and fails the build if they reappear in the payload.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+
+# Reference implementation the hand-rolled biquad in server/preprocess.py is validated
+# against. scipy was removed from the runtime (128 MB) but the regression test that guards
+# that removal necessarily still needs it.
+scipy
+
+# PE import-table parsing, used by packaging/cuda_decide.py to derive which CUDA DLLs are
+# actually reachable and therefore need shipping.
+pefile
+
+# Icon and MSIX asset generation (packaging/make_icon.py).
+Pillow

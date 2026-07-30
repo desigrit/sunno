@@ -22,8 +22,9 @@
   </Properties>
 
   <Dependencies>
-    <!-- Matches TargetPlatformMinVersion in LiveCaptions.csproj. -->
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0"
+    <!-- Matches TargetPlatformMinVersion in LiveCaptions.csproj. 1903 rather than 1809
+         because AppCapability.Create - the microphone permission pre-flight - requires it. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.18362.0"
                         MaxVersionTested="10.0.26100.0" />
   </Dependencies>
 

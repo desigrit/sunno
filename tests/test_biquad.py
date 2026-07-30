@@ -59,11 +59,27 @@ cases: dict[str, np.ndarray] = {
     "single sample": np.array([0.7], dtype=np.float32),
 }
 
-wav_path = Path(r"D:\Code\Live Speech to Text\testdata\verify.wav")
+wav_path = Path(__file__).resolve().parents[1] / "testdata" / "verify.wav"
 if wav_path.exists():
     with wave.open(str(wav_path), "rb") as w:
         raw = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
-    cases["real speech WAV"] = (raw.astype(np.float32) / 32768.0)
+    cases["recorded speech WAV"] = raw.astype(np.float32) / 32768.0
+
+# Always present, so the suite cannot silently shrink on a machine without testdata/.
+# Deterministic and speech-shaped: a formant-like sum swept in amplitude, plus low-frequency
+# rumble the 80 Hz high-pass is specifically there to remove.
+_t = np.arange(SAMPLE_RATE * 3) / SAMPLE_RATE
+_envelope = 0.5 + 0.5 * np.sin(2 * np.pi * 3.1 * _t)
+_speechlike = (
+    0.30 * np.sin(2 * np.pi * 210 * _t)      # pitch
+    + 0.20 * np.sin(2 * np.pi * 700 * _t)    # F1
+    + 0.12 * np.sin(2 * np.pi * 1220 * _t)   # F2
+    + 0.06 * np.sin(2 * np.pi * 2600 * _t)   # F3
+) * _envelope
+_rumble = 0.25 * np.sin(2 * np.pi * 42 * _t) + 0.15 * np.sin(2 * np.pi * 18 * _t)
+cases["synthetic speech + rumble"] = (
+    _speechlike + _rumble + rng.standard_normal(_t.size) * 0.002
+).astype(np.float32)
 
 for name, data in cases.items():
     expected = sosfilt(sos80, data)
@@ -126,4 +142,5 @@ for name, data in cases.items():
 check("empty array", AudioConditioner(settings)(np.array([], dtype=np.float32)).size == 0)
 
 print(f"\n{'ALL PASS' if failures == 0 else str(failures) + ' FAILURE(S)'}")
+print(f"({len(cases)} signals x 2 comparisons + coefficient and state checks)")
 sys.exit(1 if failures else 0)
