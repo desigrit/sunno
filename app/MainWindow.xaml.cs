@@ -1,6 +1,8 @@
+using System;
 using System.Collections.ObjectModel;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading.Tasks;
 using LiveCaptions.Models;
 using LiveCaptions.Services;
 using Microsoft.UI.Composition.SystemBackdrops;
@@ -11,6 +13,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
+using Windows.Security.Authorization.AppCapabilityAccess;
 
 namespace LiveCaptions;
 
@@ -44,6 +47,18 @@ public sealed partial class MainWindow : Window
     /// <summary>Set while a microphone failure is unresolved, so transient status updates
     /// cannot erase the explanation before the user has read it.</summary>
     private bool _micProblem;
+    /// <summary>WebSocket reachability, mirrored so capture can be deferred until it's up.</summary>
+    private bool _connected;
+    /// <summary>Microphone consent is settled in our favour.</summary>
+    private bool _micGranted;
+    /// <summary>The backend was launched with --start-stopped and still needs a start command.</summary>
+    private bool _startedPaused;
+    /// <summary>Guards against sending start twice when consent and the socket both settle.</summary>
+    private bool _captureRequested;
+    private bool _micPromptDone;
+    /// <summary>Whether the InfoBar's action can still raise the dialog, or must fall back to
+    /// Settings because Windows will not prompt a second time.</summary>
+    private bool _micCanPrompt;
 
     /// <summary>Caption text size; the item templates read this.</summary>
     public static double CaptionSize { get; private set; } = 26;
@@ -72,6 +87,7 @@ public sealed partial class MainWindow : Window
 
         Closed += (_, _) =>
         {
+            MicrophoneAccess.Changed -= OnMicAccessChanged;
             _ = _client.DisposeAsync();
             _backend.Dispose();
             // WinUI doesn't end the process when the last window closes; without this the app
@@ -79,15 +95,27 @@ public sealed partial class MainWindow : Window
             Application.Current.Exit();
         };
 
-        CheckMicrophoneCapability();
+        // Consent has to be settled before anything opens the microphone. When access isn't
+        // already granted the backend starts paused, so the ~33 s model load overlaps the
+        // consent dialog rather than following it, and the backend's own mic_denied banner
+        // can't race the system prompt with a second, contradictory explanation.
+        var micStatus = MicrophoneAccess.Check();
+        _micGranted = micStatus is null or AppCapabilityAccessStatus.Allowed;
+        _startedPaused = !_micGranted;
 
         var error = _backend.Start(
             device: _settings.DeviceIndex?.ToString(),
             model: _settings.Model,
-            vocabulary: _settings.Vocabulary);
+            vocabulary: _settings.Vocabulary,
+            startStopped: _startedPaused);
         if (!string.IsNullOrEmpty(error)) StatusText.Text = error;
         _client.Start();
         _ = LoadDevicesAsync();
+
+        // The dialog is system-owned UI and RequestAccessAsync must run on the UI thread, so it
+        // waits for real activation instead of firing from the constructor, where there is no
+        // visible window for it to sit in front of.
+        Activated += OnFirstActivated;
     }
 
     /// <summary>Mica, extended title bar and a medium default size, matching inbox apps.</summary>
@@ -238,12 +266,14 @@ public sealed partial class MainWindow : Window
         switch (st.Code)
         {
             case "mic_denied":
+                _micCanPrompt = false;
                 MicInfoBar.Severity = InfoBarSeverity.Warning;
                 MicInfoBar.Title = "Microphone access is off";
                 MicInfoBar.Message =
                     "Windows is blocking microphone access for Live Captions, so nothing can " +
                     "be transcribed. Turn it on under Privacy & security › Microphone.";
-                MicSettingsLink.Visibility = Visibility.Visible;
+                MicActionLink.Content = "Open Settings";
+                MicActionLink.Visibility = Visibility.Visible;
                 break;
 
             case "mic_unavailable":
@@ -252,52 +282,146 @@ public sealed partial class MainWindow : Window
                 MicInfoBar.Message =
                     (st.Message ?? "The microphone could not be opened.") +
                     " Try choosing a different microphone below.";
-                MicSettingsLink.Visibility = Visibility.Collapsed;
+                MicActionLink.Visibility = Visibility.Collapsed;
                 break;
 
             default:
                 MicInfoBar.Severity = InfoBarSeverity.Error;
                 MicInfoBar.Title = "Something went wrong";
                 MicInfoBar.Message = st.Message ?? "Unknown error.";
-                MicSettingsLink.Visibility = Visibility.Collapsed;
+                MicActionLink.Visibility = Visibility.Collapsed;
                 break;
         }
         MicInfoBar.IsOpen = true;
     }
 
-    private async void OnOpenMicSettings(object sender, RoutedEventArgs e) =>
+    private async void OnMicAction(object sender, RoutedEventArgs e)
+    {
+        // The same button means different things depending on whether Windows will still
+        // prompt: asking again is useless once the answer has been recorded.
+        if (_micCanPrompt)
+        {
+            ApplyMicrophoneStatus(await MicrophoneAccess.RequestAsync());
+            return;
+        }
         await Windows.System.Launcher.LaunchUriAsync(
             new Uri("ms-settings:privacy-microphone"));
+    }
+
+    private void OnFirstActivated(object sender, WindowActivatedEventArgs e)
+    {
+        if (_micPromptDone || e.WindowActivationState == WindowActivationState.Deactivated) return;
+        _micPromptDone = true;
+        Activated -= OnFirstActivated;
+        _ = EnsureMicrophoneAccessAsync();
+    }
 
     /// <summary>
-    /// Check the microphone capability before starting capture, so the app can explain a
-    /// blocked microphone up front instead of failing opaquely.
+    /// Settle microphone consent, prompting when Windows has never asked.
     ///
-    /// AppCapability requires package identity; unpackaged builds cannot call it at all, so
-    /// this is a no-op there and the runtime error path above is the only signal.
+    /// This is the payoff of shipping as MSIX. The capture itself runs in the Python child over
+    /// WASAPI, which the privacy gate silently denies rather than prompting on, so the dialog
+    /// has to be raised deliberately from the packaged UI process.
     /// </summary>
-    private void CheckMicrophoneCapability()
+    private async Task EnsureMicrophoneAccessAsync()
     {
-        try
-        {
-            var status = Windows.Security.Authorization.AppCapabilityAccess
-                .AppCapability.Create("microphone").CheckAccess();
+        var status = MicrophoneAccess.Check();
 
-            if (status != Windows.Security.Authorization.AppCapabilityAccess
-                    .AppCapabilityAccessStatus.Allowed)
-            {
-                ShowActionableError(new StatusEvent("error", false, null, null, null, "mic_denied"));
-            }
-        }
-        catch (Exception ex)
+        // UserPromptRequired means "never asked", not "refused" — the one state a dialog exists
+        // for, and the one the previous CheckAccess-only code mislabelled as a denial.
+        if (status == AppCapabilityAccessStatus.UserPromptRequired)
+            status = await MicrophoneAccess.RequestAsync();
+
+        ApplyMicrophoneStatus(status);
+
+        // Notice a later grant from Settings, so the fallback isn't a dead end that needs a relaunch.
+        MicrophoneAccess.Changed += OnMicAccessChanged;
+    }
+
+    private void OnMicAccessChanged() =>
+        _ui.TryEnqueue(() => ApplyMicrophoneStatus(MicrophoneAccess.Check()));
+
+    /// <summary>
+    /// Render a consent status. Each denial has a different remedy, so they can't share one
+    /// message: pointing at the per-app toggle is actively misleading when the device-wide one
+    /// is off, because the per-app control isn't even shown in that state.
+    /// </summary>
+    private void ApplyMicrophoneStatus(AppCapabilityAccessStatus? status)
+    {
+        // Null means no package identity (an unpackaged dev build). There is no consent state
+        // to honour, so let the backend's runtime error be the only signal.
+        if (status is null or AppCapabilityAccessStatus.Allowed)
         {
-            // Two distinct cases land here, and neither should be fatal:
-            //   * no package identity (unpackaged dev build) - nothing to check;
-            //   * the API is missing on an older OS than the manifest floor.
-            // Either way the backend still reports mic_denied at capture time, so this is a
-            // pre-flight nicety rather than the only signal.
-            System.Diagnostics.Debug.WriteLine($"AppCapability check skipped: {ex.Message}");
+            _micProblem = false;
+            _micCanPrompt = false;
+            MicInfoBar.IsOpen = false;
+            _micGranted = true;
+            TryStartCapture();
+            return;
         }
+
+        _micProblem = true;
+        MicInfoBar.Severity = InfoBarSeverity.Warning;
+        MicActionLink.Visibility = Visibility.Visible;
+
+        switch (status)
+        {
+            case AppCapabilityAccessStatus.UserPromptRequired:
+                // RequestAccessAsync is documented never to return this, so arriving here means
+                // the prompt could not be shown. Offer it as an explicit action rather than
+                // pretending the user refused.
+                _micCanPrompt = true;
+                MicInfoBar.Title = "Allow microphone access";
+                MicInfoBar.Message =
+                    "Live Captions needs your microphone to transcribe what people say. " +
+                    "Audio is processed on this PC and never leaves it.";
+                break;
+
+            case AppCapabilityAccessStatus.DeniedByUser:
+                _micCanPrompt = false;
+                MicInfoBar.Title = "Microphone access is off";
+                MicInfoBar.Message =
+                    "Microphone access for Live Captions is turned off, so nothing can be " +
+                    "transcribed. Turn it back on under Privacy & security › Microphone.";
+                break;
+
+            case AppCapabilityAccessStatus.DeniedBySystem:
+                _micCanPrompt = false;
+                MicInfoBar.Title = "Microphone is off for this device";
+                MicInfoBar.Message =
+                    "Microphone access is turned off for the whole device, or for all desktop " +
+                    "apps, so no app can transcribe. Turn it on under Privacy & security › " +
+                    "Microphone.";
+                break;
+
+            default:
+                // NotDeclaredByApp: a packaging defect, not something the user can fix.
+                _micCanPrompt = false;
+                MicInfoBar.Severity = InfoBarSeverity.Error;
+                MicInfoBar.Title = "Microphone capability missing";
+                MicInfoBar.Message =
+                    "This build didn't declare the microphone capability, so Windows won't " +
+                    "grant access. Reinstalling from a complete package should fix it.";
+                MicActionLink.Visibility = Visibility.Collapsed;
+                break;
+        }
+
+        MicActionLink.Content = _micCanPrompt ? "Allow" : "Open Settings";
+        MicInfoBar.IsOpen = true;
+    }
+
+    /// <summary>
+    /// Begin capture once consent and the WebSocket are both ready.
+    ///
+    /// Either can finish first — granting takes a couple of seconds while the model takes ~33 s
+    /// — and <see cref="CaptionClient"/> drops sends on a closed socket, so both paths call
+    /// this and whichever completes last actually starts capture.
+    /// </summary>
+    private void TryStartCapture()
+    {
+        if (!_micGranted || !_startedPaused || _captureRequested || !_connected) return;
+        _captureRequested = true;
+        _ = _client.StartCaptureAsync();
     }
 
     /// <summary>Device strings carry format detail that's too long for the status line.</summary>
@@ -310,9 +434,13 @@ public sealed partial class MainWindow : Window
 
     private void OnConnection(bool connected)
     {
+        _connected = connected;
         if (connected)
         {
             _backendLoading = false;
+            // Consent may have been granted while the model was still loading; sends are
+            // dropped on a closed socket, so this is the other half of that handshake.
+            TryStartCapture();
             return;
         }
         // On a cold start the socket isn't up yet because the model is still loading.

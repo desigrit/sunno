@@ -84,7 +84,8 @@ public sealed class BackendHost : IDisposable
         return null;
     }
 
-    public string Start(string? device = null, string model = "large-v3", string? vocabulary = null)
+    public string Start(string? device = null, string model = "large-v3", string? vocabulary = null,
+                        bool startStopped = false)
     {
         if (IsRunning) return "already running";
 
@@ -96,6 +97,9 @@ public sealed class BackendHost : IDisposable
         var args = new List<string> { "-m", "server.app", "--model", model };
         if (!string.IsNullOrWhiteSpace(device)) { args.Add("--device"); args.Add(device); }
         if (!string.IsNullOrWhiteSpace(vocabulary)) { args.Add("--vocabulary"); args.Add(vocabulary); }
+        // Load the model but leave the microphone alone. Used while consent is still being
+        // resolved, so the ~33 s load overlaps the dialog instead of following it.
+        if (startStopped) args.Add("--start-stopped");
 
         var psi = new ProcessStartInfo(python)
         {

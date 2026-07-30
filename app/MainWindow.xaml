@@ -216,8 +216,8 @@
         <InfoBar x:Name="MicInfoBar" Grid.Row="1" Severity="Warning" IsOpen="False"
                  IsClosable="True" VerticalAlignment="Top" Margin="16,8,16,0">
             <InfoBar.ActionButton>
-                <HyperlinkButton x:Name="MicSettingsLink" Content="Open Settings"
-                                 Click="OnOpenMicSettings" />
+                <HyperlinkButton x:Name="MicActionLink" Content="Open Settings"
+                                 Click="OnMicAction" />
             </InfoBar.ActionButton>
         </InfoBar>
 

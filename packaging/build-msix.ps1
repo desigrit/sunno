@@ -35,7 +35,18 @@ $makeappx = Find-SdkTool "makeappx.exe"
 $signtool = Find-SdkTool "signtool.exe"
 
 New-Item -ItemType Directory -Path $out -Force | Out-Null
-if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+
+# Wipe the staging tree, but keep the staged backend when reusing it — it is the expensive
+# part (~1.2 GB) and re-staging it dominates the build.
+if (Test-Path $staging) {
+  if ($SkipStage) {
+    Get-ChildItem $staging -Force |
+      Where-Object { $_.Name -ne "backend" } |
+      Remove-Item -Recurse -Force
+  } else {
+    Remove-Item $staging -Recurse -Force
+  }
+}
 New-Item -ItemType Directory -Path $staging -Force | Out-Null
 
 # The staging directory is wiped above, so skipping the publish would produce a package with
@@ -65,11 +76,23 @@ if (-not $SkipStage) {
   & (Join-Path $PSScriptRoot "stage-backend.ps1") `
       -Destination (Join-Path $staging "backend") -Clean
 } else {
-  $existing = Join-Path $PSScriptRoot "staging\backend"
+  $existing = Join-Path $staging "backend"
   if (-not (Test-Path $existing)) { throw "-SkipStage given but $existing does not exist." }
-  Write-Host "Reusing staged backend" -ForegroundColor DarkGray
-  robocopy $existing (Join-Path $staging "backend") /E /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
-  if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying the staged backend" }
+
+  # A cached backend is only safe to reuse if it still matches the source. Without this check a
+  # cache that predates real bug fixes ships silently, because the package looks complete
+  # either way.
+  $stale = Get-ChildItem (Join-Path $root "server") -Filter *.py | Where-Object {
+    $staged = Join-Path $existing "server\$($_.Name)"
+    (-not (Test-Path $staged)) -or
+    (Get-FileHash $_.FullName -Algorithm SHA256).Hash -ne (Get-FileHash $staged -Algorithm SHA256).Hash
+  }
+  if ($stale) {
+    throw "-SkipStage refused: the cached backend is stale ($($stale.Name -join ', ')). " +
+          "Re-run without -SkipStage."
+  }
+
+  Write-Host "Reusing staged backend (verified against server\*.py)" -ForegroundColor DarkGray
 }
 
 # ---------------------------------------------------------------- manifest + assets
