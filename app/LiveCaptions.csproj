@@ -14,17 +14,18 @@
     <LangVersion>latest</LangVersion>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <!-- Unpackaged by default for fast iteration (dotnet run / F5). The MSIX build passes
-         -p:PackageForMsix=true, which switches off the bootstrapper path. Self-contained in
-         both cases so the Windows App SDK runtime need not be pre-installed. -->
-    <WindowsPackageType Condition="'$(PackageForMsix)' == 'true'">None</WindowsPackageType>
+    <!-- Unpackaged by default for fast iteration (dotnet run / F5). packaging/build-msix.ps1
+         passes -p:PackageForMsix=true, which switches to the packaged WinAppSDK mode: the
+         app then relies on package identity rather than shipping the bootstrapper. -->
+    <WindowsPackageType Condition="'$(PackageForMsix)' == 'true'">MSIX</WindowsPackageType>
     <WindowsPackageType Condition="'$(PackageForMsix)' != 'true'">None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
-    <!-- Packaging is done by packaging/build-msix.ps1 with MakeAppx over the published
-         output, not by the MSBuild appx targets, so no AppxManifest lives in the project. -->
+    <!-- Packaging is done by build-msix.ps1 with MakeAppx over the published output, not by
+         the MSBuild appx targets, so no AppxManifest lives in the project. -->
     <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
     <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
+    <EnableMsixToolingValidation>false</EnableMsixToolingValidation>
   </PropertyGroup>
 
   <ItemGroup>
@@ -36,6 +37,16 @@
     <!-- Tile/logo assets for MSIX, plus the .ico used by the unpackaged exe. -->
     <Content Include="Assets\**\*.png" />
     <Content Include="Assets\AppIcon.ico" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(PackageForMsix)' == 'true'">
+    <!-- Single source of truth for the package manifest. The MSIX build copies this into the
+         staging layout as AppxManifest.xml; referencing it here lets MSBuild validate it.
+         Conditional because the MSIX targets reject an AppxManifest when
+         WindowsPackageType is None, which is the default (unpackaged) build. -->
+    <AppxManifest Include="Package.appxmanifest">
+      <SubType>Designer</SubType>
+    </AppxManifest>
   </ItemGroup>
 
 </Project>

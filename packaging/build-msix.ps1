@@ -73,7 +73,7 @@ if (-not $SkipStage) {
 }
 
 # ---------------------------------------------------------------- manifest + assets
-Copy-Item (Join-Path $PSScriptRoot "Package.appxmanifest") (Join-Path $staging "AppxManifest.xml") -Force
+Copy-Item (Join-Path $root "app\Package.appxmanifest") (Join-Path $staging "AppxManifest.xml") -Force
 
 $assetsSrc = Join-Path $root "app\Assets"
 $assetsDst = Join-Path $staging "Assets"
@@ -105,7 +105,10 @@ Write-Host "Packing..." -ForegroundColor Cyan
 # MakeAppx emits a line per file (9k+). Redirect to a log rather than filtering the live
 # pipeline: truncating that pipeline detaches the process mid-pack and leaves a 0-byte file.
 $packLog = Join-Path $out "makeappx.log"
-& $makeappx pack /d $staging /p $msix /o /nv *> $packLog
+# Full manifest validation is on (no /nv): it verifies that every file the manifest
+# references actually exists in the layout, which is exactly the class of mistake that
+# would otherwise only surface at install time.
+& $makeappx pack /d $staging /p $msix /o *> $packLog
 if ($LASTEXITCODE -ne 0) {
   Get-Content $packLog -Tail 20 | ForEach-Object { Write-Host "  $_" }
   throw "makeappx failed ($LASTEXITCODE) - see $packLog"

@@ -33,34 +33,24 @@ def register_cuda_dlls(required: bool = False) -> list[Path]:
         required: when True, a missing or empty NVIDIA payload raises instead of warning.
             The server passes this for CUDA runs so a mis-staged package fails loudly at
             startup rather than mid-conversation.
+
+    The ``required=True`` check is deliberately NOT short-circuited by the memo: this module
+    is imported (and therefore registers with ``required=False``) before the server decides
+    whether it needs CUDA, so an early-return on ``_registered`` would make the strict check
+    unreachable — which is exactly the bug this guard exists to prevent.
     """
     global _registered
-    added: list[Path] = []
-    if _registered or sys.platform != "win32":
-        return added
 
     root = nvidia_root()
-    if not root.is_dir():
+    dll_dirs = [root / sub / "bin" for sub in _NVIDIA_DLL_SUBDIRS]
+    present = [d for d in dll_dirs if d.is_dir()]
+
+    if not root.is_dir() or not present:
         message = (
             f"NVIDIA CUDA libraries not found at {root}. GPU inference will fail. "
             "If this is a packaged build, the staging step did not preserve "
             "Lib/site-packages/nvidia/<pkg>/bin."
-        )
-        _registered = True
-        if required:
-            raise RuntimeError(message)
-        warnings.warn(message, RuntimeWarning, stacklevel=2)
-        return added
-
-    for subdir in _NVIDIA_DLL_SUBDIRS:
-        bin_dir = root / subdir / "bin"
-        if bin_dir.is_dir():
-            os.add_dll_directory(str(bin_dir))
-            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
-            added.append(bin_dir)
-
-    if not added:
-        message = (
+            if not root.is_dir() else
             f"NVIDIA directory {root} exists but contains no <pkg>/bin folders; "
             "GPU inference will fail."
         )
@@ -68,10 +58,22 @@ def register_cuda_dlls(required: bool = False) -> list[Path]:
         if required:
             raise RuntimeError(message)
         warnings.warn(message, RuntimeWarning, stacklevel=2)
-        return added
+        return []
+
+    if _registered:
+        # Already on the search path; the presence check above still ran, so a strict
+        # caller has been given a real answer rather than a memoised one.
+        return []
+
+    added: list[Path] = []
+    for bin_dir in present:
+        os.add_dll_directory(str(bin_dir))
+        os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        added.append(bin_dir)
 
     _registered = True
     return added
 
 
-register_cuda_dlls()
+if sys.platform == "win32":
+    register_cuda_dlls()

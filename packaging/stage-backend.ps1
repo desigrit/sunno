@@ -97,13 +97,15 @@ if (-not $SkipCuda) {
 # Backend source and the speaker model. Explicit include-list, not a directory copy, so a
 # stray 100 MB benchmark model can't silently inflate the package.
 Write-Host "Staging backend source"
-Copy-Item (Join-Path $repo "server") (Join-Path $Destination "server") -Recurse -Force
+foreach ($dir in @("server", "ui")) {
+  $dst = Join-Path $Destination $dir
+  # Copy-Item -Recurse nests the source inside an existing destination on a second run
+  # (server\server), so clear it first.
+  if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
+  Copy-Item (Join-Path $repo $dir) $dst -Recurse -Force
+}
 Get-ChildItem (Join-Path $Destination "server") -Recurse -Filter "__pycache__" -Directory |
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-
-# The web UI is served over HTTP for the phone/handheld path; server/app.py serves it
-# unconditionally, so omitting it would 404 that route.
-Copy-Item (Join-Path $repo "ui") (Join-Path $Destination "ui") -Recurse -Force
 
 $models = Join-Path $Destination "models"
 New-Item -ItemType Directory -Path $models -Force | Out-Null

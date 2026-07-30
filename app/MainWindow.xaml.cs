@@ -41,6 +41,9 @@ public sealed partial class MainWindow : Window
     private bool _running = true;
     private bool _suppressDeviceEvent;
     private bool _backendLoading = true;
+    /// <summary>Set while a microphone failure is unresolved, so transient status updates
+    /// cannot erase the explanation before the user has read it.</summary>
+    private bool _micProblem;
 
     /// <summary>Caption text size; the item templates read this.</summary>
     public static double CaptionSize { get; private set; } = 26;
@@ -198,7 +201,22 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        MicInfoBar.IsOpen = false;
+        // Only a successful capture clears the banner. The backend pauses itself after a
+        // microphone failure and immediately reports "stopped", so clearing on every status
+        // would erase the explanation milliseconds after showing it — leaving a message that
+        // reads as if the user had stopped capture themselves.
+        if (st.State == "listening")
+        {
+            _micProblem = false;
+            MicInfoBar.IsOpen = false;
+        }
+
+        if (_micProblem && st.State == "stopped")
+        {
+            // Keep the real reason on screen rather than the generic paused text.
+            return;
+        }
+
         StatusText.Text = st.State switch
         {
             "loading" => $"Loading {st.Model}…",
@@ -215,6 +233,8 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void ShowActionableError(StatusEvent st)
     {
+        _micProblem = st.Code is "mic_denied" or "mic_unavailable";
+
         switch (st.Code)
         {
             case "mic_denied":

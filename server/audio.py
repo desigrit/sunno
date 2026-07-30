@@ -73,7 +73,6 @@ _ACCESS_DENIED_MARKERS = (
     "0x80070005",
     "access is denied",
     "accessdenied",
-    "audclnt_e_device_in_use",
 )
 
 
@@ -90,11 +89,20 @@ class MicrophoneOpenError(RuntimeError):
         self.failures = failures
         blob = " ".join(failures).lower()
         self.access_denied = any(m in blob for m in _ACCESS_DENIED_MARKERS)
+        # Deliberately NOT treated as a privacy denial: the device being held by another app
+        # (Teams, Zoom, a game) is a routine daily occurrence, and sending the user to a
+        # privacy toggle that is already switched on strands them.
+        self.device_busy = "device_in_use" in blob
 
         if self.access_denied:
             message = (
                 "Microphone access is blocked for this app. Open Settings > Privacy & "
                 "security > Microphone and allow access."
+            )
+        elif self.device_busy:
+            message = (
+                f"The microphone is in use by another app. Close whatever is using it, "
+                f"or choose a different microphone."
             )
         else:
             message = (

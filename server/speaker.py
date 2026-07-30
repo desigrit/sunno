@@ -34,7 +34,7 @@ import numpy as np
 
 from .config import SAMPLE_RATE
 
-DEFAULT_MODEL = "wespeaker_en_voxceleb_CAM++_LM.onnx"
+DEFAULT_MODEL = "speaker-embedding-campplus-en.onnx"
 
 
 def _l2_normalise(vec: np.ndarray) -> np.ndarray:
