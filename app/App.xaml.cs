@@ -114,6 +114,7 @@ public partial class App : Application
             finally { done.Set(); }
         });
         done.Wait(TimeSpan.FromSeconds(5));
+        Trace("RedirectAndExit -> Environment.Exit");
         Environment.Exit(0);
     }
 

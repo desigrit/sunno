@@ -16,3 +16,8 @@ sherpa-onnx
 # re-derive the allow-list from a complete set if a future CTranslate2 starts needing it.
 nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*
+
+# WASAPI loopback capture, so system audio (calls, video) can be transcribed too.
+# sounddevice/PortAudio has no loopback flag; this PyAudio fork exposes output
+# endpoints as input devices. ~0.09 MB, used only by server/loopback.py.
+pyaudiowpatch

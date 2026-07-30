@@ -7,9 +7,10 @@ namespace Sunno.Models;
 /// <summary>
 /// A selectable speech model in the left pane.
 ///
-/// The secondary line does triple duty depending on state: the download size when the model
-/// isn't on disk, live progress while it downloads, and how it compares once it's resident.
-/// Keeping that in one property avoids three overlapping elements fighting for the same 240px.
+/// The row is two columns: name and description on the left, and — only when the model isn't
+/// on disk — its download size and a download glyph on the right. Keeping the size out of the
+/// description line means the description is always readable, and an un-downloaded model is
+/// recognisable at a glance without reading anything.
 /// </summary>
 public sealed class ModelRow : INotifyPropertyChanged
 {
@@ -18,7 +19,7 @@ public sealed class ModelRow : INotifyPropertyChanged
     private bool _isIndeterminate;
     private double _progress;
     private bool _available;
-    private string _status = string.Empty;
+    private bool _inUse;
 
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
@@ -33,21 +34,7 @@ public sealed class ModelRow : INotifyPropertyChanged
         {
             if (!Set(ref _available, value)) return;
             Notify(nameof(Tooltip));
-            Refresh();
-        }
-    }
-
-    /// <summary>
-    /// Full text for hover, because the pane is 240px and both the name and the description
-    /// routinely trim. Includes the download size, which the caption line only shows while the
-    /// model is absent and hides entirely once a download starts.
-    /// </summary>
-    public string Tooltip
-    {
-        get
-        {
-            var text = string.IsNullOrEmpty(Detail) ? Name : $"{Name}\n{Detail}";
-            return _available ? text : $"{text}\n{FormatSize(ApproxMb)} download";
+            Notify(nameof(DownloadHintVisibility));
         }
     }
 
@@ -62,8 +49,7 @@ public sealed class ModelRow : INotifyPropertyChanged
     ///
     /// The IsChecked binding is one-way, so clicking a radio leaves the control checked while
     /// this model still reads false. Assigning false back is then a no-op and raises nothing,
-    /// which would leave a stale radio contradicting the model that actually loaded. Re-raising
-    /// the change regardless is what pulls the control back into line.
+    /// which would leave a stale radio contradicting the model that actually loaded.
     /// </summary>
     public void SetSelected(bool value)
     {
@@ -79,8 +65,19 @@ public sealed class ModelRow : INotifyPropertyChanged
         {
             if (!Set(ref _isBusy, value)) return;
             Notify(nameof(BusyVisibility));
-            Notify(nameof(StatusVisibility));
+            Notify(nameof(SecondaryVisibility));
+            Notify(nameof(DownloadHintVisibility));
             Notify(nameof(IsEnabled));
+        }
+    }
+
+    /// <summary>Currently loaded in the engine.</summary>
+    public bool InUse
+    {
+        get => _inUse;
+        set
+        {
+            if (Set(ref _inUse, value)) Notify(nameof(SecondaryText));
         }
     }
 
@@ -97,26 +94,39 @@ public sealed class ModelRow : INotifyPropertyChanged
         set => Set(ref _progress, value);
     }
 
-    public string Status
-    {
-        get => _status;
-        set => Set(ref _status, value);
-    }
+    /// <summary>The description, or "In use" for the loaded model.</summary>
+    public string SecondaryText => _inUse ? "In use" : Detail;
 
-    /// <summary>The bar replaces the caption rather than crowding in beside it.</summary>
+    /// <summary>e.g. "1.5 GB" — shown on the right only when a download is needed.</summary>
+    public string SizeLabel => FormatSize(ApproxMb);
+
     public Visibility BusyVisibility => _isBusy ? Visibility.Visible : Visibility.Collapsed;
-    public Visibility StatusVisibility => _isBusy ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility SecondaryVisibility => _isBusy ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>Size and download glyph: only when it isn't here and isn't already coming.</summary>
+    public Visibility DownloadHintVisibility =>
+        !_available && !_isBusy ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>A model mid-download can't be chosen again without confusing the backend.</summary>
     public bool IsEnabled => !_isBusy;
 
-    /// <summary>Restore the resting caption after a download finishes or is abandoned.</summary>
+    /// <summary>Full text for hover, since the pane is 240px and lines trim.</summary>
+    public string Tooltip
+    {
+        get
+        {
+            var text = string.IsNullOrEmpty(Detail) ? Name : $"{Name}\n{Detail}";
+            return _available ? text : $"{text}\n{SizeLabel} download";
+        }
+    }
+
+    /// <summary>Return to the resting state after a download finishes or is abandoned.</summary>
     public void Refresh()
     {
         IsBusy = false;
         IsIndeterminate = false;
         Progress = 0;
-        Status = _available ? Detail : $"{FormatSize(ApproxMb)} download";
+        Notify(nameof(SecondaryText));
     }
 
     /// <summary>Fetching bytes: a bar that fills, with no number to watch.</summary>

@@ -20,7 +20,7 @@ using Windows.Security.Authorization.AppCapabilityAccess;
 namespace Sunno;
 
 /// <summary>A microphone the backend can capture from.</summary>
-public sealed record AudioDevice(int Index, string Name, string HostApi);
+public sealed record AudioDevice(int Index, string Name, string HostApi, bool Loopback = false);
 
 /// <summary>A model shown in first-run setup.</summary>
 public sealed record ModelChoice(string Id, string Name, string Detail, int ApproxMb, bool Available)
@@ -123,6 +123,7 @@ public sealed partial class MainWindow : Window
 
         Closed += (_, _) =>
         {
+            App.Trace("MainWindow Closed -> exiting");
             MicrophoneAccess.Changed -= OnMicAccessChanged;
             _ = _client.DisposeAsync();
             _backend.Dispose();
@@ -146,7 +147,8 @@ public sealed partial class MainWindow : Window
             device: _settings.DeviceIndex?.ToString(),
             model: _settings.Model,
             vocabulary: _settings.Vocabulary,
-            startStopped: _startedPaused);
+            startStopped: _startedPaused,
+            loopbackDevice: _settings.LoopbackDeviceIndex);
         if (!string.IsNullOrEmpty(error)) StatusText.Text = error;
         App.Trace($"backend.Start -> {(string.IsNullOrEmpty(error) ? "ok" : error)}");
         _client.Start();
@@ -748,7 +750,6 @@ public sealed partial class MainWindow : Window
         {
             row.Available = true;
             row.Refresh();
-            row.Status = "In use";
         }
         SelectModelRow(finished);
         foreach (var other in Models.Where(m => m.Id != finished)) other.Refresh();
@@ -880,9 +881,9 @@ public sealed partial class MainWindow : Window
                     ApproxMb = o.ApproxMb,
                     Available = o.Available,
                     IsSelected = o.Id == current,
+                    InUse = o.Id == current,
                 };
                 row.Refresh();
-                if (row.IsSelected) row.Status = "In use";
                 Models.Add(row);
             }
         }
@@ -952,7 +953,8 @@ public sealed partial class MainWindow : Window
             device: _settings.DeviceIndex?.ToString(),
             model: id,
             vocabulary: _settings.Vocabulary,
-            startStopped: _startedPaused);
+            startStopped: _startedPaused,
+            loopbackDevice: _settings.LoopbackDeviceIndex);
 
         if (!string.IsNullOrEmpty(error))
         {
@@ -1195,7 +1197,11 @@ public sealed partial class MainWindow : Window
         _suppressModelEvent = true;
         try
         {
-            foreach (var m in Models) m.SetSelected(m.Id == id);
+            foreach (var m in Models)
+            {
+                m.SetSelected(m.Id == id);
+                m.InUse = m.Id == id;
+            }
         }
         finally
         {
@@ -1247,29 +1253,35 @@ public sealed partial class MainWindow : Window
             var index = d.TryGetProperty("index", out var i) ? i.GetInt32() : -1;
             var name = d.TryGetProperty("name", out var n) ? n.GetString()?.Trim() : null;
             var api = d.TryGetProperty("hostapi", out var h) ? h.GetString() : null;
+            var loopback = d.TryGetProperty("loopback", out var l) && l.ValueKind == JsonValueKind.True;
             if (index >= 0 && !string.IsNullOrEmpty(name))
-                result.Add(new AudioDevice(index, name!, api ?? string.Empty));
+                result.Add(new AudioDevice(index, name!, api ?? string.Empty, loopback));
         }
         return result;
     }
 
     private void PopulateDevices(List<AudioDevice> devices)
     {
+        App.Trace($"PopulateDevices: {devices.Count}");
         _suppressDeviceEvent = true;
         try
         {
             DevicePicker.Items.Clear();
+
             foreach (var d in devices)
             {
-                DevicePicker.Items.Add(new ComboBoxItem
+                // Microphones and system-audio sources do very different things, so they are
+                // distinguished by a label on the entry itself. A disabled ComboBoxItem was
+                // tried as a group header first and tore the window down on render.
+                var item = new ComboBoxItem
                 {
-                    Content = d.Name,
-                    Tag = d.Index,
-                    // The same physical mic shows up under several host APIs; the tooltip
-                    // tells them apart without cluttering the closed state.
-                    });
-                ToolTipService.SetToolTip(
-                    (ComboBoxItem)DevicePicker.Items[^1], $"{d.Name} — {d.HostApi}");
+                    Content = d.Loopback ? $"{d.Name}  ·  system audio" : d.Name,
+                    Tag = d,
+                };
+                DevicePicker.Items.Add(item);
+                ToolTipService.SetToolTip(item, d.Loopback
+                    ? $"Caption whatever is played through {d.Name} — calls, video, music"
+                    : $"{d.Name} — {d.HostApi}");
             }
         }
         finally
@@ -1281,17 +1293,21 @@ public sealed partial class MainWindow : Window
     private void OnDeviceChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressDeviceEvent) return;
-        if (DevicePicker.SelectedItem is not ComboBoxItem { Tag: int index }) return;
+        if (DevicePicker.SelectedItem is not ComboBoxItem { Tag: AudioDevice device }) return;
 
-        _settings.DeviceIndex = index;
+        _settings.DeviceIndex = device.Loopback ? null : device.Index;
+        _settings.LoopbackDeviceIndex = device.Loopback ? device.Index : null;
         _settings.Save();
 
         // Switching capture device means restarting the backend; the model reload is the slow
         // part, so say so rather than appear hung.
-        StatusText.Text = "Switching microphone…";
+        StatusText.Text = device.Loopback ? "Switching to system audio…" : "Switching microphone…";
         _backend.Dispose();
-        var error = _backend.Start(device: index.ToString(), model: _settings.Model,
-                                   vocabulary: _settings.Vocabulary);
+        var error = _backend.Start(
+            device: device.Loopback ? null : device.Index.ToString(),
+            model: _settings.Model,
+            vocabulary: _settings.Vocabulary,
+            loopbackDevice: device.Loopback ? device.Index : null);
         if (!string.IsNullOrEmpty(error)) StatusText.Text = error;
     }
 

@@ -161,26 +161,51 @@
                                                      Tag="{x:Bind Id}"
                                                      ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}"
                                                      AutomationProperties.Name="{x:Bind Name}">
-                                            <StackPanel Spacing="0" Padding="0,1,0,1">
-                                                <TextBlock Text="{x:Bind Name}"
-                                                           FontSize="12.5" LineHeight="16"
-                                                           Style="{StaticResource BodyTextBlockStyle}"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           TextWrapping="NoWrap" />
-                                                <TextBlock Text="{x:Bind Status, Mode=OneWay}"
-                                                           Visibility="{x:Bind StatusVisibility, Mode=OneWay}"
-                                                           FontSize="11" LineHeight="14"
-                                                           Style="{StaticResource CaptionTextBlockStyle}"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           TextWrapping="NoWrap"
-                                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                                                <ProgressBar Height="2" Margin="0,5,4,5"
-                                                             Visibility="{x:Bind BusyVisibility, Mode=OneWay}"
-                                                             IsIndeterminate="{x:Bind IsIndeterminate, Mode=OneWay}"
-                                                             Value="{x:Bind Progress, Mode=OneWay}"
-                                                             Minimum="0" Maximum="100"
-                                                             HorizontalAlignment="Stretch" />
-                                            </StackPanel>
+                                            <!-- Name and description on the left; download size
+                                                 and glyph on the right, only when the model is
+                                                 not on disk. Keeping size out of the description
+                                                 line leaves the description readable and makes a
+                                                 missing model recognisable without reading. -->
+                                            <Grid ColumnSpacing="6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <StackPanel Grid.Column="0" Spacing="0" Padding="0,1,0,1">
+                                                    <TextBlock Text="{x:Bind Name}"
+                                                               FontSize="12.5" LineHeight="16"
+                                                               Style="{StaticResource BodyTextBlockStyle}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               TextWrapping="NoWrap" />
+                                                    <TextBlock Text="{x:Bind SecondaryText, Mode=OneWay}"
+                                                               Visibility="{x:Bind SecondaryVisibility, Mode=OneWay}"
+                                                               FontSize="11" LineHeight="14"
+                                                               Style="{StaticResource CaptionTextBlockStyle}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               TextWrapping="NoWrap"
+                                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                                    <ProgressBar Height="2" Margin="0,5,4,5"
+                                                                 Visibility="{x:Bind BusyVisibility, Mode=OneWay}"
+                                                                 IsIndeterminate="{x:Bind IsIndeterminate, Mode=OneWay}"
+                                                                 Value="{x:Bind Progress, Mode=OneWay}"
+                                                                 Minimum="0" Maximum="100"
+                                                                 HorizontalAlignment="Stretch" />
+                                                </StackPanel>
+
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                            Spacing="4" VerticalAlignment="Center"
+                                                            Visibility="{x:Bind DownloadHintVisibility, Mode=OneWay}">
+                                                    <TextBlock Text="{x:Bind SizeLabel}"
+                                                               FontSize="11" TextWrapping="NoWrap"
+                                                               VerticalAlignment="Center"
+                                                               Style="{StaticResource CaptionTextBlockStyle}"
+                                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                                    <FontIcon Glyph="&#xE896;" FontSize="11"
+                                                              VerticalAlignment="Center"
+                                                              Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                                </StackPanel>
+                                            </Grid>
                                         </RadioButton>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
@@ -222,18 +247,20 @@
                                                        Foreground="{x:Bind local:MainWindow.ClarityBrush(Clarity), Mode=OneWay}" />
                                         </Border>
                                     </StackPanel>
-                                    <!-- Selectable so a line can be copied out, with the words
-                                         built as inlines in code so low-confidence ones can be
-                                         marked individually. -->
-                                    <TextBlock local:WordInlines.Source="{x:Bind Words, Mode=OneWay}"
-                                               Text="{x:Bind Text, Mode=OneWay}"
-                                               IsTextSelectionEnabled="True"
-                                               TextWrapping="Wrap"
-                                               FontSize="{x:Bind local:MainWindow.CaptionSize, Mode=OneWay}"
-                                               Opacity="{x:Bind local:MainWindow.LineOpacity(IsFinal, IsSelf), Mode=OneWay}"
-                                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                                               RightTapped="OnTranscriptRightTapped">
-                                        <TextBlock.ContextFlyout>
+                                    <!-- RichTextBlock, not TextBlock: inlines aren't UIElements
+                                         so they can't carry their own tooltip, and only
+                                         RichTextBlock exposes GetPositionFromPoint, which is
+                                         what makes per-word confidence on hover possible.
+                                         Content is built in code so each word can be styled
+                                         and located individually. -->
+                                    <RichTextBlock local:WordInlines.Line="{x:Bind}"
+                                                   IsTextSelectionEnabled="True"
+                                                   TextWrapping="Wrap"
+                                                   FontSize="{x:Bind local:MainWindow.CaptionSize, Mode=OneWay}"
+                                                   Opacity="{x:Bind local:MainWindow.LineOpacity(IsFinal, IsSelf), Mode=OneWay}"
+                                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                                   RightTapped="OnTranscriptRightTapped">
+                                        <RichTextBlock.ContextFlyout>
                                             <MenuFlyout>
                                                 <MenuFlyoutItem Text="Copy" Click="OnCopyLine">
                                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
@@ -242,8 +269,8 @@
                                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xF0E3;" /></MenuFlyoutItem.Icon>
                                                 </MenuFlyoutItem>
                                             </MenuFlyout>
-                                        </TextBlock.ContextFlyout>
-                                    </TextBlock>
+                                        </RichTextBlock.ContextFlyout>
+                                    </RichTextBlock>
                                 </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

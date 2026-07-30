@@ -3,109 +3,193 @@ using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Sunno.Models;
 
 namespace Sunno;
 
 /// <summary>
-/// Renders a caption as individual word runs so uncertain words can be marked.
+/// Renders a caption as individual word runs, marks uncertain ones, and reports each word's
+/// confidence on hover.
 ///
-/// This has to be an attached property rather than a binding: styling individual words means
-/// building <see cref="Inline"/>s, and XAML has no way to generate those from a collection.
-///
-/// The marking is deliberately quiet — a thin underline, no colour change. Someone reading
-/// these to follow a conversation should be able to ignore the marks entirely and still read
-/// normally; the signal is there for when a word looks wrong and they want to know whether
-/// the model was unsure of it too.
+/// Uses <see cref="RichTextBlock"/> rather than TextBlock for one reason: inlines are not
+/// UIElements, so they receive no pointer input and cannot carry their own tooltip.
+/// RichTextBlock exposes <c>GetPositionFromPoint</c>, which lets the pointer position be
+/// mapped back to an exact word. Offsets are captured from each Run's own ContentStart at
+/// build time rather than derived from character counts, so the mapping stays exact regardless
+/// of how the text is composed.
 /// </summary>
 public static class WordInlines
 {
-    public static readonly DependencyProperty SourceProperty =
+    public static readonly DependencyProperty LineProperty =
         DependencyProperty.RegisterAttached(
-            "Source",
-            typeof(object),
-            typeof(WordInlines),
-            new PropertyMetadata(null, OnSourceChanged));
+            "Line", typeof(object), typeof(WordInlines),
+            new PropertyMetadata(null, OnLineChanged));
 
-    public static void SetSource(DependencyObject element, object? value) =>
-        element.SetValue(SourceProperty, value);
+    public static void SetLine(DependencyObject element, object? value) =>
+        element.SetValue(LineProperty, value);
 
-    public static object? GetSource(DependencyObject element) =>
-        element.GetValue(SourceProperty);
+    public static object? GetLine(DependencyObject element) => element.GetValue(LineProperty);
 
-    private static void OnSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    /// <summary>Word ranges for the currently rendered line, in RichTextBlock offset space.</summary>
+    private static readonly DependencyProperty RangesProperty =
+        DependencyProperty.RegisterAttached(
+            "Ranges", typeof(object), typeof(WordInlines), new PropertyMetadata(null));
+
+    private sealed record WordRange(int Start, int End, string Text, double Confidence);
+
+    private static void OnLineChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-        if (d is not TextBlock block) return;
+        if (d is not RichTextBlock block) return;
 
-        // No word data (a provisional line, or a model that returned none): leave the plain
-        // Text binding alone rather than blanking the caption.
-        if (e.NewValue is not IReadOnlyList<CaptionWord> words || words.Count == 0) return;
+        if (e.OldValue is CaptionLine previous)
+            previous.PropertyChanged -= OnLinePropertyChanged;
 
+        if (e.NewValue is not CaptionLine line) return;
+
+        block.SetValue(RangesProperty, null);
+        line.PropertyChanged += OnLinePropertyChanged;
+        _owners[line] = block;
+
+        block.PointerMoved -= OnPointerMoved;
+        block.PointerMoved += OnPointerMoved;
+        block.PointerExited -= OnPointerExited;
+        block.PointerExited += OnPointerExited;
+
+        Render(block, line);
+    }
+
+    // A caption line outlives its container only briefly, and the transcript is capped, so a
+    // plain map is adequate and avoids the ceremony of weak references.
+    private static readonly Dictionary<CaptionLine, RichTextBlock> _owners = new();
+
+    private static void OnLinePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (sender is not CaptionLine line) return;
+        if (e.PropertyName is not (nameof(CaptionLine.Text) or nameof(CaptionLine.Words))) return;
+        if (_owners.TryGetValue(line, out var block)) Render(block, line);
+    }
+
+    private static void Render(RichTextBlock block, CaptionLine line)
+    {
         try
         {
-            block.Inlines.Clear();
+            var paragraph = new Paragraph();
+            block.Blocks.Clear();
+            block.Blocks.Add(paragraph);
+
+            var words = line.Words;
+            if (words is null || words.Count == 0)
+            {
+                // Provisional text, or a model that returned no word data.
+                paragraph.Inlines.Add(new Run { Text = line.Text });
+                block.SetValue(RangesProperty, null);
+                return;
+            }
+
+            var ranges = new List<WordRange>(words.Count);
             foreach (var word in words)
             {
-                if (!word.IsUncertain)
-                {
-                    block.Inlines.Add(new Run { Text = word.Text });
-                    continue;
-                }
-
                 // faster-whisper prefixes each word with the space that preceded it, so
-                // styling word.Text wholesale underlines the gap before the word too. Split
-                // the padding out and style only the word itself.
+                // styling the token would underline the gap before the word too.
                 var text = word.Text;
                 var start = 0;
                 while (start < text.Length && char.IsWhiteSpace(text[start])) start++;
                 var end = text.Length;
                 while (end > start && char.IsWhiteSpace(text[end - 1])) end--;
 
-                if (start > 0)
-                    block.Inlines.Add(new Run { Text = text[..start] });
+                if (start > 0) paragraph.Inlines.Add(new Run { Text = text[..start] });
 
                 var core = text[start..end];
                 if (core.Length > 0)
                 {
-                    // Italic and underlined in grey: three quiet signals rather than one loud
-                    // one, so an uncertain word is noticeable when looked for and ignorable
-                    // when reading. The underline takes the Foreground colour — there is no
-                    // separate decoration brush — so the grey applies to both.
-                    var span = new Span
+                    Inline inline;
+                    var run = new Run { Text = core };
+                    if (word.IsUncertain)
                     {
-                        TextDecorations = Windows.UI.Text.TextDecorations.Underline,
-                        FontStyle = Windows.UI.Text.FontStyle.Italic,
-                        Foreground = UncertainBrush(),
-                    };
-                    span.Inlines.Add(new Run { Text = core });
-                    block.Inlines.Add(span);
+                        // Grey italic underline: three quiet signals rather than one loud one,
+                        // noticeable when looked for and ignorable when reading. The underline
+                        // takes the Foreground colour; there is no separate decoration brush.
+                        var span = new Span
+                        {
+                            TextDecorations = Windows.UI.Text.TextDecorations.Underline,
+                            FontStyle = Windows.UI.Text.FontStyle.Italic,
+                            Foreground = UncertainBrush(),
+                        };
+                        span.Inlines.Add(run);
+                        inline = span;
+                    }
+                    else
+                    {
+                        inline = run;
+                    }
+                    paragraph.Inlines.Add(inline);
+
+                    // Read the offsets back from the element itself: derived character counts
+                    // would drift from RichTextBlock's own offset space.
+                    ranges.Add(new WordRange(
+                        inline.ContentStart.Offset, inline.ContentEnd.Offset,
+                        core, word.Confidence));
                 }
 
-                if (end < text.Length)
-                    block.Inlines.Add(new Run { Text = text[end..] });
+                if (end < text.Length) paragraph.Inlines.Add(new Run { Text = text[end..] });
             }
 
-            var uncertain = words.Where(w => w.IsUncertain).ToList();
-            ToolTipService.SetToolTip(block, uncertain.Count == 0
-                ? null
-                : "Less certain: " + string.Join(", ",
-                    uncertain.Select(w => $"\u201c{w.Text.Trim()}\u201d {w.Confidence:0}%")));
+            block.SetValue(RangesProperty, ranges);
         }
         catch
         {
-            // A reading nicety must never take down an app someone is relying on to follow a
+            // A reading nicety must never take down an app someone relies on to follow a
             // conversation. Falling back to plain text loses only the marking.
             try
             {
-                block.Inlines.Clear();
-                block.Text = string.Concat(words.Select(x => x.Text));
+                block.Blocks.Clear();
+                var p = new Paragraph();
+                p.Inlines.Add(new Run { Text = line.Text });
+                block.Blocks.Add(p);
+                block.SetValue(RangesProperty, null);
             }
-            catch
-            {
-                // Nothing further to do; the caption stays as whatever it was.
-            }
+            catch { /* leave whatever is on screen */ }
         }
+    }
+
+    private static void OnPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not RichTextBlock block) return;
+        if (block.GetValue(RangesProperty) is not List<WordRange> ranges || ranges.Count == 0) return;
+
+        try
+        {
+            var point = e.GetCurrentPoint(block).Position;
+            var pointer = block.GetPositionFromPoint(point);
+            var offset = pointer.Offset;
+
+            var hit = ranges.FirstOrDefault(r => offset >= r.Start && offset <= r.End);
+            if (hit is null)
+            {
+                ToolTipService.SetToolTip(block, null);
+                return;
+            }
+
+            // Rebuilding the tooltip on every move would flicker; only swap when the word does.
+            if (ToolTipService.GetToolTip(block) is ToolTip existing &&
+                existing.Content as string == Describe(hit)) return;
+
+            ToolTipService.SetToolTip(block, new ToolTip { Content = Describe(hit) });
+        }
+        catch
+        {
+            // Hit testing is best-effort; a failed probe must not disturb the caption.
+        }
+    }
+
+    private static string Describe(WordRange word) =>
+        $"\u201c{word.Text}\u201d — {word.Confidence:0}% confident";
+
+    private static void OnPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is RichTextBlock block) ToolTipService.SetToolTip(block, null);
     }
 
     private static Brush? _uncertainBrush;

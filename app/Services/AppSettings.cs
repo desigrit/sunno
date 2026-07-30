@@ -13,6 +13,8 @@ public sealed class AppSettings
 {
     public string Model { get; set; } = "large-v3";
     public int? DeviceIndex { get; set; }
+    /// <summary>A WASAPI output endpoint to caption instead of a microphone.</summary>
+    public int? LoopbackDeviceIndex { get; set; }
     public string? Vocabulary { get; set; }
     public double CaptionFontSize { get; set; } = 26;
     public bool AlwaysOnTop { get; set; } = true;

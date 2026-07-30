@@ -95,7 +95,7 @@ public sealed class BackendHost : IDisposable
     }
 
     public string Start(string? device = null, string model = "large-v3", string? vocabulary = null,
-                        bool startStopped = false)
+                        bool startStopped = false, int? loopbackDevice = null)
     {
         if (IsRunning) return "already running";
 
@@ -107,6 +107,13 @@ public sealed class BackendHost : IDisposable
         var args = new List<string> { "-m", "server.app", "--model", model };
         if (!string.IsNullOrWhiteSpace(device)) { args.Add("--device"); args.Add(device); }
         if (!string.IsNullOrWhiteSpace(vocabulary)) { args.Add("--vocabulary"); args.Add(vocabulary); }
+        // Capturing an output endpoint rather than a microphone, so calls and video get
+        // captioned. Mutually exclusive with --device on the backend side.
+        if (loopbackDevice is int loop)
+        {
+            args.Add("--loopback-device");
+            args.Add(loop.ToString());
+        }
         // Load the model but leave the microphone alone. Used while consent is still being
         // resolved, so the ~33 s load overlaps the dialog instead of following it.
         if (startStopped) args.Add("--start-stopped");
@@ -166,7 +173,8 @@ public sealed class BackendHost : IDisposable
     /// the transcript lives in the UI, so only the ~30 s load is actually lost. Crash reporting
     /// is suppressed across the swap so a deliberate stop isn't announced as a failure.
     /// </summary>
-    public string Restart(string? device, string model, string? vocabulary, bool startStopped = false)
+    public string Restart(string? device, string model, string? vocabulary,
+                          bool startStopped = false, int? loopbackDevice = null)
     {
         _stopping = true;
         try
@@ -190,7 +198,7 @@ public sealed class BackendHost : IDisposable
         {
             _stopping = false;
         }
-        return Start(device, model, vocabulary, startStopped);
+        return Start(device, model, vocabulary, startStopped, loopbackDevice);
     }
 
     private void Record(string? line)

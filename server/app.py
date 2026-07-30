@@ -53,12 +53,26 @@ class _UiRequestHandler(http.server.SimpleHTTPRequestHandler):
 
             try:
                 devices = list_input_devices()
+                for d in devices:
+                    d["loopback"] = False
             except Exception as exc:
                 self._json({"error": str(exc), "devices": []})
                 return
             # WASAPI is the modern Windows path; surface it first and hide duplicates
             # of the same device exposed through legacy host APIs.
             devices.sort(key=lambda d: (d["hostapi"] != "Windows WASAPI", d["name"]))
+
+            # Output endpoints, so what is being played can be captioned too. Appended after
+            # the microphones and flagged, so the UI can group them rather than mixing two
+            # very different things in one flat list.
+            try:
+                from .loopback import list_loopback_devices
+
+                devices.extend(list_loopback_devices())
+            except Exception:
+                # Loopback is an enhancement; its absence must not break the picker.
+                pass
+
             self._json({"devices": devices})
             return
         super().do_GET()
@@ -86,6 +100,11 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     parser = argparse.ArgumentParser(description="Offline live captioning server")
     parser.add_argument("--list-devices", action="store_true", help="list input devices and exit")
     parser.add_argument("--device", default=None, help="input device index or name substring")
+    parser.add_argument(
+        "--loopback-device", type=int, default=None,
+        help="WASAPI output endpoint index to capture instead of the microphone, so system "
+             "audio (calls, video) is transcribed",
+    )
     parser.add_argument("--wav", default=None, help="replay a WAV file instead of the mic")
     parser.add_argument(
         "--fast", action="store_true", help="with --wav, replay as fast as possible"
@@ -125,6 +144,7 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
         http_port=args.http_port,
         ws_port=args.ws_port,
         input_device=device,
+        loopback_device=args.loopback_device,
         end_silence_ms=args.end_silence_ms,
         partial_interval_ms=args.partial_interval_ms,
         vocabulary=tuple(v.strip() for v in args.vocabulary.split(",") if v.strip()),
@@ -340,6 +360,13 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         def make_source():
             if args.wav:
                 return WavFileStream(args.wav, realtime=not args.fast)
+            # A loopback endpoint captures what is being played rather than what is being
+            # said. Selected by index like any other device, so the UI needs no separate
+            # control — it just marks which entries are outputs.
+            if settings.loopback_device is not None:
+                from .loopback import LoopbackStream
+
+                return LoopbackStream(settings.loopback_device)
             return MicrophoneStream(settings.input_device)
 
         def pump() -> None:
