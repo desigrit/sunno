@@ -24,6 +24,30 @@ public sealed class BackendHost : IDisposable
     private static string InstallRoot => AppContext.BaseDirectory;
 
     /// <summary>
+    /// True when running with package identity. GetCurrentPackageFullName returns
+    /// APPMODEL_ERROR_NO_PACKAGE (15700) for an unpackaged process, which is the documented
+    /// way to ask — more reliable than inspecting the install path.
+    /// </summary>
+    public static bool IsPackaged()
+    {
+        try
+        {
+            int length = 0;
+            var rc = GetCurrentPackageFullName(ref length, null);
+            return rc != 15700;   // APPMODEL_ERROR_NO_PACKAGE
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet =
+        System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int GetCurrentPackageFullName(ref int packageFullNameLength,
+                                                        System.Text.StringBuilder? packageFullName);
+
+    /// <summary>
     /// Locates the Python interpreter: the bundled runtime when packaged, otherwise the
     /// developer venv found by walking up from the build output.
     /// </summary>
@@ -84,6 +108,12 @@ public sealed class BackendHost : IDisposable
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.Environment["PYTHONUTF8"] = "1";
         psi.Environment["PYTHONUNBUFFERED"] = "1";
+        // Tell the backend explicitly whether it is running from a package, rather than
+        // leaving paths.is_packaged() to infer it from a "WindowsApps" path substring.
+        if (IsPackaged())
+        {
+            psi.Environment["MSIX_PACKAGE_ROOT"] = InstallRoot;
+        }
 
         _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         _process.OutputDataReceived += (_, e) => Record(e.Data);

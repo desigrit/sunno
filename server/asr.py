@@ -137,8 +137,18 @@ class WhisperEngine:
         return result
 
     def warmup(self) -> float:
-        """Run one throwaway inference so the first real utterance isn't slow."""
+        """Exercise the real decode path once, so first-use cost lands at startup.
+
+        Deliberately uses non-silent audio through ``final()``: that is the beam-search plus
+        temperature-fallback path the user's first sentence will take. Warming only the
+        greedy path on zeros would leave any missing-kernel or lazy-load cost to surface
+        mid-conversation, behind no loading indicator.
+        """
         started = time.perf_counter()
-        self._run(np.zeros(SAMPLE_RATE, dtype=np.float32), beam_size=1, is_final=False)
+        # Low-amplitude broadband noise: enough to drive the encoder and decoder without
+        # producing text worth keeping.
+        rng = np.random.default_rng(0)
+        audio = (rng.standard_normal(SAMPLE_RATE * 2) * 0.01).astype(np.float32)
+        self._run(audio, self.settings.final_beam_size, is_final=True)
         self.clear_context()
         return (time.perf_counter() - started) * 1000.0
