@@ -50,6 +50,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Text="Speakers" Margin="16,0,16,8"
@@ -87,6 +88,54 @@
                                TextWrapping="Wrap" VerticalAlignment="Top"
                                Style="{StaticResource CaptionTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+
+                    <!-- Model picker. Deliberately not a card: it sits in the same pane as
+                         Speakers and reads as another section of it, not a control panel. -->
+                    <StackPanel Grid.Row="2" Margin="0,8,0,4">
+                        <Border Height="1" Margin="16,0,16,10"
+                                Background="{ThemeResource CardStrokeColorDefaultBrush}" />
+
+                        <TextBlock Text="Speech model" Margin="16,0,16,6"
+                                   Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                        <ItemsControl x:Name="ModelOptions" ItemsSource="{x:Bind Models}"
+                                      Margin="12,0,8,8"
+                                      AutomationProperties.Name="Speech models">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="models:ModelRow">
+                                    <RadioButton GroupName="SpeechModel" Margin="0,1"
+                                                 MinWidth="0" MinHeight="0"
+                                                 HorizontalAlignment="Stretch"
+                                                 HorizontalContentAlignment="Stretch"
+                                                 IsChecked="{x:Bind IsSelected, Mode=OneWay}"
+                                                 IsEnabled="{x:Bind IsEnabled, Mode=OneWay}"
+                                                 Checked="OnModelChecked"
+                                                 Tag="{x:Bind Id}"
+                                                 AutomationProperties.Name="{x:Bind Name}">
+                                        <StackPanel Spacing="0" Padding="0,1,0,1">
+                                            <TextBlock Text="{x:Bind Name}"
+                                                       FontSize="12.5" LineHeight="16"
+                                                       Style="{StaticResource BodyTextBlockStyle}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       TextWrapping="NoWrap" />
+                                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                                <ProgressRing Width="10" Height="10"
+                                                              IsActive="{x:Bind IsBusy, Mode=OneWay}"
+                                                              Visibility="{x:Bind BusyVisibility, Mode=OneWay}" />
+                                                <TextBlock Text="{x:Bind Status, Mode=OneWay}"
+                                                           FontSize="11" LineHeight="14"
+                                                           Style="{StaticResource CaptionTextBlockStyle}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           TextWrapping="NoWrap"
+                                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </RadioButton>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
                 </Grid>
             </Border>
 
@@ -131,13 +180,22 @@
 
                 <StackPanel x:Name="EmptyState" VerticalAlignment="Center"
                             HorizontalAlignment="Center" Spacing="6">
-                    <FontIcon Glyph="&#xE720;" FontSize="26" HorizontalAlignment="Center"
-                              Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                    <TextBlock Text="Listening for speech" HorizontalAlignment="Center"
+                    <!-- The ring and the glyph occupy the same slot: while the engine loads there
+                         is nothing to listen with yet, so promising "Listening" would be a lie. -->
+                    <Grid Height="32" HorizontalAlignment="Center">
+                        <ProgressRing x:Name="LoadingRing" IsActive="True" Width="28" Height="28"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <FontIcon x:Name="EmptyGlyph" Glyph="&#xE720;" FontSize="26"
+                                  Visibility="Collapsed"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    </Grid>
+                    <TextBlock x:Name="EmptyTitle" Text="Starting the speech engine"
+                               HorizontalAlignment="Center"
                                Style="{StaticResource BodyTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock Text="Captions appear here as people talk."
-                               HorizontalAlignment="Center"
+                    <TextBlock x:Name="EmptyDetail" Text="This takes about half a minute the first time."
+                               HorizontalAlignment="Center" TextAlignment="Center"
                                Style="{StaticResource CaptionTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                 </StackPanel>

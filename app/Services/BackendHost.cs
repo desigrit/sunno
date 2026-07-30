@@ -158,6 +158,41 @@ public sealed class BackendHost : IDisposable
         return string.Empty;
     }
 
+    /// <summary>
+    /// Stop the backend and start it again on a different model.
+    ///
+    /// The engine is built once during startup, so switching means reloading it. Restarting the
+    /// child is far less invasive than it sounds: speaker profiles are persisted server-side and
+    /// the transcript lives in the UI, so only the ~30 s load is actually lost. Crash reporting
+    /// is suppressed across the swap so a deliberate stop isn't announced as a failure.
+    /// </summary>
+    public string Restart(string? device, string model, string? vocabulary, bool startStopped = false)
+    {
+        _stopping = true;
+        try
+        {
+            if (_process is not null)
+            {
+                try
+                {
+                    if (!_process.HasExited)
+                    {
+                        _process.Kill(entireProcessTree: true);
+                        _process.WaitForExit(10000);
+                    }
+                }
+                catch { /* already gone */ }
+                _process.Dispose();
+                _process = null;
+            }
+        }
+        finally
+        {
+            _stopping = false;
+        }
+        return Start(device, model, vocabulary, startStopped);
+    }
+
     private void Record(string? line)
     {
         if (string.IsNullOrEmpty(line)) return;

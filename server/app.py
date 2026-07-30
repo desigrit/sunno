@@ -184,6 +184,19 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                 elif cmd == "download_model":
                     requested = str(msg.get("model") or settings.model_size)
                     loop.create_task(ensure_model(requested))
+                elif cmd == "list_models":
+                    # The first-run gate only advertises the catalogue when a model is missing.
+                    # The switcher needs it whenever asked, including once one is already loaded.
+                    async def send_catalog() -> None:
+                        from . import models as model_catalog
+
+                        emit({
+                            "type": "model_catalog",
+                            "current": settings.model_size,
+                            "catalog": await asyncio.to_thread(model_catalog.catalog_with_status),
+                        })
+
+                    loop.create_task(send_catalog())
                 elif cmd == "rename_speaker" and speaker is not None:
                     if speaker.rename(int(msg.get("id", -1)), str(msg.get("name", ""))):
                         emit({"type": "roster", "speakers": speaker.roster()})

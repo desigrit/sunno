@@ -61,12 +61,17 @@ public sealed partial class MainWindow : Window
     private bool _micCanPrompt;
     /// <summary>The backend died; stop reporting progress that will never happen.</summary>
     private bool _backendFatal;
+    /// <summary>Set while the engine is reloading onto a different model.</summary>
+    private string? _switchingTo;
+    /// <summary>Suppresses the Checked handler while the list is rebuilt from the backend.</summary>
+    private bool _suppressModelEvent;
 
     /// <summary>Caption text size; the item templates read this.</summary>
     public static double CaptionSize { get; private set; } = 26;
 
     public ObservableCollection<CaptionLine> Lines { get; } = new();
     public ObservableCollection<SpeakerRow> Speakers { get; } = new();
+    public ObservableCollection<ModelRow> Models { get; } = new();
 
     public MainWindow()
     {
@@ -86,6 +91,7 @@ public sealed partial class MainWindow : Window
         _client.DownloadProgress += p => _ui.TryEnqueue(() => OnDownloadProgress(p));
         _client.DownloadComplete += _ => _ui.TryEnqueue(OnDownloadComplete);
         _client.DownloadFailed += msg => _ui.TryEnqueue(() => OnDownloadFailed(msg));
+        _client.ModelCatalog += (current, list) => _ui.TryEnqueue(() => OnModelCatalog(current, list));
         _backend.Crashed += msg => _ui.TryEnqueue(() => OnBackendCrashed(msg));
 
         Closed += (_, _) =>
@@ -98,12 +104,13 @@ public sealed partial class MainWindow : Window
             Application.Current.Exit();
         };
 
-        // Consent has to be settled before anything opens the microphone. When access isn't
-        // already granted the backend starts paused, so the ~33 s model load overlaps the
-        // consent dialog rather than following it, and the backend's own mic_denied banner
-        // can't race the system prompt with a second, contradictory explanation.
+        // Consent has to be settled before anything opens the microphone. On first run we haven't
+        // asked yet, so the backend starts paused regardless of what Windows reports — otherwise
+        // the microphone would already be live behind our own consent dialog, which would make
+        // asking dishonest.
         var micStatus = MicrophoneAccess.Check();
-        _micGranted = micStatus is null or AppCapabilityAccessStatus.Allowed;
+        _micGranted = (micStatus is null or AppCapabilityAccessStatus.Allowed)
+                      && _settings.MicrophoneAsked;
         _startedPaused = !_micGranted;
 
         var error = _backend.Start(
@@ -115,10 +122,18 @@ public sealed partial class MainWindow : Window
         _client.Start();
         _ = LoadDevicesAsync();
 
-        // The dialog is system-owned UI and RequestAccessAsync must run on the UI thread, so it
-        // waits for real activation instead of firing from the constructor, where there is no
-        // visible window for it to sit in front of.
-        Activated += OnFirstActivated;
+        // Consent is asked from the content's Loaded event rather than window activation: a
+        // window that is shown without being focused still needs to ask, otherwise the backend
+        // sits paused behind a dialog that never appears.
+        if (Content is FrameworkElement root)
+        {
+            root.Loaded += (_, _) =>
+            {
+                if (_micPromptDone) return;
+                _micPromptDone = true;
+                _ = EnsureMicrophoneAccessAsync();
+            };
+        }
     }
 
     /// <summary>Mica, extended title bar and a medium default size, matching inbox apps.</summary>
@@ -240,6 +255,7 @@ public sealed partial class MainWindow : Window
         {
             _micProblem = false;
             MicInfoBar.IsOpen = false;
+            ShowReadyState();
         }
 
         if (_micProblem && st.State == "stopped")
@@ -247,6 +263,10 @@ public sealed partial class MainWindow : Window
             // Keep the real reason on screen rather than the generic paused text.
             return;
         }
+
+        // A spinner beside "Stopped" reads as "still working on it". Once the backend reports
+        // it is simply paused, the engine is up and the wait is over.
+        if (st.State == "stopped") ShowIdleState();
 
         StatusText.Text = st.State switch
         {
@@ -334,6 +354,13 @@ public sealed partial class MainWindow : Window
         }
         if (_micCanPrompt)
         {
+            // Recovering from our own "not now" needs no OS round trip — the OS never denied us.
+            if (_micDeclined)
+            {
+                _micDeclined = false;
+                ApplyMicrophoneStatus(MicrophoneAccess.Check());
+                return;
+            }
             ApplyMicrophoneStatus(await MicrophoneAccess.RequestAsync());
             return;
         }
@@ -341,35 +368,66 @@ public sealed partial class MainWindow : Window
             new Uri("ms-settings:privacy-microphone"));
     }
 
-    private void OnFirstActivated(object sender, WindowActivatedEventArgs e)
-    {
-        if (_micPromptDone || e.WindowActivationState == WindowActivationState.Deactivated) return;
-        _micPromptDone = true;
-        Activated -= OnFirstActivated;
-        _ = EnsureMicrophoneAccessAsync();
-    }
-
     /// <summary>
-    /// Settle microphone consent, prompting when Windows has never asked.
+    /// Settle microphone consent.
     ///
-    /// This is the payoff of shipping as MSIX. The capture itself runs in the Python child over
-    /// WASAPI, which the privacy gate silently denies rather than prompting on, so the dialog
-    /// has to be raised deliberately from the packaged UI process.
+    /// Windows will not raise its own dialog here: a runFullTrust packaged app is granted the
+    /// microphone by default and RequestAccessAsync returns Allowed without prompting (verified
+    /// against a live package for the never-asked, Prompt and Deny consent states). The
+    /// Camera-style system prompt is an AppContainer behaviour, and full trust is non-negotiable
+    /// because CUDA cannot load inside a container. So we ask once ourselves — which also lets
+    /// us say the thing that actually reassures people, that audio never leaves the machine.
     /// </summary>
     private async Task EnsureMicrophoneAccessAsync()
     {
         var status = MicrophoneAccess.Check();
 
-        // UserPromptRequired means "never asked", not "refused" — the one state a dialog exists
-        // for, and the one the previous CheckAccess-only code mislabelled as a denial.
+        // UserPromptRequired means "never asked", not "refused" — the state the previous
+        // CheckAccess-only code mislabelled as a denial.
         if (status == AppCapabilityAccessStatus.UserPromptRequired)
             status = await MicrophoneAccess.RequestAsync();
+
+        if (!_settings.MicrophoneAsked && status is null or AppCapabilityAccessStatus.Allowed)
+            await AskForMicrophoneAsync();
 
         ApplyMicrophoneStatus(status);
 
         // Notice a later grant from Settings, so the fallback isn't a dead end that needs a relaunch.
         MicrophoneAccess.Changed += OnMicAccessChanged;
     }
+
+    /// <summary>Ask once, in two sentences, with the honest answer to "where does my voice go".</summary>
+    private async Task AskForMicrophoneAsync()
+    {
+        _settings.MicrophoneAsked = true;
+        _settings.Save();
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Use your microphone?",
+            Content = "Sunno listens to your microphone to caption what people say. " +
+                      "Audio is transcribed on this PC and never leaves it.",
+            PrimaryButtonText = "Allow",
+            CloseButtonText = "Not now",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) return;
+
+        // Declining is a real answer, so honour it rather than quietly listening anyway.
+        _micDeclined = true;
+        _micProblem = true;
+        _micCanPrompt = true;
+        MicInfoBar.Severity = InfoBarSeverity.Informational;
+        MicInfoBar.Title = "Microphone is off";
+        MicInfoBar.Message = "Sunno isn't listening. Turn it on whenever you're ready.";
+        MicActionLink.Content = "Turn on";
+        MicActionLink.Visibility = Visibility.Visible;
+        MicInfoBar.IsOpen = true;
+    }
+
+    private bool _micDeclined;
 
     private void OnMicAccessChanged() =>
         _ui.TryEnqueue(() => ApplyMicrophoneStatus(MicrophoneAccess.Check()));
@@ -385,6 +443,10 @@ public sealed partial class MainWindow : Window
         // to honour, so let the backend's runtime error be the only signal.
         if (status is null or AppCapabilityAccessStatus.Allowed)
         {
+            // An explicit "not now" outranks the OS default, which for a full-trust app is
+            // always Allowed and would otherwise silently overturn the user's own answer.
+            if (_micDeclined) return;
+
             _micProblem = false;
             _micCanPrompt = false;
             MicInfoBar.IsOpen = false;
@@ -452,9 +514,139 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void TryStartCapture()
     {
-        if (!_micGranted || !_startedPaused || _captureRequested || !_connected) return;
+        if (!_micGranted || _micDeclined || !_startedPaused || _captureRequested || !_connected) return;
         _captureRequested = true;
         _ = _client.StartCaptureAsync();
+    }
+
+    /// <summary>Populate the picker lazily — the catalogue costs a Hub round trip.</summary>
+    private void OnModelCatalog(string current, IReadOnlyList<ModelOption> options)
+    {
+        _suppressModelEvent = true;
+        try
+        {
+            Models.Clear();
+            foreach (var o in options)
+            {
+                var row = new ModelRow
+                {
+                    Id = o.Id,
+                    Name = o.Name,
+                    Detail = o.Detail,
+                    ApproxMb = o.ApproxMb,
+                    Available = o.Available,
+                    IsSelected = o.Id == current,
+                };
+                row.Refresh();
+                if (row.IsSelected) row.Status = "In use";
+                Models.Add(row);
+            }
+        }
+        finally
+        {
+            _suppressModelEvent = false;
+        }
+    }
+
+    /// <summary>
+    /// Switch models. Downloading first when needed, then reloading the engine.
+    ///
+    /// The engine is built once at backend startup, so this restarts the child process rather
+    /// than swapping in place. The transcript is UI-side state and speaker profiles are
+    /// persisted server-side, so the only real cost is the reload itself.
+    /// </summary>
+    private async void OnModelChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressModelEvent) return;
+        if (sender is not RadioButton { Tag: string id }) return;
+
+        var row = Models.FirstOrDefault(m => m.Id == id);
+        if (row is null || id == _settings.Model || _switchingTo is not null) return;
+
+        _switchingTo = id;
+        row.IsBusy = true;
+
+        if (!row.Available)
+        {
+            // Downloading runs on the live backend, which already reports byte progress; the
+            // engine only reloads once the bytes are on disk.
+            row.ShowProgress(0);
+            await _client.DownloadModelAsync(id);
+            return;   // OnDownloadComplete resumes the switch
+        }
+
+        await SwitchModelAsync(id);
+    }
+
+    private async Task SwitchModelAsync(string id)
+    {
+        var row = Models.FirstOrDefault(m => m.Id == id);
+        if (row is not null)
+        {
+            row.IsBusy = true;
+            row.Status = "Loading…";
+        }
+
+        _settings.Model = id;
+        _settings.Save();
+
+        ShowLoadingState($"Loading {row?.Name ?? id}");
+
+        // Reset the capture handshake for the new process, and keep honouring a declined
+        // microphone — a model switch must not become a back door into opening it.
+        _captureRequested = false;
+        _connected = false;
+        _startedPaused = !_micGranted || _micDeclined;
+
+        var error = _backend.Restart(
+            device: _settings.DeviceIndex?.ToString(),
+            model: id,
+            vocabulary: _settings.Vocabulary,
+            startStopped: _startedPaused);
+
+        if (!string.IsNullOrEmpty(error))
+        {
+            _switchingTo = null;
+            if (row is not null) { row.IsBusy = false; row.Refresh(); }
+            StatusText.Text = error;
+            return;
+        }
+
+        // The socket drops with the old process; the client's own retry loop reconnects.
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The empty state has two jobs: "nothing said yet" and "not ready yet". Only the second
+    /// deserves a spinner, and conflating them promises captions the engine cannot yet produce.
+    /// </summary>
+    private void ShowLoadingState(string title)
+    {
+        LoadingRing.IsActive = true;
+        LoadingRing.Visibility = Visibility.Visible;
+        EmptyGlyph.Visibility = Visibility.Collapsed;
+        EmptyTitle.Text = title;
+        EmptyDetail.Text = "This takes about half a minute.";
+        EmptyState.Visibility = Lines.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ShowReadyState()
+    {
+        LoadingRing.IsActive = false;
+        LoadingRing.Visibility = Visibility.Collapsed;
+        EmptyGlyph.Visibility = Visibility.Visible;
+        EmptyTitle.Text = "Listening for speech";
+        EmptyDetail.Text = "Captions appear here as people talk.";
+    }
+
+    /// <summary>Engine is up, but capture is paused — by the user, or awaiting consent.</summary>
+    private void ShowIdleState()
+    {
+        LoadingRing.IsActive = false;
+        LoadingRing.Visibility = Visibility.Collapsed;
+        EmptyGlyph.Visibility = Visibility.Visible;
+        EmptyTitle.Text = "Not listening";
+        EmptyDetail.Text = "Press the microphone button to start.";
     }
 
     /// <summary>Device strings carry format detail that's too long for the status line.</summary>
@@ -474,6 +666,21 @@ public sealed partial class MainWindow : Window
             // Consent may have been granted while the model was still loading; sends are
             // dropped on a closed socket, so this is the other half of that handshake.
             TryStartCapture();
+
+            // A reconnect after a model switch is the switch completing.
+            if (_switchingTo is { } finished)
+            {
+                _switchingTo = null;
+                var row = Models.FirstOrDefault(m => m.Id == finished);
+                if (row is not null) { row.IsBusy = false; row.Status = "In use"; }
+                SelectModelRow(finished);
+                foreach (var other in Models.Where(m => m.Id != finished)) other.Refresh();
+            }
+            else if (Models.Count == 0)
+            {
+                // The picker is always visible now, so it needs its contents up front.
+                _ = _client.RequestModelsAsync();
+            }
             return;
         }
         // A dead backend also looks "disconnected", and its reconnect attempts would otherwise
@@ -575,6 +782,13 @@ public sealed partial class MainWindow : Window
 
     private void OnDownloadProgress(DownloadProgressEvent p)
     {
+        if (_switchingTo is not null)
+        {
+            var row = Models.FirstOrDefault(m => m.Id == p.Model);
+            row?.ShowProgress(p.Percent);
+            return;
+        }
+
         DownloadBar.IsIndeterminate = false;
         DownloadBar.Value = Math.Clamp(p.Percent, 0, 100);
         DownloadText.Text =
@@ -583,6 +797,14 @@ public sealed partial class MainWindow : Window
 
     private void OnDownloadComplete()
     {
+        if (_switchingTo is { } pending)
+        {
+            var row = Models.FirstOrDefault(m => m.Id == pending);
+            if (row is not null) row.Available = true;
+            _ = SwitchModelAsync(pending);
+            return;
+        }
+
         DownloadBar.Value = 100;
         DownloadText.Text = "Done. Loading the speech engine…";
         SetupOverlay.Visibility = Visibility.Collapsed;
@@ -591,12 +813,43 @@ public sealed partial class MainWindow : Window
 
     private void OnDownloadFailed(string message)
     {
+        if (_switchingTo is { } pending)
+        {
+            // Abandon the switch and put the radio back where it was, so the list keeps telling
+            // the truth about which model is actually loaded.
+            var row = Models.FirstOrDefault(m => m.Id == pending);
+            if (row is not null) { row.IsBusy = false; row.Refresh(); }
+            _switchingTo = null;
+            SelectModelRow(_settings.Model);
+
+            MicInfoBar.Severity = InfoBarSeverity.Warning;
+            MicInfoBar.Title = "Couldn't download that model";
+            MicInfoBar.Message = message;
+            MicActionLink.Visibility = Visibility.Collapsed;
+            MicInfoBar.IsOpen = true;
+            return;
+        }
+
         SetupError.Title = "Download failed";
         SetupError.Message = message;
         SetupError.IsOpen = true;
         DownloadPanel.Visibility = Visibility.Collapsed;
         DownloadButton.IsEnabled = true;
         ModelList.IsEnabled = true;
+    }
+
+    /// <summary>Move the radio selection without re-entering the Checked handler.</summary>
+    private void SelectModelRow(string id)
+    {
+        _suppressModelEvent = true;
+        try
+        {
+            foreach (var m in Models) m.IsSelected = m.Id == id;
+        }
+        finally
+        {
+            _suppressModelEvent = false;
+        }
     }
 
     // ---------- devices ----------

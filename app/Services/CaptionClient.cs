@@ -44,6 +44,8 @@ public sealed class CaptionClient : IAsyncDisposable
     public event Action<IReadOnlyList<SpeakerInfo>>? Roster;
     public event Action<bool>? ConnectionChanged;
     public event Action<IReadOnlyList<ModelOption>>? ModelRequired;
+    /// <summary>Catalogue served on demand, with the id of the model currently loaded.</summary>
+    public event Action<string, IReadOnlyList<ModelOption>>? ModelCatalog;
     public event Action<DownloadProgressEvent>? DownloadProgress;
     public event Action<string>? DownloadComplete;
     public event Action<string>? DownloadFailed;
@@ -161,24 +163,11 @@ public sealed class CaptionClient : IAsyncDisposable
                 break;
             }
             case "model_required":
-            {
-                var options = new List<ModelOption>();
-                if (root.TryGetProperty("catalog", out var catalog))
-                {
-                    foreach (var m in catalog.EnumerateArray())
-                    {
-                        options.Add(new ModelOption(
-                            GetString(m, "id") ?? "",
-                            GetString(m, "name") ?? "",
-                            GetString(m, "detail") ?? "",
-                            GetInt(m, "approx_mb") ?? 0,
-                            GetString(m, "languages") ?? "",
-                            GetBool(m, "available") ?? false));
-                    }
-                }
-                ModelRequired?.Invoke(options);
+                ModelRequired?.Invoke(ParseCatalog(root));
                 break;
-            }
+            case "model_catalog":
+                ModelCatalog?.Invoke(GetString(root, "current") ?? "", ParseCatalog(root));
+                break;
             case "download_progress":
                 DownloadProgress?.Invoke(new DownloadProgressEvent(
                     GetString(root, "model") ?? "",
@@ -197,6 +186,30 @@ public sealed class CaptionClient : IAsyncDisposable
 
     public Task DownloadModelAsync(string model) =>
         SendAsync(new { cmd = "download_model", model });
+
+    public Task RequestModelsAsync() => SendAsync(new { cmd = "list_models" });
+
+    /// <summary>
+    /// Both model_required and model_catalog carry the same catalogue shape; the difference is
+    /// only whether the backend is blocked waiting for a choice.
+    /// </summary>
+    private static IReadOnlyList<ModelOption> ParseCatalog(JsonElement root)
+    {
+        var options = new List<ModelOption>();
+        if (!root.TryGetProperty("catalog", out var catalog)) return options;
+
+        foreach (var m in catalog.EnumerateArray())
+        {
+            options.Add(new ModelOption(
+                GetString(m, "id") ?? "",
+                GetString(m, "name") ?? "",
+                GetString(m, "detail") ?? "",
+                GetInt(m, "approx_mb") ?? 0,
+                GetString(m, "languages") ?? "",
+                GetBool(m, "available") ?? false));
+        }
+        return options;
+    }
 
     public Task ToggleAsync() => SendAsync(new { cmd = "toggle" });
     public Task StartCaptureAsync() => SendAsync(new { cmd = "start" });

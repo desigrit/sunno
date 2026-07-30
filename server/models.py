@@ -38,7 +38,7 @@ CATALOG: list[dict] = [
     {
         "id": "small",
         "name": "Whisper small",
-        "detail": "Fastest and smallest. Struggles with accents and distance.",
+        "detail": "Fastest and smallest. Struggles with accents.",
         "approx_mb": 490,
         "languages": "multilingual",
     },

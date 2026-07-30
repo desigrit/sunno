@@ -16,6 +16,8 @@ public sealed class AppSettings
     public string? Vocabulary { get; set; }
     public double CaptionFontSize { get; set; } = 26;
     public bool AlwaysOnTop { get; set; } = true;
+    /// <summary>Whether the one-time microphone consent dialog has been shown.</summary>
+    public bool MicrophoneAsked { get; set; }
 
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
