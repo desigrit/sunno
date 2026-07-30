@@ -95,6 +95,11 @@ if (-not $SkipStage) {
   # A cached backend is only safe to reuse if it still matches the source. Without this check a
   # cache that predates real bug fixes ships silently, because the package looks complete
   # either way.
+  #
+  # Scope is deliberately narrow and does NOT cover everything that can go stale: nested server
+  # modules, stage-backend.ps1's own copy list, pinned dependency versions, or the CUDA
+  # allow-list. It catches the common case of editing server\*.py; it is not a substitute for a
+  # full build before shipping.
   $stale = Get-ChildItem (Join-Path $root "server") -Filter *.py | Where-Object {
     $staged = Join-Path $existing "server\$($_.Name)"
     (-not (Test-Path $staged)) -or

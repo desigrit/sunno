@@ -69,10 +69,13 @@ public sealed partial class MainWindow : Window
     private bool _awaitingSwitchReconnect;
     /// <summary>Stops a failed fallback from bouncing between models forever.</summary>
     private bool _recoveringModel;
-    /// <summary>The model to fall back to when a stored choice turns out not to load.</summary>
-    private const string DefaultModel = "large-v3";
     /// <summary>Keeps an explanatory notice up until the user dismisses it themselves.</summary>
     private bool _infoSticky;
+    /// <summary>
+    /// The engine has reported ready at least once since the current backend started. Separates
+    /// "this model never loads" from "something broke after it had been working".
+    /// </summary>
+    private bool _engineReadyThisSession;
     /// <summary>Whether the InfoBar's action can still raise the dialog, or must fall back to
     /// Settings because Windows will not prompt a second time.</summary>
     private bool _micCanPrompt;
@@ -269,6 +272,15 @@ public sealed partial class MainWindow : Window
         // microphone failure and immediately reports "stopped", so clearing on every status
         // would erase the explanation milliseconds after showing it — leaving a message that
         // reads as if the user had stopped capture themselves.
+        // "listening" or "stopped" both mean the engine finished loading and the pipeline is
+        // up; "loading" does not. This is the only trustworthy ready signal — the socket opens
+        // long before the model is usable.
+        if (st.State is "listening" or "stopped")
+        {
+            _engineReadyThisSession = true;
+            CompleteSwitchIfPending();
+        }
+
         if (st.State == "listening")
         {
             _micProblem = false;
@@ -347,8 +359,8 @@ public sealed partial class MainWindow : Window
     {
         _backendLoading = false;
 
-        // A crash while switching means the new model never came up. Fall back to the last
-        // model known to load instead of leaving the app dead — and never persist the choice
+        // A crash while switching means the new model never came up. Fall back to something
+        // that actually loads instead of leaving the app dead — and never persist the choice
         // that broke it, or every future launch would reload it and crash again.
         if (_switchingTo is { } failed)
         {
@@ -357,42 +369,31 @@ public sealed partial class MainWindow : Window
             foreach (var m in Models) { m.IsBusy = false; m.Refresh(); }
             SelectModelRow(_lastGoodModel);
 
-            if (!_recoveringModel && failed != _lastGoodModel && _lastGoodModel.Length > 0)
+            var fallback = _recoveringModel ? null : PickFallbackModel(failed);
+            if (fallback is not null)
             {
                 _recoveringModel = true;
-                var failedName = Models.FirstOrDefault(m => m.Id == failed)?.Name ?? failed;
-
-                MicInfoBar.Severity = InfoBarSeverity.Warning;
-                MicInfoBar.Title = $"{failedName} couldn't be loaded";
-                MicInfoBar.Message = "Switching back to the model that was working.";
-                MicActionLink.Visibility = Visibility.Collapsed;
-                MicInfoBar.IsOpen = true;
-                _infoSticky = true;
-
-                _ = SwitchModelAsync(_lastGoodModel);
+                RaiseFallbackNotice(failed, fallback);
+                _ = SwitchModelAsync(fallback);
                 return;
             }
         }
-        else if (!_recoveringModel && _settings.Model != DefaultModel && Models.Count > 0)
+        else if (!_recoveringModel && !_engineReadyThisSession && Models.Count > 0)
         {
-            // Crashing outside a switch, on a model we persisted, means the stored choice
-            // itself is bad — the state an interrupted or unverified switch can leave behind.
-            // Fall back to the recommended model once instead of crashing identically on
-            // every future launch, which this user has no way to escape from inside the app.
-            _recoveringModel = true;
-            _settings.Model = DefaultModel;
-            _settings.Save();
-            _lastGoodModel = DefaultModel;
-
-            MicInfoBar.Severity = InfoBarSeverity.Warning;
-            MicInfoBar.Title = "That model wouldn't load";
-            MicInfoBar.Message = "Falling back to Whisper large-v3.";
-            MicActionLink.Visibility = Visibility.Collapsed;
-            MicInfoBar.IsOpen = true;
-            _infoSticky = true;
-
-            _ = SwitchModelAsync(DefaultModel);
-            return;
+            // Crashing before the engine has *ever* reported ready this session means the
+            // stored choice itself doesn't load — the state an interrupted or unverified
+            // switch can leave behind. Guarded on that rather than on the model id: a crash
+            // after hours of working transcription is a runtime fault, and silently demoting
+            // the user's deliberate choice because of it would be wrong.
+            var fallback = PickFallbackModel(_settings.Model);
+            if (fallback is not null)
+            {
+                _recoveringModel = true;
+                RaiseFallbackNotice(_settings.Model, fallback);
+                // Not persisted here: the normal completion path records it once it loads.
+                _ = SwitchModelAsync(fallback);
+                return;
+            }
         }
 
         _backendFatal = true;
@@ -410,6 +411,20 @@ public sealed partial class MainWindow : Window
     }
 
     private string? _crashDetail;
+
+    /// <summary>Explain a demotion the user didn't ask for, and keep it on screen.</summary>
+    private void RaiseFallbackNotice(string failedId, string fallbackId)
+    {
+        var failedName = Models.FirstOrDefault(m => m.Id == failedId)?.Name ?? failedId;
+        var fallbackName = Models.FirstOrDefault(m => m.Id == fallbackId)?.Name ?? fallbackId;
+
+        MicInfoBar.Severity = InfoBarSeverity.Warning;
+        MicInfoBar.Title = $"{failedName} couldn't be loaded";
+        MicInfoBar.Message = $"Using {fallbackName} instead.";
+        MicActionLink.Visibility = Visibility.Collapsed;
+        MicInfoBar.IsOpen = true;
+        _infoSticky = true;
+    }
 
     private async void OnMicAction(object sender, RoutedEventArgs e)
     {
@@ -590,6 +605,67 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Populate the picker lazily — the catalogue costs a Hub round trip.</summary>
+    /// <summary>
+    /// Commit a pending switch, once the engine has actually reported itself ready.
+    ///
+    /// Not driven off the socket: the backend serves WebSocket clients while the model is still
+    /// loading, so connecting proves nothing about whether the chosen model works.
+    /// </summary>
+    private void CompleteSwitchIfPending()
+    {
+        if (!_awaitingSwitchReconnect || _switchingTo is not { } finished) return;
+
+        // Captured before reset: a recovery's own completion must not dismiss the notice that
+        // explains the recovery, or the demotion becomes silent again.
+        var wasRecovery = _recoveringModel;
+
+        _awaitingSwitchReconnect = false;
+        _switchingTo = null;
+        _recoveringModel = false;
+
+        // The engine loaded it, so this is now the choice worth remembering.
+        _lastGoodModel = finished;
+        _settings.Model = finished;
+        _settings.Save();
+
+        var row = Models.FirstOrDefault(m => m.Id == finished);
+        if (row is not null)
+        {
+            row.Available = true;
+            row.Refresh();
+            row.Status = "In use";
+        }
+        SelectModelRow(finished);
+        foreach (var other in Models.Where(m => m.Id != finished)) other.Refresh();
+
+        // A switch the user asked for supersedes whatever the last notice explained; a fallback
+        // does not, because the notice is about the fallback itself.
+        if (_infoSticky && !wasRecovery)
+        {
+            _infoSticky = false;
+            MicInfoBar.IsOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// Choose something to fall back to that is actually on disk. Falling back to a model that
+    /// still needs a multi-gigabyte download would trade a crash for a download prompt, and
+    /// persisting it would make every future launch open that prompt instead of captioning.
+    /// Null means nothing can be chosen honestly.
+    /// </summary>
+    private string? PickFallbackModel(string failed)
+    {
+        if (_lastGoodModel.Length > 0 && _lastGoodModel != failed)
+        {
+            var known = Models.FirstOrDefault(m => m.Id == _lastGoodModel);
+            // No catalogue yet means we crashed before it arrived; trust the last good model,
+            // which by definition loaded at some point.
+            if (known is null || known.Available) return _lastGoodModel;
+        }
+
+        return Models.FirstOrDefault(m => m.Available && m.Id != failed)?.Id;
+    }
+
     private void OnMicInfoClosed(InfoBar sender, object args) => _infoSticky = false;
 
     private void OnModelSectionExpanding(Expander sender, ExpanderExpandingEventArgs args) =>
@@ -680,6 +756,7 @@ public sealed partial class MainWindow : Window
         // microphone — a model switch must not become a back door into opening it.
         _captureRequested = false;
         _connected = false;
+        _engineReadyThisSession = false;
         _startedPaused = !_micGranted || _micDeclined;
         _awaitingSwitchReconnect = true;
 
@@ -757,32 +834,11 @@ public sealed partial class MainWindow : Window
             // dropped on a closed socket, so this is the other half of that handshake.
             TryStartCapture();
 
-            // A reconnect after a restart is the switch completing. Guarded on the restart flag
-            // rather than on _switchingTo alone: during a long download the socket is still on
-            // the old backend, and a transient drop there would otherwise be reported as a
-            // successful switch that never happened.
-            if (_awaitingSwitchReconnect && _switchingTo is { } finished)
-            {
-                _awaitingSwitchReconnect = false;
-                _switchingTo = null;
-                _recoveringModel = false;
-
-                // Only now is the choice known to work, so only now is it safe to persist.
-                _lastGoodModel = finished;
-                _settings.Model = finished;
-                _settings.Save();
-
-                var row = Models.FirstOrDefault(m => m.Id == finished);
-                if (row is not null)
-                {
-                    row.Available = true;
-                    row.Refresh();
-                    row.Status = "In use";
-                }
-                SelectModelRow(finished);
-                foreach (var other in Models.Where(m => m.Id != finished)) other.Refresh();
-            }
-            else if (Models.Count == 0)
+            // Deliberately NOT where a switch is completed. The backend accepts WebSocket
+            // connections before it loads the engine, so "connected" arrives roughly half a
+            // minute before "usable" — committing here would persist a model that has not
+            // actually loaded yet. Completion is driven by the first ready status instead.
+            if (Models.Count == 0)
             {
                 // The picker is always visible now, so it needs its contents up front.
                 _ = _client.RequestModelsAsync();
@@ -950,7 +1006,7 @@ public sealed partial class MainWindow : Window
         _suppressModelEvent = true;
         try
         {
-            foreach (var m in Models) m.IsSelected = m.Id == id;
+            foreach (var m in Models) m.SetSelected(m.Id == id);
         }
         finally
         {

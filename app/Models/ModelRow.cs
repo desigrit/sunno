@@ -38,6 +38,20 @@ public sealed class ModelRow : INotifyPropertyChanged
         set => Set(ref _isSelected, value);
     }
 
+    /// <summary>
+    /// Push the selection into the view unconditionally.
+    ///
+    /// The IsChecked binding is one-way, so clicking a radio leaves the control checked while
+    /// this model still reads false. Assigning false back is then a no-op and raises nothing,
+    /// which would leave a stale radio contradicting the model that actually loaded. Re-raising
+    /// the change regardless is what pulls the control back into line.
+    /// </summary>
+    public void SetSelected(bool value)
+    {
+        _isSelected = value;
+        Notify(nameof(IsSelected));
+    }
+
     /// <summary>Downloading, or waiting for the engine to reload onto this model.</summary>
     public bool IsBusy
     {
