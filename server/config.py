@@ -16,8 +16,10 @@ class Settings:
     # large-v3 (not turbo): turbo's pruned 4-layer decoder degrades 2-4x more on
     # accented/meeting speech than on clean audio, and accents are the point here.
     model_size: str = "large-v3"
-    device: str = "cuda"
-    # Turing (sm_75) supports float16 and int8_float16, but NOT bfloat16.
+    device: str = "auto"
+    # Resolved at startup by hardware.resolve_device / compute_type_for: float16 on a GPU,
+    # int8 on CPU where it is the difference between usable and not. (On Turing GPUs int8
+    # measured ~15% slower than float16, so it is not a win there.)
     compute_type: str = "float16"
     language: str | None = "en"
 

@@ -101,7 +101,7 @@ public static class WordInlines
                 // Provisional text, or a model that returned no word data.
                 paragraph.Inlines.Add(new Run { Text = line.Text });
                 block.SetValue(RangesProperty, null);
-                DetachTooltip(block);
+                AttachTooltip(block);
                 return;
             }
 
@@ -173,7 +173,7 @@ public static class WordInlines
             }
 
             block.SetValue(RangesProperty, ranges.Count > 0 ? ranges : null);
-            if (ranges.Count > 0) AttachTooltip(block); else DetachTooltip(block);
+            AttachTooltip(block);
         }
         catch
         {
@@ -186,7 +186,7 @@ public static class WordInlines
                 p.Inlines.Add(new Run { Text = line.Text });
                 block.Blocks.Add(p);
                 block.SetValue(RangesProperty, null);
-                DetachTooltip(block);
+                AttachTooltip(block);
             }
             catch { /* leave whatever is on screen */ }
         }
@@ -200,6 +200,12 @@ public static class WordInlines
     /// a word is known — has already missed that trigger and never opens. Creating a fresh
     /// ToolTip per word is worse still, because replacing the attached object also discards any
     /// tooltip currently on screen.
+    ///
+    /// For the same reason it is never detached. A caption is rendered twice as it finalises
+    /// (Text arrives, then Words), and detaching on the wordless first pass would tear down the
+    /// association a moment before the words appear — leaving a block the pointer is already
+    /// resting on unable to show anything until it leaves and comes back. Content is blanked
+    /// instead, which the Opened handler treats as "nothing to say".
     /// </summary>
     private static void AttachTooltip(RichTextBlock block)
     {
@@ -212,23 +218,15 @@ public static class WordInlines
         }
 
         var tip = new ToolTip();
-        // Content is filled by the first PointerMoved. If the pointer arrived without one —
-        // content scrolling under a stationary pointer — there is nothing to say yet, and an
-        // empty tooltip box would just be a glitch.
+        // Content is filled by the first PointerMoved. Until then — a wordless provisional
+        // line, or content scrolling under a stationary pointer — there is nothing to say, and
+        // an empty tooltip box would just be a glitch.
         tip.Opened += (s, _) =>
         {
             if (s is ToolTip t && t.Content is null) t.IsOpen = false;
         };
         block.SetValue(TipProperty, tip);
         ToolTipService.SetToolTip(block, tip);
-    }
-
-    private static void DetachTooltip(RichTextBlock block)
-    {
-        if (block.GetValue(TipProperty) is not ToolTip tip) return;
-        tip.IsOpen = false;
-        block.SetValue(TipProperty, null);
-        ToolTipService.SetToolTip(block, null);
     }
 
     private static void OnPointerMoved(object sender, PointerRoutedEventArgs e)
@@ -248,10 +246,14 @@ public static class WordInlines
             // boundary and report whichever happened to be found first.
             var hit = ranges.FirstOrDefault(r => offset >= r.Start && offset < r.End);
 
-            // Past the end of the text — GetPositionFromPoint clamps to the nearest position,
-            // so report the nearest word rather than going blank in the trailing whitespace of
-            // a wrapped line.
-            hit ??= offset <= ranges[0].Start ? ranges[0] : ranges[^1];
+            // Ranges do not always tile: a Span wrapping an uncertain word consumes offsets for
+            // its own element boundaries, and the position past the final glyph of a word sits
+            // outside every range. Falling back to the first or last word would confidently
+            // name a word at the other end of the line — for someone who cannot check the
+            // answer by ear, a wrong confidence score is worse than no score at all. Nearest by
+            // offset always names a neighbour of whatever is under the pointer.
+            hit ??= ranges.MinBy(r => offset < r.Start ? r.Start - offset : offset - r.End + 1);
+            if (hit is null) return;
 
             // Rebuilding the content on every move would flicker; only swap when the word does.
             var text = Describe(hit);

@@ -186,6 +186,19 @@
                                                                TextTrimming="CharacterEllipsis"
                                                                TextWrapping="NoWrap"
                                                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                                    <!-- How far behind captions run on this
+                                                         machine. Its own line rather than
+                                                         appended to the description: on a
+                                                         CPU-only PC this is the number that
+                                                         decides the choice, and it must not
+                                                         be the part that gets trimmed. -->
+                                                    <TextBlock Text="{x:Bind LagText, Mode=OneWay}"
+                                                               Visibility="{x:Bind LagVisibility, Mode=OneWay}"
+                                                               FontSize="11" LineHeight="14"
+                                                               Style="{StaticResource CaptionTextBlockStyle}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               TextWrapping="NoWrap"
+                                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                                                     <ProgressBar Height="2" Margin="0,5,4,5"
                                                                  Visibility="{x:Bind BusyVisibility, Mode=OneWay}"
                                                                  IsIndeterminate="{x:Bind IsIndeterminate, Mode=OneWay}"
@@ -367,17 +380,16 @@
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E7;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
                                 <MenuFlyoutSeparator />
-                                <!-- The check moves to the right-hand slot so the left column
-                                     can carry an icon like every other item in this menu.
-                                     Still a ToggleMenuFlyoutItem, so Narrator keeps the toggle
-                                     semantics; the right-hand slot is normally the keyboard
-                                     accelerator, so its automation text is cleared to stop a
-                                     tick being announced as a shortcut. -->
+                                <!-- Check on the left, icon beside it: the arrangement File
+                                     Explorer, Notepad and Task Manager all use, and what the
+                                     default template already does. An earlier attempt to move
+                                     the check into the right-hand slot fought the control's
+                                     visual states and left two ticks on hover; that slot is
+                                     for accelerators and submenu chevrons, not state. -->
                                 <ToggleMenuFlyoutItem x:Name="AlwaysOnTopItem" Text="Always on top"
-                                                      IsChecked="True" Click="OnToggleAlwaysOnTop"
-                                                      AutomationProperties.AcceleratorKey="">
+                                                      IsChecked="True" Click="OnToggleAlwaysOnTop">
                                     <ToggleMenuFlyoutItem.Icon>
-                                        <FontIcon x:Name="AlwaysOnTopGlyph" Glyph="&#xE735;" />
+                                        <FontIcon Glyph="&#xE718;" />
                                     </ToggleMenuFlyoutItem.Icon>
                                 </ToggleMenuFlyoutItem>
                                 <MenuFlyoutSeparator />
@@ -451,6 +463,13 @@
                                         <TextBlock Text="{x:Bind Detail}" TextWrapping="Wrap"
                                                    Style="{StaticResource CaptionTextBlockStyle}"
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        <!-- What this choice costs in delay on this machine.
+                                             Shown here because the decision is expensive to
+                                             reverse: it commits to a multi-gigabyte download. -->
+                                        <TextBlock Text="{x:Bind SpeedLabel}" TextWrapping="Wrap"
+                                                   Visibility="{x:Bind SpeedVisibility}"
+                                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                                     </StackPanel>
                                     <TextBlock Grid.Column="1" Text="{x:Bind SizeLabel}"
                                                VerticalAlignment="Center"

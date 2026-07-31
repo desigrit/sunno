@@ -292,14 +292,13 @@ public sealed class BackendHost : IDisposable
     /// <summary>Turn an exit code into something a non-developer can act on.</summary>
     private string DescribeExit(int code)
     {
-        // Only lines that look like a failure. The log also carries every caption, so taking
-        // the tail buried the actual cause under the transcript — which is what it used to do,
-        // producing an error banner hundreds of pixels tall containing no useful information.
+        // Anchored on the backend's own markers, not a substring scan. The same stream carries
+        // every caption, so matching "error" anywhere in a line meant a speaker saying "an
+        // error" or "terror" landed in the crash banner — and could push the real traceback
+        // out of the three lines shown. Putting transcript text where the failure should be is
+        // worse than showing no detail at all.
         var errorLines = RecentLog()
-            .Where(l => l.Contains("Traceback", StringComparison.OrdinalIgnoreCase)
-                     || l.Contains("Error", StringComparison.OrdinalIgnoreCase)
-                     || l.Contains("Exception", StringComparison.OrdinalIgnoreCase)
-                     || l.TrimStart().StartsWith("[fatal]", StringComparison.OrdinalIgnoreCase))
+            .Where(IsDiagnostic)
             .TakeLast(3)
             .ToList();
 
@@ -310,6 +309,23 @@ public sealed class BackendHost : IDisposable
             : $"The speech engine exited with code {code}.";
 
         return errorLines.Count == 0 ? reason : $"{reason}\n{string.Join("\n", errorLines)}";
+    }
+
+    /// <summary>
+    /// Whether a log line came from the backend's diagnostics rather than from a caption.
+    /// Captions are printed unprefixed, so anchoring at the start of the line separates them.
+    /// Traceback frames are matched before trimming, since the indent is what identifies them.
+    /// </summary>
+    private static bool IsDiagnostic(string line)
+    {
+        if (line.StartsWith("  File \"", StringComparison.Ordinal)) return true;
+
+        var text = line.TrimStart();
+        return text.StartsWith("[fatal]", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("[error]", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("Traceback", StringComparison.Ordinal)
+            // The final line of a Python traceback: "ValueError: ...", "RuntimeError: ...".
+            || System.Text.RegularExpressions.Regex.IsMatch(text, @"^[A-Za-z_][\w.]*(Error|Exception|Interrupt)\s*:");
     }
 
     public IReadOnlyList<string> RecentLog()

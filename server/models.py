@@ -73,8 +73,28 @@ def is_available(model_id: str) -> ModelStatus:
         return ModelStatus(model_id, False)
 
 
-def catalog_with_status() -> list[dict]:
-    return [dict(entry, available=is_available(entry["id"]).available) for entry in CATALOG]
+def catalog_with_status(device: str | None = None) -> list[dict]:
+    """Catalog entries plus local availability and expected decode lag.
+
+    The lag matters as much as the accuracy: on a CPU-only machine large-v3 runs about
+    4.5 s behind, which is fine for captioning a recorded video and useless for following a
+    conversation. Surfacing it here means the user learns that before downloading 3 GB
+    rather than after.
+    """
+    from . import hardware
+
+    device = device or hardware.resolve_device()
+    entries = []
+    for entry in CATALOG:
+        lag_ms = hardware.estimated_lag_ms(entry["id"], device)
+        entries.append(dict(
+            entry,
+            available=is_available(entry["id"]).available,
+            lag_ms=lag_ms,
+            lag_text=hardware.describe_lag(lag_ms),
+            responsive=lag_ms <= hardware.RESPONSIVE_LAG_MS,
+        ))
+    return entries
 
 
 def _repo_id(model_id: str) -> str:

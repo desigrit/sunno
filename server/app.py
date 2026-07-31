@@ -109,8 +109,13 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     parser.add_argument(
         "--fast", action="store_true", help="with --wav, replay as fast as possible"
     )
-    parser.add_argument("--model", default="large-v3", help="Whisper model size")
-    parser.add_argument("--compute-type", default="float16", help="ctranslate2 compute type")
+    parser.add_argument("--model", default=None,
+                        help="Whisper model size; defaults to the best one this hardware "
+                             "can keep up with")
+    parser.add_argument("--compute-type", default=None,
+                        help="ctranslate2 compute type; defaults to float16 on GPU, int8 on CPU")
+    parser.add_argument("--compute-device", default="auto", choices=("auto", "cuda", "cpu"),
+                        help="where to run the model; 'auto' uses the GPU when one is usable")
     parser.add_argument("--language", default="en", help="forced language, or 'auto'")
     parser.add_argument("--host", default="127.0.0.1", help="bind address (0.0.0.0 for LAN)")
     parser.add_argument("--http-port", type=int, default=8765)
@@ -136,9 +141,21 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     if isinstance(device, str) and device.isdigit():
         device = int(device)
 
+    # Resolve the compute device before anything imports CTranslate2 for real. Most Windows
+    # PCs have no usable NVIDIA GPU, and this used to be hardcoded to CUDA — which turned
+    # every such machine into an install that raised at startup and never captioned.
+    from . import hardware, models as model_catalog
+
+    compute_device = hardware.resolve_device(args.compute_device)
+    compute_type = args.compute_type or hardware.compute_type_for(compute_device)
+    model = args.model or hardware.default_model(
+        [entry["id"] for entry in model_catalog.CATALOG], compute_device
+    )
+
     settings = Settings(
-        model_size=args.model,
-        compute_type=args.compute_type,
+        model_size=model,
+        device=compute_device,
+        compute_type=compute_type,
         language=None if args.language == "auto" else args.language,
         host=args.host,
         http_port=args.http_port,
@@ -213,7 +230,10 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                         emit({
                             "type": "model_catalog",
                             "current": settings.model_size,
-                            "catalog": await asyncio.to_thread(model_catalog.catalog_with_status),
+                            "device": settings.device,
+                            "catalog": await asyncio.to_thread(
+                                model_catalog.catalog_with_status, settings.device
+                            ),
                         })
 
                     loop.create_task(send_catalog())
@@ -317,10 +337,13 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         if model_catalog.is_available(settings.model_size).available:
             model_ready.set()
         else:
-            catalog = await asyncio.to_thread(model_catalog.catalog_with_status)
+            catalog = await asyncio.to_thread(
+                model_catalog.catalog_with_status, settings.device
+            )
             latest_status = {
                 "type": "model_required",
                 "requested": settings.model_size,
+                "device": settings.device,
                 "catalog": catalog,
             }
             emit(dict(latest_status))
@@ -329,17 +352,20 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         await model_ready.wait()
         settings.model_size = chosen_model
 
-        # Fail loudly and early if the CUDA payload is mis-staged, rather than surfacing an
-        # opaque ctranslate2 DLL load error once the user is already mid-conversation.
+        # A mis-staged CUDA payload should not be fatal any more: the CPU path works, just
+        # slower, and a captioning app that runs behind is far better than one that refuses
+        # to start. hardware.resolve_device() has already proved CUDA loads, so reaching
+        # here means the payload broke between that check and now.
         if settings.device == "cuda":
+            from . import hardware
             from .cuda_setup import register_cuda_dlls
 
             try:
                 register_cuda_dlls(required=True)
             except RuntimeError as exc:
-                emit({"type": "error", "message": str(exc), "running": False})
-                print(f"[fatal] {exc}", flush=True)
-                raise
+                settings.device = "cpu"
+                settings.compute_type = hardware.compute_type_for("cpu")
+                print(f"[error] GPU unavailable ({exc}); falling back to CPU", flush=True)
 
         print(f"\nLoading Whisper {settings.model_size} ({settings.compute_type}) on "
               f"{settings.device} ...")

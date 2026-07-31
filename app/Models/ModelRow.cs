@@ -26,6 +26,18 @@ public sealed class ModelRow : INotifyPropertyChanged
     public string Detail { get; set; } = string.Empty;
     public int ApproxMb { get; set; }
 
+    /// <summary>
+    /// Expected delay between someone finishing a sentence and its caption appearing, e.g.
+    /// "about 0.7s behind". Measured per model per device, because the spread is what
+    /// decides whether a choice is usable: the same model runs about 0.6s behind on a GPU
+    /// and about 4.5s behind on CPU, and 4.5s is fine for captioning a recorded video but
+    /// useless for following a conversation.
+    /// </summary>
+    public string LagText { get; set; } = string.Empty;
+
+    /// <summary>Whether that delay is short enough to follow live conversation.</summary>
+    public bool Responsive { get; set; } = true;
+
     /// <summary>Already downloaded.</summary>
     public bool Available
     {
@@ -97,6 +109,14 @@ public sealed class ModelRow : INotifyPropertyChanged
     /// <summary>The description, or "In use" for the loaded model.</summary>
     public string SecondaryText => _inUse ? "In use" : Detail;
 
+    /// <summary>
+    /// The speed line under the description. Left blank rather than showing a placeholder
+    /// when the backend didn't report one, so an older backend degrades to the previous
+    /// layout instead of to an empty row that looks broken.
+    /// </summary>
+    public Visibility LagVisibility =>
+        !_isBusy && !string.IsNullOrEmpty(LagText) ? Visibility.Visible : Visibility.Collapsed;
+
     /// <summary>e.g. "1.5 GB" — shown on the right only when a download is needed.</summary>
     public string SizeLabel => FormatSize(ApproxMb);
 
@@ -116,6 +136,12 @@ public sealed class ModelRow : INotifyPropertyChanged
         get
         {
             var text = string.IsNullOrEmpty(Detail) ? Name : $"{Name}\n{Detail}";
+            if (!string.IsNullOrEmpty(LagText))
+            {
+                text += $"\nCaptions appear {LagText}";
+                if (!Responsive)
+                    text += " — fine for video, too slow to follow a conversation";
+            }
             return _available ? text : $"{text}\n{SizeLabel} download";
         }
     }

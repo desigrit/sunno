@@ -23,11 +23,25 @@ namespace Sunno;
 public sealed record AudioDevice(int Index, string Name, string HostApi, bool Loopback = false);
 
 /// <summary>A model shown in first-run setup.</summary>
-public sealed record ModelChoice(string Id, string Name, string Detail, int ApproxMb, bool Available)
+public sealed record ModelChoice(string Id, string Name, string Detail, int ApproxMb, bool Available,
+                                 string LagText = "", bool Responsive = true)
 {
     public string SizeLabel => ApproxMb >= 1024
         ? $"{ApproxMb / 1024.0:0.0} GB"
         : $"{ApproxMb} MB";
+
+    /// <summary>
+    /// Speed line for the first-run picker. This is the one screen where the number really
+    /// matters: the choice made here costs a multi-gigabyte download, and on a CPU-only
+    /// machine the most accurate model runs several seconds behind — which is fine for
+    /// captioning a video and useless for following a conversation.
+    /// </summary>
+    public string SpeedLabel => Responsive
+        ? $"Captions {LagText}"
+        : $"Captions {LagText} — fine for video, too slow for conversation";
+
+    public Visibility SpeedVisibility =>
+        string.IsNullOrEmpty(LagText) ? Visibility.Collapsed : Visibility.Visible;
 }
 
 public sealed partial class MainWindow : Window
@@ -97,6 +111,14 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private readonly System.Diagnostics.Stopwatch _captureClock = new();
     private readonly DispatcherTimer _elapsedTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    /// <summary>
+    /// Time since the backend last reported an audio level. The backend publishes one roughly
+    /// every 100 ms while capturing, silence included, so a long gap means audio has stopped
+    /// arriving even though the process is alive.
+    /// </summary>
+    private readonly System.Diagnostics.Stopwatch _sinceLevel = new();
+    /// <summary>How long without a level report before the clock stops claiming all is well.</summary>
+    private static readonly TimeSpan AudioStallAfter = TimeSpan.FromSeconds(4);
 
     /// <summary>Caption text size; the item templates read this.</summary>
     public static double CaptionSize { get; private set; } = 26;
@@ -226,7 +248,6 @@ public sealed partial class MainWindow : Window
             presenter.PreferredMinimumWidth = 720;
             presenter.PreferredMinimumHeight = 420;
         }
-        SyncAlwaysOnTopItem();
     }
 
     // ---------- caption stream ----------
@@ -335,6 +356,10 @@ public sealed partial class MainWindow : Window
 
     private void OnLevel(LevelEvent lv)
     {
+        // Restarted even while paused: this is the proof that audio is still flowing from the
+        // backend, and the recording clock leans on it to avoid counting up through a dead
+        // capture thread.
+        _sinceLevel.Restart();
         if (!_running) return;
         // The bar is 26px tall and fills from the bottom, so the level maps to a height
         // rather than a ProgressBar value.
@@ -398,42 +423,80 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Hand the status line to the elapsed-time counter. The device name moves to the picker
-    /// and to this line's tooltip; a running clock is the more useful thing to show, because
-    /// it is the one piece of state that says "the microphone is open right now".
+    /// Hand the status line to the elapsed-time counter. The device name moves to the picker;
+    /// a running clock is the more useful thing to show, because it is the one piece of state
+    /// that says "the microphone is open right now".
     /// </summary>
     private void ShowElapsed()
     {
         // Repeated "listening" reports during one run must not restart the count.
         if (!_captureClock.IsRunning) _captureClock.Restart();
+        // This one restarts unconditionally: a "listening" report is itself proof of life, and
+        // after a reconnect the stall timer would otherwise still be carrying the whole outage
+        // and cry "No audio" a second later. The one indicator that must not raise a false
+        // alarm is the one claiming captions have stopped.
+        _sinceLevel.Restart();
         if (!_elapsedTimer.IsEnabled) _elapsedTimer.Start();
 
-        // The device name lives in the picker below; this line is just the clock.
-        ToolTipService.SetToolTip(StatusText, "How long the microphone has been open");
-        AutomationProperties.SetName(StatusText, "Recording time");
+        // No AutomationProperties.Name here: a TextBlock's UIA name defaults to its text, and
+        // naming it would read out the label instead of the value — and instead of whatever
+        // failure message replaces it later.
+        _audioStalled = false;
+        ToolTipService.SetToolTip(StatusText, RecordingTimeHint);
 
         StatusText.Text = FormatElapsed(_captureClock.Elapsed);
     }
 
+    private const string RecordingTimeHint = "How long the microphone has been open";
+    private const string NoAudioHint =
+        "The microphone is open but no sound is reaching it. Try another input device.";
+
+    /// <summary>Whether the status line is currently reporting a stall rather than a count.</summary>
+    private bool _audioStalled;
+
+    /// <summary>
+    /// A counter that keeps climbing is read as "everything is fine", so it must not keep
+    /// climbing when audio has stopped arriving. The capture thread can die while the process
+    /// lives; silently animating through that is the failure this app can least afford.
+    /// </summary>
     private void TickElapsed()
     {
         if (!_captureClock.IsRunning) return;
-        StatusText.Text = FormatElapsed(_captureClock.Elapsed);
+
+        var stalled = _sinceLevel.Elapsed > AudioStallAfter;
+        if (stalled != _audioStalled)
+        {
+            // Only on the transition. Reassigning a tooltip under a resting pointer is what
+            // stopped the per-word tooltip opening at all, and this one is the recovery hint
+            // for the worst failure this app has.
+            _audioStalled = stalled;
+            ToolTipService.SetToolTip(StatusText, stalled ? NoAudioHint : RecordingTimeHint);
+        }
+
+        StatusText.Text = stalled ? "No audio" : FormatElapsed(_captureClock.Elapsed);
     }
 
     /// <summary>
     /// Any other status message owns the line, so the counter has to yield — otherwise the
-    /// next tick would paint over an error the user needs to read. Capture genuinely stops
-    /// whenever this happens (pause, device switch, backend restart), so the count resets
-    /// rather than accumulating across runs.
+    /// next tick would paint over an error the user needs to read.
+    ///
+    /// This stops the ticking but deliberately does NOT reset the count. A dropped socket takes
+    /// this path while the microphone stays open, and restarting from zero would misreport how
+    /// long the room has been recorded. The count is reset only where capture actually stops.
     /// </summary>
     private void SetStatus(string text)
     {
         _elapsedTimer.Stop();
-        _captureClock.Reset();
         ToolTipService.SetToolTip(StatusText, null);
-        AutomationProperties.SetName(StatusText, "Status");
         StatusText.Text = text;
+    }
+
+    /// <summary>Capture really stopped: the next run starts from zero.</summary>
+    private void ResetCaptureClock()
+    {
+        _elapsedTimer.Stop();
+        _captureClock.Reset();
+        _sinceLevel.Reset();
     }
 
     private static string FormatElapsed(TimeSpan elapsed) =>
@@ -936,6 +999,8 @@ public sealed partial class MainWindow : Window
                     Detail = o.Detail,
                     ApproxMb = o.ApproxMb,
                     Available = o.Available,
+                    LagText = o.LagText,
+                    Responsive = o.Responsive,
                     IsSelected = o.Id == current,
                     InUse = o.Id == current,
                 };
@@ -1001,6 +1066,8 @@ public sealed partial class MainWindow : Window
         _engineReadyThisSession = false;
         _startedPaused = !_micGranted || _micDeclined;
         _awaitingSwitchReconnect = true;
+        // The backend process is about to be replaced, so capture genuinely restarts.
+        ResetCaptureClock();
 
         // Deliberately NOT persisted yet. A model that downloads but fails to load would
         // otherwise become the choice reloaded on every future launch, turning one bad switch
@@ -1132,10 +1199,9 @@ public sealed partial class MainWindow : Window
 
         if (!running)
         {
-            // The status message that follows owns the line; stop the counter here so a tick
-            // can't repaint over it in the gap before that message arrives.
-            _elapsedTimer.Stop();
-            _captureClock.Reset();
+            // Capture really stopped; the status message that follows owns the line, and the
+            // next run starts from zero.
+            ResetCaptureClock();
             LevelFill.Height = 0;
             if (_provisional is not null) Lines.Remove(_provisional);
             _provisional = null;
@@ -1149,12 +1215,18 @@ public sealed partial class MainWindow : Window
     {
         ModelList.Items.Clear();
         foreach (var o in options)
-            ModelList.Items.Add(new ModelChoice(o.Id, o.Name, o.Detail, o.ApproxMb, o.Available));
+            ModelList.Items.Add(new ModelChoice(o.Id, o.Name, o.Detail, o.ApproxMb, o.Available,
+                                                o.LagText, o.Responsive));
 
-        // Preselect the first already-downloaded model, otherwise the recommended one.
+        // Preselect the model this hardware can actually keep up with, preferring one
+        // already on disk. Picking purely by "already downloaded" would start a CPU-only
+        // machine on whatever happened to be cached, which may be the slowest option.
         var preferred = ModelList.Items
             .OfType<ModelChoice>()
-            .FirstOrDefault(m => m.Available);
+            .Where(m => m.Responsive)
+            .OrderByDescending(m => m.Available)
+            .FirstOrDefault()
+            ?? ModelList.Items.OfType<ModelChoice>().FirstOrDefault(m => m.Available);
         ModelList.SelectedItem = preferred ?? ModelList.Items.FirstOrDefault();
 
         SetupError.IsOpen = false;
@@ -1522,6 +1594,7 @@ public sealed partial class MainWindow : Window
         // kill-on-close (it would outlive a killed UI still holding the microphone) and with
         // crash reporting silently dead for the rest of the session.
         SetStatus(device.Loopback ? "Switching to system audio…" : "Switching microphone…");
+        ResetCaptureClock();
 
         _captureRequested = false;
         _connected = false;
@@ -1576,19 +1649,6 @@ public sealed partial class MainWindow : Window
     {
         if (AppWindow.Presenter is OverlappedPresenter presenter)
             presenter.IsAlwaysOnTop = AlwaysOnTopItem.IsChecked;
-        SyncAlwaysOnTopItem();
-    }
-
-    /// <summary>
-    /// Keeps the right-hand tick and the star in step with the toggle. A filled star reads as
-    /// "pinned" even before the tick is noticed, and it is the only cue left in the collapsed
-    /// menu button.
-    /// </summary>
-    private void SyncAlwaysOnTopItem()
-    {
-        var on = AlwaysOnTopItem.IsChecked;
-        AlwaysOnTopItem.KeyboardAcceleratorTextOverride = on ? "\u2713" : string.Empty;
-        AlwaysOnTopGlyph.Glyph = on ? "\uE735" : "\uE734";   // filled star / outline star
     }
 
     private void OnClear(object sender, RoutedEventArgs e)
