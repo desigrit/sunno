@@ -161,6 +161,19 @@ class AsrWorker:
 
             if not result.text and not job.is_final:
                 continue
+
+            # Learn what this machine actually does, so the model picker can quote measured
+            # figures instead of the ones recorded on the developer's hardware. Finals only:
+            # partials decode greedily and would understate the wait for a finished sentence.
+            if job.is_final:
+                from . import hardware
+
+                hardware.record_latency(
+                    self._engine.settings.model_size,
+                    self._engine.settings.device,
+                    result.latency_ms,
+                )
+
             self._emit(
                 {
                     "type": "final" if job.is_final else "partial",

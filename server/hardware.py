@@ -150,6 +150,17 @@ def _measure_cpu_score() -> float:
         return _REFERENCE_CPU_SCORE
 
 
+def _read_cached_score() -> float | None:
+    score = float(_read_state().get("cpu_score", 0) or 0)
+    return score if score > 0 else None
+
+
+def _write_cached_score(score: float) -> None:
+    state = _read_state()
+    state["cpu_score"] = round(score, 2)
+    _write_state(state)
+
+
 def _score_path():
     from pathlib import Path
 
@@ -157,35 +168,87 @@ def _score_path():
     return Path(base) / "Sunno" / "hardware.json"
 
 
-def _read_cached_score() -> float | None:
+def _read_state() -> dict:
     try:
         import json
 
-        data = json.loads(_score_path().read_text())
-        score = float(data.get("cpu_score", 0))
-        return score if score > 0 else None
+        return json.loads(_score_path().read_text())
     except Exception:
-        return None
+        return {}
 
 
-def _write_cached_score(score: float) -> None:
+def _write_state(state: dict) -> None:
     try:
         import json
 
         path = _score_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"cpu_score": round(score, 2)}))
+        path.write_text(json.dumps(state))
     except Exception:
-        pass   # an un-cached score costs a little accuracy, never correctness
+        pass   # losing the cache costs a little accuracy, never correctness
+
+
+# Observed decode times, keyed "<device>:<model>". Kept in memory as a short window and
+# flushed to disk as a median, so a single slow decode — a background build, a GPU busy with
+# a game — can't move the figure the picker shows.
+_OBSERVED: dict[str, list[float]] = {}
+_OBSERVE_WINDOW = 15
+_OBSERVE_MIN = 5
+
+
+def record_latency(model_id: str, device: str, ms: float) -> None:
+    """Note how long a real decode actually took on this machine.
+
+    Called for finalised utterances only. Partials are decoded greedily and would report a
+    faster figure than the one the user waits for at the end of a sentence, which is what
+    the picker's number claims to describe.
+    """
+    if ms <= 0 or ms > 60_000:
+        return   # a wild value means something else went wrong; don't poison the estimate
+
+    key = f"{device}:{model_id}"
+    samples = _OBSERVED.setdefault(key, [])
+    samples.append(float(ms))
+    if len(samples) > _OBSERVE_WINDOW:
+        del samples[0]
+    if len(samples) < _OBSERVE_MIN:
+        return
+
+    ordered = sorted(samples)
+    median = ordered[len(ordered) // 2]
+    state = _read_state()
+    observed = state.setdefault("observed_lag_ms", {})
+    previous = observed.get(key)
+    # Only rewrite when it has actually moved, to avoid a disk write per utterance.
+    if previous is None or abs(previous - median) > 50:
+        observed[key] = int(round(median))
+        _write_state(state)
+
+
+def measured_lag_ms(model_id: str, device: str) -> int | None:
+    """What this machine has been seen doing, or None if it has never run this model."""
+    key = f"{device}:{model_id}"
+    samples = _OBSERVED.get(key)
+    if samples and len(samples) >= _OBSERVE_MIN:
+        return int(round(sorted(samples)[len(samples) // 2]))
+    value = _read_state().get("observed_lag_ms", {}).get(key)
+    return int(value) if value else None
 
 
 def estimated_lag_ms(model_id: str, device: str | None = None) -> int:
     """Roughly how long after someone stops speaking their words appear.
 
-    An estimate for a model the user has not run yet. Once a model has actually been used
-    the pipeline reports real latencies, which should be preferred over this.
+    Prefers what this machine has actually been measured doing, and falls back to the
+    shipped table only for a model that has never run here. That matters most on a GPU,
+    where the table cannot adapt: CPU figures are rescaled by a benchmark, but every CUDA
+    machine would otherwise be quoted the numbers from the one card these were recorded on,
+    and the spread across NVIDIA generations is far wider than the spread between models.
     """
     device = device or resolve_device()
+
+    measured = measured_lag_ms(model_id, device)
+    if measured is not None:
+        return measured
 
     if device == "cuda":
         return _LAG_MS_CUDA.get(model_id, _UNKNOWN_MODEL_LAG_MS)
