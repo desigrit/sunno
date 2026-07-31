@@ -339,11 +339,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             var text = line.Text;
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            // The speaker matters as much as the words when several people are talking, and
-            // a screen-reader user can't see the label above the line.
-            CaptionAnnouncer.Text = string.IsNullOrEmpty(line.SpeakerLabel)
-                ? text
-                : $"{line.SpeakerLabel}: {text}";
+            // DisplayLabel, not SpeakerLabel — the same property the visible line and the
+            // clipboard use. SpeakerLabel is the raw name, so a user's own line would be read
+            // out under their name while the screen showed "You", and a self line whose raw
+            // label is null would show "You:" but be announced with no prefix at all. Someone
+            // relying on speech should hear the transcript the sighted user is reading.
+            CaptionAnnouncer.Text = line.HasSpeaker ? $"{line.DisplayLabel}: {text}" : text;
 
             var peer = FrameworkElementAutomationPeer.CreatePeerForElement(CaptionAnnouncer);
             TraceAnnounceOnce($"announce: peer={(peer is null ? "null" : peer.GetType().Name)}");
