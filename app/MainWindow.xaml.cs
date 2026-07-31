@@ -25,24 +25,29 @@ public sealed record AudioDevice(int Index, string Name, string HostApi, bool Lo
 
 /// <summary>A model shown in first-run setup.</summary>
 public sealed record ModelChoice(string Id, string Name, string Detail, int ApproxMb, bool Available,
-                                 string LagText = "", bool Responsive = true)
+                                 int LagMs = 0, bool Responsive = true)
 {
     public string SizeLabel => ApproxMb >= 1024
         ? $"{ApproxMb / 1024.0:0.0} GB"
         : $"{ApproxMb} MB";
 
     /// <summary>
-    /// Speed line for the first-run picker. This is the one screen where the number really
-    /// matters: the choice made here costs a multi-gigabyte download, and on a CPU-only
-    /// machine the most accurate model runs several seconds behind — which is fine for
-    /// captioning a video and useless for following a conversation.
+    /// Description prefixed with the expected delay. The first-run screen has room to wrap,
+    /// so unlike the compact picker it also spells out when a delay is too long to follow a
+    /// conversation — this is the one screen where the choice costs a multi-gigabyte
+    /// download, and on a CPU-only machine the most accurate model runs seconds behind.
     /// </summary>
-    public string SpeedLabel => Responsive
-        ? $"Captions {LagText}"
-        : $"Captions {LagText} — fine for video, too slow for conversation";
-
-    public Visibility SpeedVisibility =>
-        string.IsNullOrEmpty(LagText) ? Visibility.Collapsed : Visibility.Visible;
+    public string DetailWithSpeed
+    {
+        get
+        {
+            if (LagMs <= 0) return Detail;
+            var delay = LagMs < 1000 ? $"~{LagMs / 1000.0:0.0}s" : $"~{LagMs / 1000.0:0}s";
+            return Responsive
+                ? $"({delay} delay) {Detail}"
+                : $"({delay} delay — fine for video, too slow for conversation) {Detail}";
+        }
+    }
 }
 
 public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPropertyChanged
@@ -458,7 +463,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (st.State == "error")
         {
             ShowActionableError(st);
-            SetStatus(st.Code == "mic_denied" ? "Microphone blocked" : "Error");
+            // Both cases have a full explanation elsewhere: the InfoBar names the problem and
+        // offers the fix, and the centre state describes what the app is doing. Repeating a
+        // two-word summary in the corner adds nothing.
+        ClearStatus();
             return;
         }
 
@@ -497,12 +505,32 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // it is simply paused, the engine is up and the wait is over.
         if (st.State == "stopped") ShowIdleState();
 
+        // The centre of the window already carries loading, paused and error states in full,
+        // and failures get an InfoBar. Anything repeated down here is noise beside the
+        // recording clock, so those cases blank the line instead.
+        if (st.State == "loading") { ClearStatus(); return; }
+
         SetStatus(st.State switch
         {
-            "loading" => $"Loading {st.Model}…",
+            // No other surface asserts that the microphone was released, and that is a
+            // privacy claim rather than a progress report, so it keeps its place.
             "stopped" => "Paused · microphone released",
             _ => st.State,
         });
+    }
+
+    /// <summary>
+    /// Blank the status line. Used where the state is already shown more prominently
+    /// elsewhere — the centre empty state or the InfoBar — so this corner stays what it
+    /// looks like: a recording indicator, not a status bar.
+    /// </summary>
+    private void ClearStatus()
+    {
+        _elapsedTimer.Stop();
+        ToolTipService.SetToolTip(StatusText, _captureClock.Elapsed > TimeSpan.Zero
+            ? $"{FormatElapsed(_captureClock.Elapsed)} recorded in this conversation"
+            : null);
+        StatusText.Text = string.Empty;
     }
 
     /// <summary>
@@ -722,7 +750,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         _backendFatal = true;
         _backendLoading = false;
-        SetStatus("Speech engine stopped");
+        // The InfoBar below carries the title, the detail and the log path.
+        ClearStatus();
         _micProblem = false;
         _micCanPrompt = false;
         _infoSticky = false;
@@ -1112,7 +1141,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                     Detail = o.Detail,
                     ApproxMb = o.ApproxMb,
                     Available = o.Available,
-                    LagText = o.LagText,
+                    LagMs = o.LagMs,
                     Responsive = o.Responsive,
                     IsSelected = o.Id == current,
                     InUse = o.Id == current,
@@ -1217,7 +1246,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// </summary>
     private void ShowLoadingState(string title)
     {
-        LoadingRing.IsActive = true;
+        LoadingRing.IsAnimating = true;
         LoadingRing.Visibility = Visibility.Visible;
         EmptyGlyph.Visibility = Visibility.Collapsed;
         EmptyTitle.Text = title;
@@ -1227,7 +1256,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     private void ShowReadyState()
     {
-        LoadingRing.IsActive = false;
+        LoadingRing.IsAnimating = false;
         LoadingRing.Visibility = Visibility.Collapsed;
         EmptyGlyph.Visibility = Visibility.Visible;
         EmptyTitle.Text = "Listening for speech";
@@ -1237,7 +1266,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// <summary>Engine is up, but capture is paused — by the user, or awaiting consent.</summary>
     private void ShowIdleState()
     {
-        LoadingRing.IsActive = false;
+        LoadingRing.IsAnimating = false;
         LoadingRing.Visibility = Visibility.Collapsed;
         EmptyGlyph.Visibility = Visibility.Visible;
         EmptyTitle.Text = "Paused";
@@ -1271,7 +1300,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (_backendFatal) return;
         // On a cold start the socket isn't up yet because the model is still loading.
         // "Starting…" is more truthful than "Reconnecting…" for a first run.
-        SetStatus(_backendLoading ? "Starting the speech engine…" : "Reconnecting…");
+        // Startup and reconnection are both already on screen in the centre, with a spinner
+        // and the "about half a minute" expectation. Saying it twice was the duplication
+        // that made this corner look like a status bar.
+        ClearStatus();
     }
 
     private void OnRoster(IReadOnlyList<SpeakerInfo> speakers)
@@ -1331,7 +1363,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         ModelList.Items.Clear();
         foreach (var o in options)
             ModelList.Items.Add(new ModelChoice(o.Id, o.Name, o.Detail, o.ApproxMb, o.Available,
-                                                o.LagText, o.Responsive));
+                                                o.LagMs, o.Responsive));
 
         // Preselect the model this hardware can actually keep up with, preferring one
         // already on disk. Picking purely by "already downloaded" would start a CPU-only
@@ -1348,7 +1380,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         DownloadPanel.Visibility = Visibility.Collapsed;
         DownloadButton.IsEnabled = true;
         SetupOverlay.Visibility = Visibility.Visible;
-        SetStatus("Setup required");
+        // The setup overlay fills the window; nothing needs restating underneath it.
+        ClearStatus();
     }
 
     private async void OnDownloadModel(object sender, RoutedEventArgs e)
@@ -1708,7 +1741,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // latches _stopping, so a Start afterwards leaves the new capture process untied to
         // kill-on-close (it would outlive a killed UI still holding the microphone) and with
         // crash reporting silently dead for the rest of the session.
-        SetStatus(device.Loopback ? "Switching to system audio…" : "Switching microphone…");
+        // The centre shows the reload with a spinner; the picker already shows which device
+        // was chosen.
+        ClearStatus();
         PauseCaptureClock();
 
         _captureRequested = false;

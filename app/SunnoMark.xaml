@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Sunno.SunnoMark"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <UserControl.Resources>
+        <!-- The caption lines write themselves in, hold, then clear and start again. This is
+             the loading indicator, so it has to read as work in progress on its own: it
+             replaces a ProgressRing rather than sitting beside one.
+
+             Opacity and RenderTransform are the two properties WinUI can animate off the UI
+             thread, so this keeps running smoothly while the engine loads and the UI thread
+             is busy. Anything else here would need EnableDependentAnimation and would stutter
+             at exactly the moment it is on screen. -->
+        <Storyboard x:Key="Typing" RepeatBehavior="Forever">
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetName="Line1Scale"
+                                           Storyboard.TargetProperty="ScaleX">
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0.06" />
+                <EasingDoubleKeyFrame KeyTime="0:0:0.45" Value="1">
+                    <EasingDoubleKeyFrame.EasingFunction>
+                        <CubicEase EasingMode="EaseOut" />
+                    </EasingDoubleKeyFrame.EasingFunction>
+                </EasingDoubleKeyFrame>
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetName="Line1"
+                                           Storyboard.TargetProperty="Opacity">
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.3" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:1.9" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:2.2" Value="0" />
+                <DiscreteDoubleKeyFrame KeyTime="0:0:2.6" Value="0" />
+            </DoubleAnimationUsingKeyFrames>
+
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetName="Line2Scale"
+                                           Storyboard.TargetProperty="ScaleX">
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0.06" />
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0.3" Value="0.06" />
+                <EasingDoubleKeyFrame KeyTime="0:0:0.75" Value="1">
+                    <EasingDoubleKeyFrame.EasingFunction>
+                        <CubicEase EasingMode="EaseOut" />
+                    </EasingDoubleKeyFrame.EasingFunction>
+                </EasingDoubleKeyFrame>
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetName="Line2"
+                                           Storyboard.TargetProperty="Opacity">
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0" />
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0.3" Value="0" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.6" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:1.9" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:2.2" Value="0" />
+                <DiscreteDoubleKeyFrame KeyTime="0:0:2.6" Value="0" />
+            </DoubleAnimationUsingKeyFrames>
+
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetName="Line3Scale"
+                                           Storyboard.TargetProperty="ScaleX">
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0.1" />
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0.6" Value="0.1" />
+                <EasingDoubleKeyFrame KeyTime="0:0:1.05" Value="1">
+                    <EasingDoubleKeyFrame.EasingFunction>
+                        <CubicEase EasingMode="EaseOut" />
+                    </EasingDoubleKeyFrame.EasingFunction>
+                </EasingDoubleKeyFrame>
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetName="Line3"
+                                           Storyboard.TargetProperty="Opacity">
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0" />
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0.6" Value="0" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.9" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:1.9" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:2.2" Value="0" />
+                <!-- Holds the cleared state to the end of the loop, which gives the cycle a
+                     beginning instead of restarting the instant it finishes. It also hides
+                     the point where ScaleX snaps back for the next pass. -->
+                <DiscreteDoubleKeyFrame KeyTime="0:0:2.6" Value="0" />
+            </DoubleAnimationUsingKeyFrames>
+        </Storyboard>
+    </UserControl.Resources>
+
+    <!-- 48-unit grid, matching the proportions the app icon is drawn on, so the mark is the
+         same shape everywhere it appears. The bubble is a tint of the ink and the caption
+         lines are the ink at full strength: one colour, two weights, which stays monochrome
+         and keeps working in high contrast. -->
+    <Viewbox>
+        <Canvas Width="48" Height="48">
+            <!-- Body and tail as one filled path. Two overlapping shapes at 26% would stack
+                 their alphas and show a seam where the tail meets the body. -->
+            <Path x:Name="Bubble" Opacity="0.26"
+                  Fill="{ThemeResource SunnoInkBrush}"
+                  Data="M 13,4 L 35,4 A 9,9 0 0 1 44,13 L 44,29 A 9,9 0 0 1 35,38
+                        L 23.5,38 L 16.3,45.8 L 15,38 L 13,38 A 9,9 0 0 1 4,29
+                        L 4,13 A 9,9 0 0 1 13,4 Z" />
+
+            <Rectangle x:Name="Line1" Canvas.Left="11" Canvas.Top="11.2"
+                       Width="26.4" Height="3.6" RadiusX="1.8" RadiusY="1.8"
+                       Fill="{ThemeResource SunnoInkBrush}" RenderTransformOrigin="0,0.5">
+                <Rectangle.RenderTransform>
+                    <ScaleTransform x:Name="Line1Scale" />
+                </Rectangle.RenderTransform>
+            </Rectangle>
+            <Rectangle x:Name="Line2" Canvas.Left="11" Canvas.Top="19.6"
+                       Width="26.4" Height="3.6" RadiusX="1.8" RadiusY="1.8"
+                       Fill="{ThemeResource SunnoInkBrush}" RenderTransformOrigin="0,0.5">
+                <Rectangle.RenderTransform>
+                    <ScaleTransform x:Name="Line2Scale" />
+                </Rectangle.RenderTransform>
+            </Rectangle>
+            <Rectangle x:Name="Line3" Canvas.Left="11" Canvas.Top="28"
+                       Width="16" Height="3.6" RadiusX="1.8" RadiusY="1.8"
+                       Fill="{ThemeResource SunnoInkBrush}" RenderTransformOrigin="0,0.5">
+                <Rectangle.RenderTransform>
+                    <ScaleTransform x:Name="Line3Scale" />
+                </Rectangle.RenderTransform>
+            </Rectangle>
+        </Canvas>
+    </Viewbox>
+</UserControl>

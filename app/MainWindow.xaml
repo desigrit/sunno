@@ -186,19 +186,6 @@
                                                                TextTrimming="CharacterEllipsis"
                                                                TextWrapping="NoWrap"
                                                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                                                    <!-- How far behind captions run on this
-                                                         machine. Its own line rather than
-                                                         appended to the description: on a
-                                                         CPU-only PC this is the number that
-                                                         decides the choice, and it must not
-                                                         be the part that gets trimmed. -->
-                                                    <TextBlock Text="{x:Bind LagText, Mode=OneWay}"
-                                                               Visibility="{x:Bind LagVisibility, Mode=OneWay}"
-                                                               FontSize="11" LineHeight="14"
-                                                               Style="{StaticResource CaptionTextBlockStyle}"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               TextWrapping="NoWrap"
-                                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                                                     <ProgressBar Height="2" Margin="0,5,4,5"
                                                                  Visibility="{x:Bind BusyVisibility, Mode=OneWay}"
                                                                  IsIndeterminate="{x:Bind IsIndeterminate, Mode=OneWay}"
@@ -314,13 +301,19 @@
                             HorizontalAlignment="Center" Spacing="6">
                     <!-- The ring and the glyph occupy the same slot: while the engine loads there
                          is nothing to listen with yet, so promising "Listening" would be a lie. -->
-                    <Grid Height="32" HorizontalAlignment="Center">
-                        <ProgressRing x:Name="LoadingRing" IsActive="True" Width="28" Height="28"
-                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        <FontIcon x:Name="EmptyGlyph" Glyph="&#xE720;" FontSize="26"
-                                  Visibility="Collapsed"
-                                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                                  Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    <Grid Height="60" HorizontalAlignment="Center">
+                        <!-- The mark writing itself, rather than a generic spinner. It shows
+                             captions being composed, not sound arriving — while the engine
+                             loads there is no microphone open, so a "listening" animation
+                             would be a lie. Stopping it restores the completed mark. -->
+                        <local:SunnoMark x:Name="LoadingRing" Width="58" Height="58"
+                                         IsAnimating="True"
+                                         AutomationProperties.AccessibilityView="Raw"
+                                         HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <local:SunnoMark x:Name="EmptyGlyph" Width="58" Height="58"
+                                         Visibility="Collapsed"
+                                         AutomationProperties.AccessibilityView="Raw"
+                                         HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Grid>
                     <TextBlock x:Name="EmptyTitle" Text="Starting the speech engine"
                                HorizontalAlignment="Center"
@@ -388,7 +381,7 @@
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10"
                             HorizontalAlignment="Right" VerticalAlignment="Center">
                     <StackPanel Spacing="4" VerticalAlignment="Center" MinWidth="160">
-                        <TextBlock x:Name="StatusText" Text="Starting…"
+                        <TextBlock x:Name="StatusText" Text=""
                                    HorizontalAlignment="Right" TextTrimming="CharacterEllipsis"
                                    Style="{StaticResource CaptionTextBlockStyle}"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -486,16 +479,9 @@
                                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                             </Border>
                                         </StackPanel>
-                                        <TextBlock Text="{x:Bind Detail}" TextWrapping="Wrap"
+                                        <TextBlock Text="{x:Bind DetailWithSpeed}" TextWrapping="Wrap"
                                                    Style="{StaticResource CaptionTextBlockStyle}"
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                        <!-- What this choice costs in delay on this machine.
-                                             Shown here because the decision is expensive to
-                                             reverse: it commits to a multi-gigabyte download. -->
-                                        <TextBlock Text="{x:Bind SpeedLabel}" TextWrapping="Wrap"
-                                                   Visibility="{x:Bind SpeedVisibility}"
-                                                   Style="{StaticResource CaptionTextBlockStyle}"
-                                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                                     </StackPanel>
                                     <TextBlock Grid.Column="1" Text="{x:Bind SizeLabel}"
                                                VerticalAlignment="Center"

@@ -27,16 +27,20 @@ public sealed class ModelRow : INotifyPropertyChanged
     public int ApproxMb { get; set; }
 
     /// <summary>
-    /// Expected delay between someone finishing a sentence and its caption appearing, e.g.
-    /// "about 0.7s behind". Measured per model per device, because the spread is what
-    /// decides whether a choice is usable: the same model runs about 0.6s behind on a GPU
-    /// and about 4.5s behind on CPU, and 4.5s is fine for captioning a recorded video but
-    /// useless for following a conversation.
+    /// Expected delay between someone finishing a sentence and its caption appearing.
+    /// Folded into the description rather than given its own line: on a GPU every model
+    /// lands between 0.2 s and 0.7 s, and a column of those invites reading them as a
+    /// ranking — which made the most accurate model look like the worst choice. As a
+    /// parenthetical it reads as a fact about the option instead of a score.
     /// </summary>
-    public string LagText { get; set; } = string.Empty;
+    public int LagMs { get; set; }
 
     /// <summary>Whether that delay is short enough to follow live conversation.</summary>
     public bool Responsive { get; set; } = true;
+
+    private string LagPrefix => LagMs <= 0
+        ? string.Empty
+        : LagMs < 1000 ? $"(~{LagMs / 1000.0:0.0}s delay) " : $"(~{LagMs / 1000.0:0}s delay) ";
 
     /// <summary>Already downloaded.</summary>
     public bool Available
@@ -106,16 +110,9 @@ public sealed class ModelRow : INotifyPropertyChanged
         set => Set(ref _progress, value);
     }
 
-    /// <summary>The description, or "In use" for the loaded model.</summary>
-    public string SecondaryText => _inUse ? "In use" : Detail;
-
-    /// <summary>
-    /// The speed line under the description. Left blank rather than showing a placeholder
-    /// when the backend didn't report one, so an older backend degrades to the previous
-    /// layout instead of to an empty row that looks broken.
-    /// </summary>
-    public Visibility LagVisibility =>
-        !_isBusy && !string.IsNullOrEmpty(LagText) ? Visibility.Visible : Visibility.Collapsed;
+    /// <summary>The description prefixed with the expected delay, or "In use" for the
+    /// loaded model.</summary>
+    public string SecondaryText => _inUse ? $"{LagPrefix}In use" : $"{LagPrefix}{Detail}";
 
     /// <summary>e.g. "1.5 GB" — shown on the right only when a download is needed.</summary>
     public string SizeLabel => FormatSize(ApproxMb);
@@ -136,9 +133,9 @@ public sealed class ModelRow : INotifyPropertyChanged
         get
         {
             var text = string.IsNullOrEmpty(Detail) ? Name : $"{Name}\n{Detail}";
-            if (!string.IsNullOrEmpty(LagText))
+            if (LagMs > 0)
             {
-                text += $"\nCaptions appear {LagText}";
+                text += $"\nCaptions appear about {LagMs / 1000.0:0.0}s after each sentence";
                 if (!Responsive)
                     text += " — fine for video, too slow to follow a conversation";
             }

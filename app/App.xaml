@@ -9,6 +9,25 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
 
+            <!-- The single ink the artwork is drawn in: the splash, the mark in the empty
+                 state and the first-run screen are all one colour, varied only in strength.
+                 Deliberately the brand teal rather than the user's accent colour — this is
+                 the same mark as the app icon, and an icon that recolours per machine stops
+                 being an identity. Lifted on dark, where #1F8A70 goes muddy against Mica,
+                 and handed to the system in high contrast, where any brand colour is wrong. -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="SunnoInkBrush" Color="#42B795" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="SunnoInkBrush" Color="#1F8A70" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="SunnoInkBrush"
+                                     Color="{ThemeResource SystemColorWindowTextColor}" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+
             <!-- Speaker palette. Everything else uses system theme resources so the app
                  follows light/dark, high contrast and the user accent colour. Mid-tone
                  hues, legible on both light and dark Mica. -->
