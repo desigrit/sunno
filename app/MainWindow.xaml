@@ -153,8 +153,17 @@
                                           AutomationProperties.Name="Speech models">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="models:ModelRow">
+                                        <!-- Padding zeroed at the top and VerticalContentAlignment
+                                             set to Top so the label lines up with the bullet.
+                                             The default template parks the bullet in a
+                                             VerticalAlignment="Top", Height="32" band, so
+                                             against two lines of text it floats about 7px
+                                             above their centre — the row looked subtly
+                                             lopsided rather than obviously wrong. -->
                                         <RadioButton GroupName="SpeechModel" Margin="0,1"
-                                                     MinWidth="0" MinHeight="0"
+                                                     MinWidth="0" MinHeight="32"
+                                                     Padding="8,0,0,0"
+                                                     VerticalContentAlignment="Center"
                                                      HorizontalAlignment="Stretch"
                                                      HorizontalContentAlignment="Stretch"
                                                      IsChecked="{x:Bind IsSelected, Mode=OneWay}"
