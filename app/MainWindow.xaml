@@ -148,21 +148,21 @@
                                       HorizontalScrollMode="Disabled"
                                       HorizontalScrollBarVisibility="Disabled">
                             <ItemsControl x:Name="ModelOptions" ItemsSource="{x:Bind Models}"
-                                          Margin="12,2,18,6"
+                                          Margin="12,6,18,12"
                                           VerticalAlignment="Top"
                                           AutomationProperties.Name="Speech models">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="models:ModelRow">
-                                        <!-- Padding zeroed at the top and VerticalContentAlignment
-                                             set to Top so the label lines up with the bullet.
-                                             The default template parks the bullet in a
-                                             VerticalAlignment="Top", Height="32" band, so
-                                             against two lines of text it floats about 7px
-                                             above their centre — the row looked subtly
-                                             lopsided rather than obviously wrong. -->
-                                        <RadioButton GroupName="SpeechModel" Margin="0,1"
+                                        <!-- The breathing room is deliberately in the margin,
+                                             not the row height. The default template parks its
+                                             bullet in a fixed 32px top-aligned band, so a row
+                                             taller than 32px puts the bullet above the label's
+                                             centre again — the misalignment this just fixed.
+                                             Margin separates the rows; MinHeight keeps each one
+                                             at the height the bullet expects. -->
+                                        <RadioButton GroupName="SpeechModel" Margin="0,5"
                                                      MinWidth="0" MinHeight="32"
-                                                     Padding="8,0,0,0"
+                                                     Padding="12,0,4,0"
                                                      VerticalContentAlignment="Center"
                                                      HorizontalAlignment="Stretch"
                                                      HorizontalContentAlignment="Stretch"
