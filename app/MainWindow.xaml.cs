@@ -550,14 +550,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         if (!_captureClock.IsRunning) return;
 
-        // Loopback is exempt. WASAPI delivers no frames at all from an output endpoint while
-        // nothing is playing, so a quiet desktop looks identical to a dead capture thread and
-        // the warning would fire every time a video is paused. The indicator that shouts
-        // "captions have stopped" has to be trustworthy, and one that cries wolf on silence
-        // is worse than not having it. A microphone always delivers frames, silence included,
-        // so the check stays meaningful there.
-        var stalled = _settings.LoopbackDeviceIndex is null
-                      && _sinceLevel.Elapsed > AudioStallAfter;
+        // Applies to loopback as well as the microphone. The loopback stream synthesises
+        // silence while an output endpoint is merely idle, so levels keep flowing and a
+        // paused video no longer trips this. Levels stop only when capture is genuinely
+        // dead — including an output device that disappears mid-session, which otherwise
+        // leaves a running clock above a transcript that will never gain another line.
+        var stalled = _sinceLevel.Elapsed > AudioStallAfter;
         if (stalled != _audioStalled)
         {
             // Only on the transition. Reassigning a tooltip under a resting pointer is what

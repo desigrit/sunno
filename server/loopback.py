@@ -18,12 +18,22 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from typing import Callable, Iterator
 
 import numpy as np
 import soxr
 
 from .config import FRAME_SAMPLES, SAMPLE_RATE
+
+# How long to wait on the queue before deciding the endpoint is merely idle. Short enough
+# that the silence generator tracks wall clock closely, long enough not to spin a core.
+_IDLE_POLL_S = 0.1
+_FRAME_SECONDS = FRAME_SAMPLES / SAMPLE_RATE
+# One scheduling hiccup should not dump a burst of silence into the VAD in a single go.
+_MAX_CATCHUP_FRAMES = 16
+# Shared read-only buffer; the pipeline never mutates the frames it is handed.
+_SILENCE = np.zeros(FRAME_SAMPLES, dtype=np.float32)
 
 _LOOPBACK_SUFFIX = " [Loopback]"
 
@@ -153,9 +163,29 @@ class LoopbackStream:
     def device_name(self) -> str:
         return f"{self._name} (system audio)"
 
+    @property
+    def is_alive(self) -> bool:
+        """Whether the endpoint is still there.
+
+        An output device can disappear underneath us — Bluetooth headphones leaving range,
+        a monitor being switched off — and PortAudio reports that by the stream ceasing to
+        be active rather than by raising. Distinguishing that from an idle-but-healthy
+        endpoint is the whole reason the caller can trust a silent loopback.
+        """
+        with self._lock:
+            stream = self._stream
+        if stream is None:
+            return False
+        try:
+            return bool(stream.is_active())
+        except Exception:
+            # A dead stream typically throws rather than returning False.
+            return False
+
     def frames(self, should_continue: Callable[[], bool] | None = None) -> Iterator[np.ndarray]:
         keep_going = should_continue or (lambda: True)
         pending = np.empty(0, dtype=np.float32)
+        last_yield = time.monotonic()
         resampler = None
         if self.capture_rate != SAMPLE_RATE:
             resampler = soxr.ResampleStream(
@@ -164,8 +194,35 @@ class LoopbackStream:
 
         while keep_going():
             try:
-                block = self._queue.get(timeout=0.5)
+                block = self._queue.get(timeout=_IDLE_POLL_S)
             except queue.Empty:
+                # WASAPI delivers no callbacks at all from an output endpoint while nothing is
+                # playing, so a quiet desktop produces an empty queue indefinitely. Yield real
+                # silence instead of spinning: silence is the truthful description of an idle
+                # output, and it keeps the pipeline's level reporting alive so the UI can tell
+                # "nothing is playing" apart from "capture has died".
+                #
+                # This is what makes the stall warning trustworthy on loopback. If the endpoint
+                # actually disappears — a Bluetooth headset walking out of range — the stream
+                # stops being active, this loop exits, levels stop, and the UI surfaces it.
+                # Without the distinction a vanished device looked exactly like a quiet one,
+                # and the app sat showing a running clock and no captions.
+                if not self.is_alive:
+                    break
+
+                # Enough frames to cover the wall-clock gap, not one per poll. The pipeline
+                # measures silence by counting frames, so under-producing would stretch
+                # end-of-utterance detection by the same factor — a 520 ms hangover would take
+                # eight seconds, and the last thing said before a pause would hang unfinalised.
+                now = time.monotonic()
+                owed = int((now - last_yield) / _FRAME_SECONDS)
+                if owed <= 0:
+                    continue
+                # Cap the catch-up so a scheduling hiccup can't dump a burst of silence into
+                # the VAD in one go.
+                for _ in range(min(owed, _MAX_CATCHUP_FRAMES)):
+                    yield _SILENCE
+                last_yield = now
                 continue
             if block is None:
                 break
@@ -181,3 +238,6 @@ class LoopbackStream:
             while pending.size >= FRAME_SAMPLES:
                 yield pending[:FRAME_SAMPLES]
                 pending = pending[FRAME_SAMPLES:]
+                # Real audio resets the clock too, so the silence generator only ever fills
+                # gaps rather than double-counting time already covered by captured frames.
+                last_yield = time.monotonic()
