@@ -1059,6 +1059,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         _modelSectionOpen = !_modelSectionOpen;
 
+        // Re-ask for the catalogue on open. The delay figures are learned from real decodes,
+        // and the first fetch happens on connect before a single utterance has been timed —
+        // so without this the user would keep seeing the shipped estimate all session and
+        // only get their own machine's number after a restart.
+        if (_modelSectionOpen && _connected) _ = _client.RequestModelsAsync();
+
         var target = 0.0;
         if (_modelSectionOpen)
         {
