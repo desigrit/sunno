@@ -24,16 +24,8 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <!-- The system drag region is this element, not the whole bar. Handing the bar
-                 itself to SetTitleBar gives the entire strip to the window manager, and any
-                 button sitting in it stops receiving clicks — so the overflow button needs
-                 the draggable part scoped to everything left of it. Spans the icon and title
-                 because neither is interactive, so the usual "drag the app by its name"
-                 gesture still works. The right padding clears the caption buttons. -->
-            <Border x:Name="TitleBarDrag" Grid.Column="0" Grid.ColumnSpan="3"
-                    Background="Transparent" />
+            <!-- The whole bar is the drag region again now that no button sits in it. -->
             <!-- The real app icon rather than a generic glyph, so the title bar matches the
                  taskbar and Start tile. Source is set from disk in code: ms-appx:/// goes
                  through the package resource system, which does not index files the packaging
@@ -44,41 +36,6 @@
                        Style="{StaticResource CaptionTextBlockStyle}"
                        VerticalAlignment="Center"
                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-
-            <Button x:Name="MoreButton" Grid.Column="3" Width="32" Height="32" Padding="0"
-                    Background="Transparent" BorderThickness="0"
-                    VerticalAlignment="Center"
-                    AutomationProperties.Name="More options"
-                    ToolTipService.ToolTip="More options">
-                <FontIcon Glyph="&#xE712;" FontSize="15" />
-                <Button.Flyout>
-                    <MenuFlyout Placement="Bottom">
-                        <MenuFlyoutItem Text="Larger text" Click="OnBigger">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E8;" /></MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutItem Text="Smaller text" Click="OnSmaller">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E7;" /></MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutSeparator />
-                        <!-- Check on the left, icon beside it: the arrangement File
-                             Explorer, Notepad and Task Manager all use, and what the
-                             default template already does. An earlier attempt to move
-                             the check into the right-hand slot fought the control's
-                             visual states and left two ticks on hover; that slot is
-                             for accelerators and submenu chevrons, not state. -->
-                        <ToggleMenuFlyoutItem x:Name="AlwaysOnTopItem" Text="Always on top"
-                                              IsChecked="True" Click="OnToggleAlwaysOnTop">
-                            <ToggleMenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE718;" />
-                            </ToggleMenuFlyoutItem.Icon>
-                        </ToggleMenuFlyoutItem>
-                        <MenuFlyoutSeparator />
-                        <MenuFlyoutItem Text="Clear transcript" Click="OnClear">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                    </MenuFlyout>
-                </Button.Flyout>
-            </Button>
         </Grid>
 
         <!-- body -->
@@ -302,8 +259,10 @@
                            HorizontalAlignment="Left" VerticalAlignment="Top"
                            Foreground="Transparent"
                            AutomationProperties.LiveSetting="Polite" />
+                <!-- Top padding clears the overflow button that floats at this corner, so
+                     a caption can never slide underneath it. -->
                 <ScrollViewer x:Name="CaptionScroller" VerticalScrollBarVisibility="Auto"
-                              Padding="24,14,24,16">
+                              Padding="24,40,24,16">
                     <ItemsControl x:Name="CaptionItems" ItemsSource="{x:Bind Lines}"
                                   FontSize="{x:Bind CaptionSize, Mode=OneWay}"
                                   AutomationProperties.Name="Live transcript">
@@ -453,11 +412,52 @@
                 </StackPanel>
             </Grid>
         </Border>
+
+        <!-- Overflow menu, in the content area just under the caption buttons rather than
+             in the title bar itself. That is where Sound Recorder and its siblings put
+             window-level commands, and it keeps the drag region intact: SetTitleBar hands
+             the whole bar to the window manager, so a button placed inside it silently
+             stops receiving clicks. Declared after the body so it draws above it. -->
+        <Button x:Name="MoreButton" Grid.Row="1" Width="32" Height="32" Padding="0"
+                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,4,12,0"
+                Background="Transparent" BorderThickness="0"
+                AutomationProperties.Name="More options"
+                ToolTipService.ToolTip="More options">
+            <FontIcon Glyph="&#xE712;" FontSize="15" />
+            <Button.Flyout>
+                <MenuFlyout Placement="Bottom">
+                    <MenuFlyoutItem Text="Larger text" Click="OnBigger">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E8;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem Text="Smaller text" Click="OnSmaller">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E7;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutSeparator />
+                    <!-- Check on the left, icon beside it: the arrangement File
+                         Explorer, Notepad and Task Manager all use, and what the
+                         default template already does. An earlier attempt to move
+                         the check into the right-hand slot fought the control's
+                         visual states and left two ticks on hover; that slot is
+                         for accelerators and submenu chevrons, not state. -->
+                    <ToggleMenuFlyoutItem x:Name="AlwaysOnTopItem" Text="Always on top"
+                                          IsChecked="True" Click="OnToggleAlwaysOnTop">
+                        <ToggleMenuFlyoutItem.Icon>
+                            <FontIcon Glyph="&#xE718;" />
+                        </ToggleMenuFlyoutItem.Icon>
+                    </ToggleMenuFlyoutItem>
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem Text="Clear transcript" Click="OnClear">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                </MenuFlyout>
+            </Button.Flyout>
+        </Button>
+
         <!-- Actionable errors, chiefly the microphone-blocked case. The whole reason this
              app is packaged is the per-app microphone toggle, so the state that toggle
              creates must be explained rather than dumped as PortAudio diagnostics. -->
         <InfoBar x:Name="MicInfoBar" Grid.Row="1" Severity="Warning" IsOpen="False"
-                 IsClosable="True" VerticalAlignment="Top" Margin="16,8,16,0"
+                 IsClosable="True" VerticalAlignment="Top" Margin="16,8,56,0"
                  CloseButtonClick="OnMicInfoClosed">
             <InfoBar.ActionButton>
                 <HyperlinkButton x:Name="MicActionLink" Content="Open Settings"

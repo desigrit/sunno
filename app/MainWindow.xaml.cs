@@ -265,7 +265,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             SystemBackdrop = new MicaBackdrop { Kind = MicaKind.Base };
 
         ExtendsContentIntoTitleBar = true;
-        SetTitleBar(TitleBarDrag);
+        SetTitleBar(AppTitleBar);
 
         AppWindow.Resize(new SizeInt32(1040, 660));
         if (AppWindow.Presenter is OverlappedPresenter presenter)
