@@ -235,14 +235,22 @@
                      control announced nothing: it is metadata, and nothing in WinUI raises
                      LiveRegionChanged for it. A dedicated one-line element carries the text
                      instead, so exactly one finalised caption is spoken per utterance rather
-                     than every provisional revision. Zero-sized and hidden from sighted
-                     layout, but NOT Collapsed — a collapsed element has no peer to raise
-                     the event on. -->
+                     than every provisional revision.
+
+                     Sized 1x1 with transparent ink rather than Height=0/Opacity=0. A
+                     zero-area element reports IsOffscreen=true, and assistive clients skip
+                     offscreen providers — verified with a UIA client, which saw the element
+                     but received no events from it. One transparent pixel is imperceptible
+                     and keeps it a live participant in the tree.
+
+                     Deliberately no AutomationProperties.Name: a TextBlock's UIA name
+                     defaults to its text, and naming it would make every announcement read
+                     the label instead of the caption. -->
                 <TextBlock x:Name="CaptionAnnouncer"
-                           Height="0" Width="0" Opacity="0" IsHitTestVisible="False"
+                           Width="1" Height="1" IsHitTestVisible="False"
                            HorizontalAlignment="Left" VerticalAlignment="Top"
-                           AutomationProperties.LiveSetting="Polite"
-                           AutomationProperties.Name="Latest caption" />
+                           Foreground="Transparent"
+                           AutomationProperties.LiveSetting="Polite" />
                 <ScrollViewer x:Name="CaptionScroller" VerticalScrollBarVisibility="Auto"
                               Padding="24,14,24,16">
                     <ItemsControl x:Name="CaptionItems" ItemsSource="{x:Bind Lines}"

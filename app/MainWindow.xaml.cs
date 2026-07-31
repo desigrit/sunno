@@ -330,7 +330,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         try
         {
-            if (!AutomationPeer.ListenerExists(AutomationEvents.LiveRegionChanged)) return;
+            if (!AutomationPeer.ListenerExists(AutomationEvents.LiveRegionChanged))
+            {
+                TraceAnnounceOnce("announce: no listener");
+                return;
+            }
 
             var text = line.Text;
             if (string.IsNullOrWhiteSpace(text)) return;
@@ -341,13 +345,29 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 ? text
                 : $"{line.SpeakerLabel}: {text}";
 
-            FrameworkElementAutomationPeer.CreatePeerForElement(CaptionAnnouncer)
-                ?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+            var peer = FrameworkElementAutomationPeer.CreatePeerForElement(CaptionAnnouncer);
+            TraceAnnounceOnce($"announce: peer={(peer is null ? "null" : peer.GetType().Name)}");
+            peer?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
         }
-        catch
+        catch (Exception ex)
         {
             // Announcement is an enhancement; never let it interrupt the visible transcript.
+            TraceAnnounceOnce($"announce failed: {ex.GetType().Name}");
         }
+    }
+
+    private string? _lastAnnounceTrace;
+
+    /// <summary>
+    /// Trace the announcement path only when its outcome changes. This runs once per
+    /// finalised utterance, and a file append per caption would mean thousands of writes
+    /// across an afternoon of captioning to record the same answer over and over.
+    /// </summary>
+    private void TraceAnnounceOnce(string message)
+    {
+        if (_lastAnnounceTrace == message) return;
+        _lastAnnounceTrace = message;
+        App.Trace(message);
     }
 
     private CaptionLine AddLine(int id)
@@ -529,7 +549,14 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         if (!_captureClock.IsRunning) return;
 
-        var stalled = _sinceLevel.Elapsed > AudioStallAfter;
+        // Loopback is exempt. WASAPI delivers no frames at all from an output endpoint while
+        // nothing is playing, so a quiet desktop looks identical to a dead capture thread and
+        // the warning would fire every time a video is paused. The indicator that shouts
+        // "captions have stopped" has to be trustworthy, and one that cries wolf on silence
+        // is worse than not having it. A microphone always delivers frames, silence included,
+        // so the check stays meaningful there.
+        var stalled = _settings.LoopbackDeviceIndex is null
+                      && _sinceLevel.Elapsed > AudioStallAfter;
         if (stalled != _audioStalled)
         {
             // Only on the transition. Reassigning a tooltip under a resting pointer is what
