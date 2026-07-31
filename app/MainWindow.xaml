@@ -246,6 +246,7 @@
                 <ScrollViewer x:Name="CaptionScroller" VerticalScrollBarVisibility="Auto"
                               Padding="24,14,24,16">
                     <ItemsControl x:Name="CaptionItems" ItemsSource="{x:Bind Lines}"
+                                  FontSize="{x:Bind CaptionSize, Mode=OneWay}"
                                   AutomationProperties.Name="Live transcript">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="models:CaptionLine">
@@ -281,7 +282,6 @@
                                     <RichTextBlock local:WordInlines.Line="{x:Bind}"
                                                    IsTextSelectionEnabled="True"
                                                    TextWrapping="Wrap"
-                                                   FontSize="{x:Bind local:MainWindow.CaptionSize, Mode=OneWay}"
                                                    Opacity="{x:Bind local:MainWindow.LineOpacity(IsFinal, IsSelf), Mode=OneWay}"
                                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                                    RightTapped="OnTranscriptRightTapped">

@@ -45,7 +45,7 @@ public sealed record ModelChoice(string Id, string Name, string Detail, int Appr
         string.IsNullOrEmpty(LagText) ? Visibility.Collapsed : Visibility.Visible;
 }
 
-public sealed partial class MainWindow : Window
+public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPropertyChanged
 {
     private const int MaxLines = 200;
     private const double MinFont = 16, MaxFont = 56;
@@ -121,8 +121,25 @@ public sealed partial class MainWindow : Window
     /// <summary>How long without a level report before the clock stops claiming all is well.</summary>
     private static readonly TimeSpan AudioStallAfter = TimeSpan.FromSeconds(4);
 
-    /// <summary>Caption text size; the item templates read this.</summary>
-    public static double CaptionSize { get; private set; } = 26;
+    /// <summary>
+    /// Caption text size; the transcript <see cref="ItemsControl"/> binds its FontSize to this and
+    /// the caption RichTextBlock inherits it. Observable so a change flows to every on-screen line
+    /// without rebuilding the list. Seeded from the persisted setting, clamped in case the file is
+    /// stale or corrupt.
+    /// </summary>
+    private double _captionSize = 26;
+    public double CaptionSize
+    {
+        get => _captionSize;
+        private set
+        {
+            if (_captionSize == value) return;
+            _captionSize = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(CaptionSize)));
+        }
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
     public ObservableCollection<CaptionLine> Lines { get; } = new();
     public ObservableCollection<SpeakerRow> Speakers { get; } = new();
@@ -130,6 +147,9 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
+        // Seed the persisted caption size before the XAML binding reads it. Clamped so a stale or
+        // corrupt settings file can't push the transcript to an absurd size.
+        _captionSize = Math.Clamp(_settings.CaptionFontSize, MinFont, MaxFont);
         App.Trace("MainWindow ctor: InitializeComponent");
         InitializeComponent();
         App.Trace("MainWindow ctor: XAML loaded");
@@ -1707,10 +1727,11 @@ public sealed partial class MainWindow : Window
     private void SetFontSize(double size)
     {
         CaptionSize = Math.Clamp(size, MinFont, MaxFont);
-        // Re-materialise so the templates pick up the new size.
-        var snapshot = Lines.ToList();
-        Lines.Clear();
-        foreach (var l in snapshot) Lines.Add(l);
+        // The transcript ItemsControl binds its FontSize to CaptionSize (OneWay) and the caption
+        // RichTextBlocks inherit it, so on-screen lines resize in place — no teardown, no lost
+        // selection. Persist the choice so it survives a restart.
+        _settings.CaptionFontSize = CaptionSize;
+        _settings.Save();
         ScrollToEnd();
     }
 
