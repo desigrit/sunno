@@ -63,9 +63,14 @@ html, body {
   background: currentColor;
   flex: 0 0 auto;
 }
-/* Square icon = "press to stop"; triangle = "press to start". */
+/* Two bars = "press to pause"; triangle = "press to start". The bars are painted with a
+   gradient rather than built from borders: box-sizing is border-box here, so a 2px element
+   with 3px borders collapses its content box and renders as one solid block. */
 #bar button.primary[data-running="true"]  { color: #ff8a72; }
-#bar button.primary[data-running="true"] .icon { border-radius: 1px; }
+#bar button.primary[data-running="true"] .icon {
+  background: linear-gradient(to right,
+    currentColor 0 3px, transparent 3px 6px, currentColor 6px 9px);
+}
 #bar button.primary[data-running="false"] { color: #46d6ab; }
 #bar button.primary[data-running="false"] .icon {
   background: transparent;

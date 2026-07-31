@@ -10,6 +10,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -286,6 +287,47 @@ public sealed partial class MainWindow : Window
         _provisional = null;
         _currentUtterance = -1;
         ScrollToEnd();
+        AnnounceCaption(line);
+    }
+
+    /// <summary>
+    /// Speak a finalised caption to a screen reader or braille display.
+    ///
+    /// AutomationProperties.LiveSetting on the transcript is metadata only: it tells an
+    /// assistive client how urgently to treat a change, but nothing in WinUI watches the
+    /// items and raises the event, so on its own it announces precisely nothing. The event
+    /// has to be raised by hand.
+    ///
+    /// Announced on the final only, never on provisionals. A provisional is rewritten every
+    /// few hundred milliseconds as the decoder revises itself, and speaking each revision
+    /// would produce a stutter of half-sentences that contradict each other — the audible
+    /// form of words appearing and disappearing that don't match what was said.
+    ///
+    /// ListenerExists is checked first so the peer tree isn't built when nothing is
+    /// listening; creating peers has a real cost on a control that updates this often.
+    /// </summary>
+    private void AnnounceCaption(CaptionLine line)
+    {
+        try
+        {
+            if (!AutomationPeer.ListenerExists(AutomationEvents.LiveRegionChanged)) return;
+
+            var text = line.Text;
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            // The speaker matters as much as the words when several people are talking, and
+            // a screen-reader user can't see the label above the line.
+            CaptionAnnouncer.Text = string.IsNullOrEmpty(line.SpeakerLabel)
+                ? text
+                : $"{line.SpeakerLabel}: {text}";
+
+            FrameworkElementAutomationPeer.CreatePeerForElement(CaptionAnnouncer)
+                ?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        }
+        catch
+        {
+            // Announcement is an enhancement; never let it interrupt the visible transcript.
+        }
     }
 
     private CaptionLine AddLine(int id)
@@ -417,7 +459,7 @@ public sealed partial class MainWindow : Window
         SetStatus(st.State switch
         {
             "loading" => $"Loading {st.Model}…",
-            "stopped" => "Stopped · microphone released",
+            "stopped" => "Paused · microphone released",
             _ => st.State,
         });
     }
@@ -1126,8 +1168,9 @@ public sealed partial class MainWindow : Window
         LoadingRing.IsActive = false;
         LoadingRing.Visibility = Visibility.Collapsed;
         EmptyGlyph.Visibility = Visibility.Visible;
-        EmptyTitle.Text = "Not listening";
-        EmptyDetail.Text = "Press the microphone button to start.";
+        EmptyTitle.Text = "Paused";
+        // "Start", not "Resume": on first run, before consent, nothing has ever started.
+        EmptyDetail.Text = "Press the microphone button to start listening.";
     }
 
     private void OnConnection(bool connected)
@@ -1191,11 +1234,11 @@ public sealed partial class MainWindow : Window
     private void SetRunning(bool running)
     {
         _running = running;
-        ToggleGlyph.Glyph = running ? "\uE71A" : "\uE720";   // stop square / microphone
+        ToggleGlyph.Glyph = running ? "\uE769" : "\uE720";   // pause bars / microphone
         ToggleButton.SetValue(AutomationProperties.NameProperty,
-            running ? "Stop transcribing and release the microphone" : "Start transcribing");
+            running ? "Pause transcribing and release the microphone" : "Start transcribing");
         ToolTipService.SetToolTip(ToggleButton,
-            running ? "Stop transcribing (Space)" : "Start transcribing (Space)");
+            running ? "Pause transcribing (Space)" : "Start transcribing (Space)");
 
         if (!running)
         {

@@ -156,9 +156,9 @@ function setState(state, label) {
 function setRunning(next) {
   running = next;
   els.toggle.dataset.running = String(running);
-  els.toggleLabel.textContent = running ? 'Stop' : 'Start';
+  els.toggleLabel.textContent = running ? 'Pause' : 'Start';
   els.toggle.title = running
-    ? 'Stop transcribing and release the microphone (Space)'
+    ? 'Pause transcribing and release the microphone (Space)'
     : 'Start transcribing (Space)';
   els.captions.classList.toggle('stopped', !running);
   els.meter.classList.toggle('stopped', !running);
@@ -217,7 +217,7 @@ function handle(msg) {
     case 'status':
       if (typeof msg.running === 'boolean') setRunning(msg.running);
       if (msg.state === 'loading') setState('loading', `loading ${msg.model || ''}`.trim());
-      else if (msg.state === 'stopped') setState('stopped', 'stopped — mic released');
+      else if (msg.state === 'stopped') setState('stopped', 'paused — mic released');
       else if (msg.state === 'listening') setState('listening', msg.device || 'listening');
       else setState(msg.state, msg.state);
       break;

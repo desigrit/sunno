@@ -231,11 +231,22 @@
 
             <!-- transcript -->
             <Grid Grid.Column="1">
+                <!-- The element a screen reader actually hears. LiveSetting on the items
+                     control announced nothing: it is metadata, and nothing in WinUI raises
+                     LiveRegionChanged for it. A dedicated one-line element carries the text
+                     instead, so exactly one finalised caption is spoken per utterance rather
+                     than every provisional revision. Zero-sized and hidden from sighted
+                     layout, but NOT Collapsed — a collapsed element has no peer to raise
+                     the event on. -->
+                <TextBlock x:Name="CaptionAnnouncer"
+                           Height="0" Width="0" Opacity="0" IsHitTestVisible="False"
+                           HorizontalAlignment="Left" VerticalAlignment="Top"
+                           AutomationProperties.LiveSetting="Polite"
+                           AutomationProperties.Name="Latest caption" />
                 <ScrollViewer x:Name="CaptionScroller" VerticalScrollBarVisibility="Auto"
                               Padding="24,14,24,16">
                     <ItemsControl x:Name="CaptionItems" ItemsSource="{x:Bind Lines}"
-                                  AutomationProperties.Name="Live transcript"
-                                  AutomationProperties.LiveSetting="Polite">
+                                  AutomationProperties.Name="Live transcript">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="models:CaptionLine">
                                 <StackPanel Margin="0,0,0,14">
@@ -354,9 +365,16 @@
                 <Button x:Name="ToggleButton" Grid.Column="1" Click="OnToggleCapture"
                         Width="52" Height="52" CornerRadius="26" Padding="0"
                         Style="{StaticResource AccentButtonStyle}"
-                        AutomationProperties.Name="Stop transcribing"
-                        ToolTipService.ToolTip="Stop or start transcribing (Space)">
-                    <FontIcon x:Name="ToggleGlyph" Glyph="&#xE71A;" FontSize="17" />
+                        AutomationProperties.Name="Pause transcribing"
+                        ToolTipService.ToolTip="Pause or resume transcribing (Space)">
+                    <!-- Pause bars, not a stop square. The backend has always treated this
+                         as a pause — the command handler calls controller.pause(), and the
+                         model and ASR worker stay resident across cycles — so resuming costs
+                         a fraction of a second, not the half-minute a cold start takes. A
+                         stop square promised otherwise, which discourages ducking out of a
+                         conversation for an aside. The microphone genuinely is released
+                         either way; the status line keeps saying so. -->
+                    <FontIcon x:Name="ToggleGlyph" Glyph="&#xE769;" FontSize="17" />
                 </Button>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10"
