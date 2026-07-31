@@ -512,9 +512,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
         SetStatus(st.State switch
         {
-            // No other surface asserts that the microphone was released, and that is a
-            // privacy claim rather than a progress report, so it keeps its place.
-            "stopped" => "Paused · microphone released",
+            "stopped" => "Paused",
             _ => st.State,
         });
     }
@@ -611,9 +609,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void SetStatus(string text)
     {
         _elapsedTimer.Stop();
+        // The microphone really is released while paused, and Windows' own indicator says so
+        // — but it belongs on hover rather than on the line, which stays short.
         ToolTipService.SetToolTip(StatusText, _captureClock.Elapsed > TimeSpan.Zero
-            ? $"{FormatElapsed(_captureClock.Elapsed)} recorded in this conversation"
-            : null);
+            ? $"{FormatElapsed(_captureClock.Elapsed)} recorded · microphone released"
+            : "Microphone released");
         StatusText.Text = text;
     }
 

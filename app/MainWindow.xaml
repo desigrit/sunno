@@ -174,11 +174,31 @@
                                                 </Grid.ColumnDefinitions>
 
                                                 <StackPanel Grid.Column="0" Spacing="0" Padding="0,1,0,1">
-                                                    <TextBlock Text="{x:Bind Name}"
-                                                               FontSize="12.5" LineHeight="16"
-                                                               Style="{StaticResource BodyTextBlockStyle}"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               TextWrapping="NoWrap" />
+                                                    <!-- Name and the "In use" badge share a
+                                                         line. The name takes the remaining
+                                                         width and trims; the badge never
+                                                         shrinks, so which model is running
+                                                         stays legible in a 240px pane. -->
+                                                    <Grid ColumnSpacing="6">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Text="{x:Bind Name}"
+                                                                   FontSize="12.5" LineHeight="16"
+                                                                   Style="{StaticResource BodyTextBlockStyle}"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   TextWrapping="NoWrap" />
+                                                        <Border Grid.Column="1" CornerRadius="8"
+                                                                Padding="7,1,7,2" VerticalAlignment="Center"
+                                                                Visibility="{x:Bind InUseVisibility, Mode=OneWay}"
+                                                                Background="{ThemeResource SunnoInkSubtleBrush}">
+                                                            <TextBlock Text="In use" FontSize="10"
+                                                                       LineHeight="12"
+                                                                       FontWeight="SemiBold"
+                                                                       Foreground="{ThemeResource SunnoInkBrush}" />
+                                                        </Border>
+                                                    </Grid>
                                                     <TextBlock Text="{x:Bind SecondaryText, Mode=OneWay}"
                                                                Visibility="{x:Bind SecondaryVisibility, Mode=OneWay}"
                                                                FontSize="11" LineHeight="14"

@@ -93,7 +93,7 @@ public sealed class ModelRow : INotifyPropertyChanged
         get => _inUse;
         set
         {
-            if (Set(ref _inUse, value)) Notify(nameof(SecondaryText));
+            if (Set(ref _inUse, value)) Notify(nameof(InUseVisibility));
         }
     }
 
@@ -110,9 +110,15 @@ public sealed class ModelRow : INotifyPropertyChanged
         set => Set(ref _progress, value);
     }
 
-    /// <summary>The description prefixed with the expected delay, or "In use" for the
-    /// loaded model.</summary>
-    public string SecondaryText => _inUse ? $"{LagPrefix}In use" : $"{LagPrefix}{Detail}";
+    /// <summary>
+    /// The description, always prefixed with the expected delay. The loaded model keeps its
+    /// description too — "In use" moved up beside the name as a badge, so this line no
+    /// longer has to be sacrificed to say which one is running.
+    /// </summary>
+    public string SecondaryText => $"{LagPrefix}{Detail}";
+
+    /// <summary>The "In use" pill, beside the name rather than replacing the description.</summary>
+    public Visibility InUseVisibility => _inUse ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>e.g. "1.5 GB" — shown on the right only when a download is needed.</summary>
     public string SizeLabel => FormatSize(ApproxMb);
@@ -150,6 +156,7 @@ public sealed class ModelRow : INotifyPropertyChanged
         IsIndeterminate = false;
         Progress = 0;
         Notify(nameof(SecondaryText));
+        Notify(nameof(InUseVisibility));
     }
 
     /// <summary>Fetching bytes: a bar that fills, with no number to watch.</summary>

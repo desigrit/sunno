@@ -18,13 +18,22 @@
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
                     <SolidColorBrush x:Key="SunnoInkBrush" Color="#42B795" />
+                    <!-- Badge fill: the same ink at low opacity, so the pill reads as teal
+                         while the label stays full-strength teal on top of it. A solid teal
+                         fill with white text measures 4.26:1 in light theme — under the 4.5:1
+                         a small bold label needs — and this app is the last place to ship a
+                         contrast shortfall. -->
+                    <SolidColorBrush x:Key="SunnoInkSubtleBrush" Color="#42B795" Opacity="0.22" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="SunnoInkBrush" Color="#1F8A70" />
+                    <SolidColorBrush x:Key="SunnoInkSubtleBrush" Color="#1F8A70" Opacity="0.16" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="HighContrast">
                     <SolidColorBrush x:Key="SunnoInkBrush"
                                      Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="SunnoInkSubtleBrush"
+                                     Color="{ThemeResource SystemColorHighlightColor}" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
