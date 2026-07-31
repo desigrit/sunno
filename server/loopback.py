@@ -188,8 +188,13 @@ class LoopbackStream:
         last_yield = time.monotonic()
         resampler = None
         if self.capture_rate != SAMPLE_RATE:
+            # HQ, matching the microphone path. This was "QQ" — soxr's lowest setting — which
+            # measured 73.9 dB against HQ's 81.4 dB resampling 44.1 kHz to 16 kHz. The
+            # transcript happened to come out identical on the clip tested, but there was no
+            # reason for system audio to be fed a worse signal than the microphone, and the
+            # cost of the better filter is not measurable next to a Whisper decode.
             resampler = soxr.ResampleStream(
-                self.capture_rate, SAMPLE_RATE, 1, dtype="float32", quality="QQ"
+                self.capture_rate, SAMPLE_RATE, 1, dtype="float32", quality="HQ"
             )
 
         while keep_going():
