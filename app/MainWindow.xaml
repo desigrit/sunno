@@ -70,6 +70,7 @@
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="models:SpeakerRow">
                                 <Grid ColumnSpacing="10" Padding="4,7"
+                                      AutomationProperties.Name="{x:Bind Label, Mode=OneWay}"
                                       ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
@@ -334,7 +335,7 @@
                     <ComboBox x:Name="DevicePicker" MinWidth="190" MaxWidth="240"
                               PlaceholderText="Default microphone"
                               SelectionChanged="OnDeviceChanged"
-                              AutomationProperties.Name="Microphone" />
+                              AutomationProperties.Name="Input device" />
                 </StackPanel>
 
                 <Button x:Name="ToggleButton" Grid.Column="1" Click="OnToggleCapture"
@@ -366,8 +367,19 @@
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E7;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
                                 <MenuFlyoutSeparator />
+                                <!-- The check moves to the right-hand slot so the left column
+                                     can carry an icon like every other item in this menu.
+                                     Still a ToggleMenuFlyoutItem, so Narrator keeps the toggle
+                                     semantics; the right-hand slot is normally the keyboard
+                                     accelerator, so its automation text is cleared to stop a
+                                     tick being announced as a shortcut. -->
                                 <ToggleMenuFlyoutItem x:Name="AlwaysOnTopItem" Text="Always on top"
-                                                      IsChecked="True" Click="OnToggleAlwaysOnTop" />
+                                                      IsChecked="True" Click="OnToggleAlwaysOnTop"
+                                                      AutomationProperties.AcceleratorKey="">
+                                    <ToggleMenuFlyoutItem.Icon>
+                                        <FontIcon x:Name="AlwaysOnTopGlyph" Glyph="&#xE735;" />
+                                    </ToggleMenuFlyoutItem.Icon>
+                                </ToggleMenuFlyoutItem>
                                 <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Text="Clear transcript" Click="OnClear">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>

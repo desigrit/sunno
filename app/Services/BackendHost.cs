@@ -52,6 +52,20 @@ public sealed class BackendHost : IDisposable
         }
     }
 
+    /// <summary>Package family name, or null when unpackaged.</summary>
+    private static string? PackageFamilyName()
+    {
+        int length = 0;
+        if (GetCurrentPackageFamilyName(ref length, null) != 122) return null;   // ERROR_INSUFFICIENT_BUFFER
+        var buffer = new System.Text.StringBuilder(length);
+        return GetCurrentPackageFamilyName(ref length, buffer) == 0 ? buffer.ToString() : null;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet =
+        System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int GetCurrentPackageFamilyName(ref int length,
+                                                          System.Text.StringBuilder? name);
+
     [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet =
         System.Runtime.InteropServices.CharSet.Unicode)]
     private static extern int GetCurrentPackageFullName(ref int packageFullNameLength,
@@ -252,19 +266,50 @@ public sealed class BackendHost : IDisposable
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Sunno", "backend.log");
 
+    /// <summary>
+    /// Where the log actually lands. Under MSIX, writes to LocalAppData are redirected into
+    /// the package's LocalCache, so showing the raw path sends the user somewhere that looks
+    /// empty in Explorer.
+    /// </summary>
+    public static string DisplayLogPath
+    {
+        get
+        {
+            if (!IsPackaged()) return LogPath;
+            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var packages = Path.Combine(local, "Packages");
+            try
+            {
+                var family = PackageFamilyName();
+                if (family is not null)
+                    return Path.Combine(packages, family, "LocalCache", "Local", "Sunno", "backend.log");
+            }
+            catch { /* fall through to the unredirected path */ }
+            return LogPath;
+        }
+    }
+
     /// <summary>Turn an exit code into something a non-developer can act on.</summary>
     private string DescribeExit(int code)
     {
-        // 0xC0000005 and friends arrive as a negative exit code: the backend was terminated by
-        // the OS rather than exiting, which means a native fault in a bundled module.
-        var native = code is < 0 or > 0x40000000;
-        var tail = string.Join(Environment.NewLine, RecentLog().TakeLast(6));
+        // Only lines that look like a failure. The log also carries every caption, so taking
+        // the tail buried the actual cause under the transcript — which is what it used to do,
+        // producing an error banner hundreds of pixels tall containing no useful information.
+        var errorLines = RecentLog()
+            .Where(l => l.Contains("Traceback", StringComparison.OrdinalIgnoreCase)
+                     || l.Contains("Error", StringComparison.OrdinalIgnoreCase)
+                     || l.Contains("Exception", StringComparison.OrdinalIgnoreCase)
+                     || l.TrimStart().StartsWith("[fatal]", StringComparison.OrdinalIgnoreCase))
+            .TakeLast(3)
+            .ToList();
 
-        var reason = native
-            ? $"The speech engine stopped unexpectedly (0x{code:X8})."
+        // A negative or very large code means the OS terminated the process rather than it
+        // exiting. The number carries nothing a user could act on, so don't show it.
+        var reason = code is < 0 or > 0x40000000
+            ? "The speech engine stopped unexpectedly."
             : $"The speech engine exited with code {code}.";
 
-        return string.IsNullOrWhiteSpace(tail) ? reason : $"{reason}\n{tail}";
+        return errorLines.Count == 0 ? reason : $"{reason}\n{string.Join("\n", errorLines)}";
     }
 
     public IReadOnlyList<string> RecentLog()

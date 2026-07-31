@@ -38,6 +38,11 @@ public static class WordInlines
         DependencyProperty.RegisterAttached(
             "Ranges", typeof(object), typeof(WordInlines), new PropertyMetadata(null));
 
+    /// <summary>The one ToolTip instance attached to a block, whose content we retarget.</summary>
+    private static readonly DependencyProperty TipProperty =
+        DependencyProperty.RegisterAttached(
+            "Tip", typeof(object), typeof(WordInlines), new PropertyMetadata(null));
+
     private sealed record WordRange(int Start, int End, string Text, double Confidence);
 
     private static void OnLineChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -59,8 +64,6 @@ public static class WordInlines
 
         block.PointerMoved -= OnPointerMoved;
         block.PointerMoved += OnPointerMoved;
-        block.PointerExited -= OnPointerExited;
-        block.PointerExited += OnPointerExited;
 
         Render(block, line);
     }
@@ -98,6 +101,7 @@ public static class WordInlines
                 // Provisional text, or a model that returned no word data.
                 paragraph.Inlines.Add(new Run { Text = line.Text });
                 block.SetValue(RangesProperty, null);
+                DetachTooltip(block);
                 return;
             }
 
@@ -112,7 +116,16 @@ public static class WordInlines
                 var end = text.Length;
                 while (end > start && char.IsWhiteSpace(text[end - 1])) end--;
 
-                if (start > 0) paragraph.Inlines.Add(new Run { Text = text[..start] });
+                // The hit-test range deliberately covers the surrounding spaces even though
+                // only the word itself is styled. Ranges then tile the whole line, so sweeping
+                // the pointer along it never lands in a gap that reports no word at all.
+                var rangeStart = -1;
+                if (start > 0)
+                {
+                    var lead = new Run { Text = text[..start] };
+                    paragraph.Inlines.Add(lead);
+                    rangeStart = lead.ContentStart.Offset;
+                }
 
                 var core = text[start..end];
                 if (core.Length > 0)
@@ -141,15 +154,26 @@ public static class WordInlines
 
                     // Read the offsets back from the element itself: derived character counts
                     // would drift from RichTextBlock's own offset space.
-                    ranges.Add(new WordRange(
-                        inline.ContentStart.Offset, inline.ContentEnd.Offset,
-                        core, word.Confidence));
-                }
+                    if (rangeStart < 0) rangeStart = inline.ContentStart.Offset;
+                    var rangeEnd = inline.ContentEnd.Offset;
 
-                if (end < text.Length) paragraph.Inlines.Add(new Run { Text = text[end..] });
+                    if (end < text.Length)
+                    {
+                        var trail = new Run { Text = text[end..] };
+                        paragraph.Inlines.Add(trail);
+                        rangeEnd = trail.ContentEnd.Offset;
+                    }
+
+                    ranges.Add(new WordRange(rangeStart, rangeEnd, core, word.Confidence));
+                }
+                else if (end < text.Length)
+                {
+                    paragraph.Inlines.Add(new Run { Text = text[end..] });
+                }
             }
 
-            block.SetValue(RangesProperty, ranges);
+            block.SetValue(RangesProperty, ranges.Count > 0 ? ranges : null);
+            if (ranges.Count > 0) AttachTooltip(block); else DetachTooltip(block);
         }
         catch
         {
@@ -162,15 +186,56 @@ public static class WordInlines
                 p.Inlines.Add(new Run { Text = line.Text });
                 block.Blocks.Add(p);
                 block.SetValue(RangesProperty, null);
+                DetachTooltip(block);
             }
             catch { /* leave whatever is on screen */ }
         }
+    }
+
+    /// <summary>
+    /// Attaches one long-lived ToolTip whose content is retargeted as the pointer moves.
+    ///
+    /// The tooltip must exist BEFORE the pointer enters. ToolTipService starts its hover timer
+    /// from the owner's PointerEntered; a tooltip created later — say, inside PointerMoved once
+    /// a word is known — has already missed that trigger and never opens. Creating a fresh
+    /// ToolTip per word is worse still, because replacing the attached object also discards any
+    /// tooltip currently on screen.
+    /// </summary>
+    private static void AttachTooltip(RichTextBlock block)
+    {
+        if (block.GetValue(TipProperty) is ToolTip existing)
+        {
+            // The block is recycled across lines, so whatever word the last line put here no
+            // longer applies. Blank rather than stale: the next pointer move fills it in.
+            existing.Content = null;
+            return;
+        }
+
+        var tip = new ToolTip();
+        // Content is filled by the first PointerMoved. If the pointer arrived without one —
+        // content scrolling under a stationary pointer — there is nothing to say yet, and an
+        // empty tooltip box would just be a glitch.
+        tip.Opened += (s, _) =>
+        {
+            if (s is ToolTip t && t.Content is null) t.IsOpen = false;
+        };
+        block.SetValue(TipProperty, tip);
+        ToolTipService.SetToolTip(block, tip);
+    }
+
+    private static void DetachTooltip(RichTextBlock block)
+    {
+        if (block.GetValue(TipProperty) is not ToolTip tip) return;
+        tip.IsOpen = false;
+        block.SetValue(TipProperty, null);
+        ToolTipService.SetToolTip(block, null);
     }
 
     private static void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
         if (sender is not RichTextBlock block) return;
         if (block.GetValue(RangesProperty) is not List<WordRange> ranges || ranges.Count == 0) return;
+        if (block.GetValue(TipProperty) is not ToolTip tip) return;
 
         try
         {
@@ -182,17 +247,15 @@ public static class WordInlines
             // Inclusive on both sides would make adjacent words overlap at their shared
             // boundary and report whichever happened to be found first.
             var hit = ranges.FirstOrDefault(r => offset >= r.Start && offset < r.End);
-            if (hit is null)
-            {
-                ToolTipService.SetToolTip(block, null);
-                return;
-            }
 
-            // Rebuilding the tooltip on every move would flicker; only swap when the word does.
-            if (ToolTipService.GetToolTip(block) is ToolTip existing &&
-                existing.Content as string == Describe(hit)) return;
+            // Past the end of the text — GetPositionFromPoint clamps to the nearest position,
+            // so report the nearest word rather than going blank in the trailing whitespace of
+            // a wrapped line.
+            hit ??= offset <= ranges[0].Start ? ranges[0] : ranges[^1];
 
-            ToolTipService.SetToolTip(block, new ToolTip { Content = Describe(hit) });
+            // Rebuilding the content on every move would flicker; only swap when the word does.
+            var text = Describe(hit);
+            if (tip.Content as string != text) tip.Content = text;
         }
         catch
         {
@@ -202,11 +265,6 @@ public static class WordInlines
 
     private static string Describe(WordRange word) =>
         $"\u201c{word.Text}\u201d — {word.Confidence:0}% confident";
-
-    private static void OnPointerExited(object sender, PointerRoutedEventArgs e)
-    {
-        if (sender is RichTextBlock block) ToolTipService.SetToolTip(block, null);
-    }
 
     private static Brush? _uncertainBrush;
 

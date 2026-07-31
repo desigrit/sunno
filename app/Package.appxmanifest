@@ -11,7 +11,7 @@
   <Identity
     Name="Sunno.Offline"
     Publisher="CN=LiveCaptionsDev"
-    Version="1.0.34.0"
+    Version="1.0.40.0"
     ProcessorArchitecture="x64" />
 
   <Properties>

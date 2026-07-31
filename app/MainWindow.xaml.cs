@@ -90,6 +90,14 @@ public sealed partial class MainWindow : Window
     /// <summary>Suppresses the Checked handler while the list is rebuilt from the backend.</summary>
     private bool _suppressModelEvent;
 
+    /// <summary>
+    /// How long the microphone has been open for this capture run. A Stopwatch rather than a
+    /// wall-clock start time so an NTP correction or a daylight-saving jump can't make the
+    /// counter leap or run backwards.
+    /// </summary>
+    private readonly System.Diagnostics.Stopwatch _captureClock = new();
+    private readonly DispatcherTimer _elapsedTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+
     /// <summary>Caption text size; the item templates read this.</summary>
     public static double CaptionSize { get; private set; } = 26;
 
@@ -125,12 +133,15 @@ public sealed partial class MainWindow : Window
         {
             App.Trace("MainWindow Closed -> exiting");
             MicrophoneAccess.Changed -= OnMicAccessChanged;
+            _elapsedTimer.Stop();
             _ = _client.DisposeAsync();
             _backend.Dispose();
             // WinUI doesn't end the process when the last window closes; without this the app
             // lingers invisibly (and, before the job object, kept the microphone open).
             Application.Current.Exit();
         };
+
+        _elapsedTimer.Tick += (_, _) => TickElapsed();
 
         // Consent has to be settled before anything opens the microphone. On first run we haven't
         // asked yet, so the backend starts paused regardless of what Windows reports — otherwise
@@ -149,7 +160,7 @@ public sealed partial class MainWindow : Window
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex);
-        if (!string.IsNullOrEmpty(error)) StatusText.Text = error;
+        if (!string.IsNullOrEmpty(error)) SetStatus(error);
         App.Trace($"backend.Start -> {(string.IsNullOrEmpty(error) ? "ok" : error)}");
         _client.Start();
         _ = LoadDevicesAsync();
@@ -215,6 +226,7 @@ public sealed partial class MainWindow : Window
             presenter.PreferredMinimumWidth = 720;
             presenter.PreferredMinimumHeight = 420;
         }
+        SyncAlwaysOnTopItem();
     }
 
     // ---------- caption stream ----------
@@ -338,7 +350,7 @@ public sealed partial class MainWindow : Window
         if (st.State == "error")
         {
             ShowActionableError(st);
-            StatusText.Text = st.Code == "mic_denied" ? "Microphone blocked" : "Error";
+            SetStatus(st.Code == "mic_denied" ? "Microphone blocked" : "Error");
             return;
         }
 
@@ -363,6 +375,8 @@ public sealed partial class MainWindow : Window
             // with no explanation at all.
             if (!_infoSticky) MicInfoBar.IsOpen = false;
             ShowReadyState();
+            ShowElapsed();
+            return;
         }
 
         if (_micProblem && st.State == "stopped")
@@ -375,14 +389,57 @@ public sealed partial class MainWindow : Window
         // it is simply paused, the engine is up and the wait is over.
         if (st.State == "stopped") ShowIdleState();
 
-        StatusText.Text = st.State switch
+        SetStatus(st.State switch
         {
             "loading" => $"Loading {st.Model}…",
             "stopped" => "Stopped · microphone released",
-            "listening" => ShortDeviceName(st.Device) ?? "Listening",
             _ => st.State,
-        };
+        });
     }
+
+    /// <summary>
+    /// Hand the status line to the elapsed-time counter. The device name moves to the picker
+    /// and to this line's tooltip; a running clock is the more useful thing to show, because
+    /// it is the one piece of state that says "the microphone is open right now".
+    /// </summary>
+    private void ShowElapsed()
+    {
+        // Repeated "listening" reports during one run must not restart the count.
+        if (!_captureClock.IsRunning) _captureClock.Restart();
+        if (!_elapsedTimer.IsEnabled) _elapsedTimer.Start();
+
+        // The device name lives in the picker below; this line is just the clock.
+        ToolTipService.SetToolTip(StatusText, "How long the microphone has been open");
+        AutomationProperties.SetName(StatusText, "Recording time");
+
+        StatusText.Text = FormatElapsed(_captureClock.Elapsed);
+    }
+
+    private void TickElapsed()
+    {
+        if (!_captureClock.IsRunning) return;
+        StatusText.Text = FormatElapsed(_captureClock.Elapsed);
+    }
+
+    /// <summary>
+    /// Any other status message owns the line, so the counter has to yield — otherwise the
+    /// next tick would paint over an error the user needs to read. Capture genuinely stops
+    /// whenever this happens (pause, device switch, backend restart), so the count resets
+    /// rather than accumulating across runs.
+    /// </summary>
+    private void SetStatus(string text)
+    {
+        _elapsedTimer.Stop();
+        _captureClock.Reset();
+        ToolTipService.SetToolTip(StatusText, null);
+        AutomationProperties.SetName(StatusText, "Status");
+        StatusText.Text = text;
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed) =>
+        elapsed.TotalHours >= 1
+            ? $"{(int)elapsed.TotalHours}:{elapsed.Minutes:00}:{elapsed.Seconds:00}"
+            : $"{elapsed.Minutes}:{elapsed.Seconds:00}";
 
     /// <summary>
     /// Explain a failure the user can actually act on. A hard-of-hearing user staring at a
@@ -489,18 +546,17 @@ public sealed partial class MainWindow : Window
     {
         _backendFatal = true;
         _backendLoading = false;
-        StatusText.Text = "Speech engine stopped";
-
+        SetStatus("Speech engine stopped");
         _micProblem = false;
         _micCanPrompt = false;
         _infoSticky = false;
         MicInfoBar.Severity = InfoBarSeverity.Error;
         MicInfoBar.Title = "The speech engine stopped";
-        MicInfoBar.Message = $"{message}\n\nDetails were written to {BackendHost.LogPath}";
+        MicInfoBar.Message = $"{message}\n\nDetails were written to {BackendHost.DisplayLogPath}";
         MicActionLink.Content = "Copy details";
         MicActionLink.Visibility = Visibility.Visible;
         MicInfoBar.IsOpen = true;
-        _crashDetail = $"{message}\n\nLog: {BackendHost.LogPath}";
+        _crashDetail = $"{message}\n\nLog: {BackendHost.DisplayLogPath}";
     }
 
     private string? _crashDetail;
@@ -1007,14 +1063,6 @@ public sealed partial class MainWindow : Window
         EmptyDetail.Text = "Press the microphone button to start.";
     }
 
-    /// <summary>Device strings carry format detail that's too long for the status line.</summary>
-    private static string? ShortDeviceName(string? device)
-    {
-        if (string.IsNullOrEmpty(device)) return null;
-        var cut = device.IndexOf('(');
-        return cut > 1 ? device[..cut].Trim() : device;
-    }
-
     private void OnConnection(bool connected)
     {
         _connected = connected;
@@ -1041,7 +1089,7 @@ public sealed partial class MainWindow : Window
         if (_backendFatal) return;
         // On a cold start the socket isn't up yet because the model is still loading.
         // "Starting…" is more truthful than "Reconnecting…" for a first run.
-        StatusText.Text = _backendLoading ? "Starting the speech engine…" : "Reconnecting…";
+        SetStatus(_backendLoading ? "Starting the speech engine…" : "Reconnecting…");
     }
 
     private void OnRoster(IReadOnlyList<SpeakerInfo> speakers)
@@ -1084,6 +1132,10 @@ public sealed partial class MainWindow : Window
 
         if (!running)
         {
+            // The status message that follows owns the line; stop the counter here so a tick
+            // can't repaint over it in the gap before that message arrives.
+            _elapsedTimer.Stop();
+            _captureClock.Reset();
             LevelFill.Height = 0;
             if (_provisional is not null) Lines.Remove(_provisional);
             _provisional = null;
@@ -1109,7 +1161,7 @@ public sealed partial class MainWindow : Window
         DownloadPanel.Visibility = Visibility.Collapsed;
         DownloadButton.IsEnabled = true;
         SetupOverlay.Visibility = Visibility.Visible;
-        StatusText.Text = "Setup required";
+        SetStatus("Setup required");
     }
 
     private async void OnDownloadModel(object sender, RoutedEventArgs e)
@@ -1268,21 +1320,38 @@ public sealed partial class MainWindow : Window
         {
             DevicePicker.Items.Clear();
 
+            // The same physical device is exposed once per host API (WASAPI, MME, DirectSound,
+            // WDM-KS), and each API mangles the name differently — MME truncates at 31
+            // characters, so one microphone arrives as "Microphone (Umik-1  Gain: 18dB",
+            // "…18dB  )" and "…18dB)". Comparing letters and digits only, and treating a
+            // truncated name as the same device, collapses them. The server sorts WASAPI first,
+            // so the entry kept is the modern endpoint with the full name.
+            var mics = new List<DeviceEntry>();
+            var speakers = new List<DeviceEntry>();
+
             foreach (var d in devices)
             {
-                // Microphones and system-audio sources do very different things, so they are
-                // distinguished by a label on the entry itself. A disabled ComboBoxItem was
-                // tried as a group header first and tore the window down on render.
-                var item = new ComboBoxItem
+                var label = CleanDeviceName(d.Name);
+                var key = DeviceKey(label);
+                if (key.Length == 0) continue;
+                if (IsDefaultAlias(label)) continue;
+
+                var group = d.Loopback ? speakers : mics;
+                var match = group.FirstOrDefault(e => IsSameDevice(e, key, d.Name.Length));
+                if (match is not null)
                 {
-                    Content = d.Loopback ? $"{d.Name}  ·  system audio" : d.Name,
-                    Tag = d,
-                };
-                DevicePicker.Items.Add(item);
-                ToolTipService.SetToolTip(item, d.Loopback
-                    ? $"Caption whatever is played through {d.Name} — calls, video, music"
-                    : $"{d.Name} — {d.HostApi}");
+                    // Remember the index anyway: the saved device may be one of the duplicates
+                    // that lost, and the picker still has to show it as selected.
+                    match.Aliases.Add(d.Index);
+                    continue;
+                }
+
+                group.Add(new DeviceEntry(d with { Name = label }, key, d.Name.Length));
             }
+
+            AddDeviceGroup("Input Device - Microphone", mics);
+            AddDeviceGroup("Input Device - System Audio", speakers);
+            SelectActiveDevice();
         }
         finally
         {
@@ -1290,10 +1359,156 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>One kept device plus the indices of the duplicates it absorbed.</summary>
+    private sealed class DeviceEntry(AudioDevice device, string key, int rawNameLength)
+    {
+        public AudioDevice Device { get; } = device;
+        public string Key { get; } = key;
+        public int RawNameLength { get; } = rawNameLength;
+        public List<int> Aliases { get; } = [device.Index];
+    }
+
+    /// <summary>
+    /// Shows which device is actually being captured. The status line now counts recording
+    /// time instead of naming the device, so without this nothing on screen would say what the
+    /// app is listening to.
+    /// </summary>
+    private void SelectActiveDevice()
+    {
+        var wanted = _settings.LoopbackDeviceIndex ?? _settings.DeviceIndex;
+        var loopback = _settings.LoopbackDeviceIndex is not null;
+        if (wanted is null) return;
+
+        foreach (var item in DevicePicker.Items.OfType<ComboBoxItem>())
+        {
+            if (item.Tag is not DeviceEntry entry) continue;
+            if (entry.Device.Loopback != loopback) continue;
+            if (!entry.Aliases.Contains(wanted.Value)) continue;
+            DevicePicker.SelectedItem = item;
+            // The closed picker truncates; the full name is only otherwise visible with the
+            // list open, and the status line no longer carries it.
+            ToolTipService.SetToolTip(DevicePicker, entry.Device.Loopback
+                ? $"Captioning system audio from {entry.Device.Name}"
+                : $"Captioning the microphone {entry.Device.Name}");
+            return;
+        }
+    }
+
+    private void AddDeviceGroup(string header, List<DeviceEntry> group)
+    {
+        if (group.Count == 0) return;
+
+        // A disabled item is the only way to get a non-selectable header into a ComboBox;
+        // it is skipped by keyboard navigation as well as by pointer.
+        DevicePicker.Items.Add(new ComboBoxItem
+        {
+            Content = header,
+            IsEnabled = false,
+            FontSize = 11,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+
+        foreach (var entry in group)
+        {
+            var d = entry.Device;
+            var item = new ComboBoxItem { Content = d.Name, Tag = entry };
+            DevicePicker.Items.Add(item);
+            ToolTipService.SetToolTip(item, d.Loopback
+                ? $"Caption whatever is played through {d.Name} — calls, video, music"
+                : $"{d.Name} — {d.HostApi}");
+        }
+    }
+
+    /// <summary>Letters and digits only, lower-cased — immune to spacing and stray brackets.</summary>
+    private static string DeviceKey(string name)
+    {
+        var sb = new System.Text.StringBuilder(name.Length);
+        foreach (var c in name)
+            if (char.IsLetterOrDigit(c)) sb.Append(char.ToLowerInvariant(c));
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Length MME truncates device names to — MAXPNAMELEN is 32 including the terminator.
+    /// </summary>
+    private const int MmeNameLimit = 31;
+
+    /// <summary>
+    /// Whether a candidate is the device an existing entry already represents. Equal keys are
+    /// the same device. A prefix match only counts when the shorter name sits exactly on MME's
+    /// truncation boundary, which is the only reason a name would be cut short: a name that is
+    /// merely long was not truncated, so "USB Audio Device" and "USB Audio Device Pro" stay
+    /// separate rather than being silently merged into one.
+    /// </summary>
+    private static bool IsSameDevice(DeviceEntry kept, string key, int rawNameLength)
+    {
+        if (kept.Key == key) return true;
+
+        if (key.Length < kept.Key.Length)
+            return rawNameLength == MmeNameLimit && kept.Key.StartsWith(key, StringComparison.Ordinal);
+
+        return kept.RawNameLength == MmeNameLimit && key.StartsWith(kept.Key, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Windows sometimes hands back an unresolved resource string for Bluetooth endpoints,
+    /// e.g. "Headset (@System32\drivers\bthhfenum.sys,#2;%1 Hands-Free%0 ;(R-Phonak hearing
+    /// aid))". The useful parts are the prefix and the innermost parenthesised device name.
+    /// Runs of whitespace are collapsed too, because some drivers pad their names — the UMIK-1
+    /// arrives as "Microphone (Umik-1  Gain: 18dB  )".
+    /// </summary>
+    private static string CleanDeviceName(string name)
+    {
+        var trimmed = Collapse(name);
+        if (!trimmed.Contains('@')) return trimmed;
+
+        var open = trimmed.LastIndexOf('(');
+        var close = trimmed.IndexOf(')', open + 1);
+        if (open < 0 || close <= open + 1) return trimmed;
+
+        var inner = trimmed[(open + 1)..close].Trim();
+        if (inner.Length == 0) return trimmed;
+
+        var firstOpen = trimmed.IndexOf('(');
+        var prefix = firstOpen > 0 ? trimmed[..firstOpen].Trim() : string.Empty;
+        return prefix.Length > 0 ? $"{prefix} ({inner})" : inner;
+    }
+
+    /// <summary>Squeezes whitespace runs — including around brackets — down to single spaces.</summary>
+    private static string Collapse(string name)
+    {
+        var sb = new System.Text.StringBuilder(name.Length);
+        var space = false;
+        foreach (var c in name)
+        {
+            if (char.IsWhiteSpace(c)) { space = true; continue; }
+            if (space && sb.Length > 0 && c != ')') sb.Append(' ');
+            space = false;
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// MME and DirectSound each publish an alias for "whatever the system default is". They are
+    /// not devices, their names say nothing a user would recognise, and leaving the picker on
+    /// its "Default microphone" placeholder already selects the default — so they are noise in
+    /// a list someone has to choose from quickly.
+    /// </summary>
+    private static bool IsDefaultAlias(string name) =>
+        name.StartsWith("Microsoft Sound Mapper", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("Primary Sound Capture Driver", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("Primary Sound Driver", StringComparison.OrdinalIgnoreCase);
+
     private void OnDeviceChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressDeviceEvent) return;
-        if (DevicePicker.SelectedItem is not ComboBoxItem { Tag: AudioDevice device }) return;
+        if (DevicePicker.SelectedItem is not ComboBoxItem { Tag: DeviceEntry entry }) return;
+        var device = entry.Device;
+
+        ToolTipService.SetToolTip(DevicePicker, device.Loopback
+            ? $"Captioning system audio from {device.Name}"
+            : $"Captioning the microphone {device.Name}");
 
         _settings.DeviceIndex = device.Loopback ? null : device.Index;
         _settings.LoopbackDeviceIndex = device.Loopback ? device.Index : null;
@@ -1306,7 +1521,7 @@ public sealed partial class MainWindow : Window
         // latches _stopping, so a Start afterwards leaves the new capture process untied to
         // kill-on-close (it would outlive a killed UI still holding the microphone) and with
         // crash reporting silently dead for the rest of the session.
-        StatusText.Text = device.Loopback ? "Switching to system audio…" : "Switching microphone…";
+        SetStatus(device.Loopback ? "Switching to system audio…" : "Switching microphone…");
 
         _captureRequested = false;
         _connected = false;
@@ -1361,6 +1576,19 @@ public sealed partial class MainWindow : Window
     {
         if (AppWindow.Presenter is OverlappedPresenter presenter)
             presenter.IsAlwaysOnTop = AlwaysOnTopItem.IsChecked;
+        SyncAlwaysOnTopItem();
+    }
+
+    /// <summary>
+    /// Keeps the right-hand tick and the star in step with the toggle. A filled star reads as
+    /// "pinned" even before the tick is noticed, and it is the only cue left in the collapsed
+    /// menu button.
+    /// </summary>
+    private void SyncAlwaysOnTopItem()
+    {
+        var on = AlwaysOnTopItem.IsChecked;
+        AlwaysOnTopItem.KeyboardAcceleratorTextOverride = on ? "\u2713" : string.Empty;
+        AlwaysOnTopGlyph.Glyph = on ? "\uE735" : "\uE734";   // filled star / outline star
     }
 
     private void OnClear(object sender, RoutedEventArgs e)
