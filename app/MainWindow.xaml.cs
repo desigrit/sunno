@@ -465,14 +465,18 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Hand the status line to the elapsed-time counter. The device name moves to the picker;
-    /// a running clock is the more useful thing to show, because it is the one piece of state
-    /// that says "the microphone is open right now".
+    /// Hand the status line to the conversation timer. The device name moves to the picker;
+    /// how long this conversation has been running is the more useful thing to show, and it
+    /// is the one piece of state that says the microphone is open right now.
     /// </summary>
     private void ShowElapsed()
     {
-        // Repeated "listening" reports during one run must not restart the count.
-        if (!_captureClock.IsRunning) _captureClock.Restart();
+        // Start, not Restart. The clock measures the conversation, not one uninterrupted
+        // stretch of it, so pausing for an aside and resuming continues the count rather
+        // than throwing away everything before the pause. Stopwatch accumulates across
+        // Stop/Start, which is exactly this behaviour; Start on a running clock is a no-op,
+        // so repeated "listening" reports during one run are harmless.
+        _captureClock.Start();
         // This one restarts unconditionally: a "listening" report is itself proof of life, and
         // after a reconnect the stall timer would otherwise still be carrying the whole outage
         // and cry "No audio" a second later. The one indicator that must not raise a false
@@ -489,7 +493,7 @@ public sealed partial class MainWindow : Window
         StatusText.Text = FormatElapsed(_captureClock.Elapsed);
     }
 
-    private const string RecordingTimeHint = "How long the microphone has been open";
+    private const string RecordingTimeHint = "How long this conversation has been recording";
     private const string NoAudioHint =
         "The microphone is open but no sound is reaching it. Try another input device.";
 
@@ -522,18 +526,39 @@ public sealed partial class MainWindow : Window
     /// Any other status message owns the line, so the counter has to yield — otherwise the
     /// next tick would paint over an error the user needs to read.
     ///
-    /// This stops the ticking but deliberately does NOT reset the count. A dropped socket takes
-    /// this path while the microphone stays open, and restarting from zero would misreport how
-    /// long the room has been recorded. The count is reset only where capture actually stops.
+    /// Stops the ticking, never the clock. Losing the socket does not stop the microphone,
+    /// and even where capture really does stop the elapsed time is kept: it measures the
+    /// conversation, which outlives any one capture run.
+    ///
+    /// The accumulated time moves into the tooltip rather than vanishing. The line itself
+    /// stays with the message — while paused that message is "microphone released", which is
+    /// a privacy assertion and outranks a number the user can still hover for.
     /// </summary>
     private void SetStatus(string text)
     {
         _elapsedTimer.Stop();
-        ToolTipService.SetToolTip(StatusText, null);
+        ToolTipService.SetToolTip(StatusText, _captureClock.Elapsed > TimeSpan.Zero
+            ? $"{FormatElapsed(_captureClock.Elapsed)} recorded in this conversation"
+            : null);
         StatusText.Text = text;
     }
 
-    /// <summary>Capture really stopped: the next run starts from zero.</summary>
+    /// <summary>
+    /// Capture stopped: freeze the count where it is.
+    ///
+    /// Deliberately not a reset. Ducking out of a conversation for a private aside is the
+    /// whole point of the pause button, and zeroing a forty-minute reading because someone
+    /// stepped away for thirty seconds would punish exactly the behaviour the control exists
+    /// to encourage. Resuming continues from here; only a new conversation starts over.
+    /// </summary>
+    private void PauseCaptureClock()
+    {
+        _elapsedTimer.Stop();
+        _captureClock.Stop();
+        _sinceLevel.Reset();
+    }
+
+    /// <summary>A new conversation: the transcript was cleared, so the count starts over.</summary>
     private void ResetCaptureClock()
     {
         _elapsedTimer.Stop();
@@ -1108,8 +1133,9 @@ public sealed partial class MainWindow : Window
         _engineReadyThisSession = false;
         _startedPaused = !_micGranted || _micDeclined;
         _awaitingSwitchReconnect = true;
-        // The backend process is about to be replaced, so capture genuinely restarts.
-        ResetCaptureClock();
+        // The backend is about to be replaced, so the microphone closes — but the transcript
+        // survives and so does the conversation, so the count freezes rather than resetting.
+        PauseCaptureClock();
 
         // Deliberately NOT persisted yet. A model that downloads but fails to load would
         // otherwise become the choice reloaded on every future launch, turning one bad switch
@@ -1242,9 +1268,9 @@ public sealed partial class MainWindow : Window
 
         if (!running)
         {
-            // Capture really stopped; the status message that follows owns the line, and the
-            // next run starts from zero.
-            ResetCaptureClock();
+            // Capture stopped; the status message that follows owns the line. The count is
+            // frozen, not cleared — resuming continues the same conversation.
+            PauseCaptureClock();
             LevelFill.Height = 0;
             if (_provisional is not null) Lines.Remove(_provisional);
             _provisional = null;
@@ -1637,7 +1663,7 @@ public sealed partial class MainWindow : Window
         // kill-on-close (it would outlive a killed UI still holding the microphone) and with
         // crash reporting silently dead for the rest of the session.
         SetStatus(device.Loopback ? "Switching to system audio…" : "Switching microphone…");
-        ResetCaptureClock();
+        PauseCaptureClock();
 
         _captureRequested = false;
         _connected = false;
@@ -1700,6 +1726,13 @@ public sealed partial class MainWindow : Window
         _provisional = null;
         _currentUtterance = -1;
         EmptyState.Visibility = Visibility.Visible;
+
+        // The transcript is the conversation, so clearing it starts a new one and the timer
+        // begins again. This is the only place the count is thrown away — pausing, switching
+        // device and reloading the model all keep it.
+        var wasRunning = _captureClock.IsRunning;
+        ResetCaptureClock();
+        if (wasRunning) ShowElapsed();
     }
 
     private void OnSpeakerClicked(object sender, ItemClickEventArgs e)
