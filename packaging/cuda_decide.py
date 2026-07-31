@@ -15,7 +15,9 @@ from pathlib import Path
 
 import pefile
 
-SITE = Path(r"D:\Code\Live Speech to Text\.venv\Lib\site-packages")
+# Repo-relative so the script works in any clone, not just the machine it was written on.
+REPO = Path(__file__).resolve().parent.parent
+SITE = REPO / ".venv" / "Lib" / "site-packages"
 NVIDIA = SITE / "nvidia"
 
 # Native modules the backend actually loads. Deliberately EXCLUDES any vendored NVIDIA
@@ -130,7 +132,7 @@ for name, path in sorted(NVIDIA_DLLS.items(), key=lambda kv: -kv[1].stat().st_si
 
 print(f"\n  ship {keep:.1f} MB   omit {drop:.1f} MB   (total {keep + drop:.1f} MB)")
 
-out = Path(r"D:\Code\Live Speech to Text\packaging")
+out = REPO / "packaging"
 out.mkdir(exist_ok=True)
 (out / "cuda_allowlist.txt").write_text(
     "\n".join(sorted(p.relative_to(NVIDIA).as_posix() for p in keep_list)) + "\n",
