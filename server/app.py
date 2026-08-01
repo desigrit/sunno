@@ -123,6 +123,14 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     parser.add_argument("--end-silence-ms", type=int, default=520)
     parser.add_argument("--partial-interval-ms", type=int, default=450)
     parser.add_argument(
+        "--echo-transcript",
+        action="store_true",
+        help="print recognised words to the console. Off by default, and deliberately so: "
+             "the desktop app captures this process's stdout into a permanent log file, so "
+             "echoing transcripts here would leave a plaintext record of every conversation "
+             "the app has ever heard, including from people who never consented to it",
+    )
+    parser.add_argument(
         "--start-stopped",
         action="store_true",
         help="launch paused; press Start in the UI to begin capturing",
@@ -260,13 +268,25 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
             if kind == "status":
                 latest_status = event
             elif kind == "final" and event.get("text"):
-                who = event.get("speaker")
-                prefix = f"{who}: " if who else ""
                 clarity = event.get("clarity")
                 meta = f"{event['latency_ms']:>6.0f} ms"
                 if clarity is not None:
                     meta += f", clarity {clarity:>3}%"
-                print(f"  [{meta}] {prefix}{event['text']}", flush=True)
+                if args.echo_transcript:
+                    who = event.get("speaker")
+                    prefix = f"{who}: " if who else ""
+                    print(f"  [{meta}] {prefix}{event['text']}", flush=True)
+                else:
+                    # Neither the words nor the speaker's name go on stdout. The app captures
+                    # this stream into %LOCALAPPDATA%\Sunno\backend.log, which has no rotation
+                    # and no size cap, so anything printed here is kept forever in plaintext.
+                    # That is the opposite of what this app promises the room it is sitting in.
+                    # The numeric id and length still prove captions are flowing and how fast,
+                    # which is all the log is for.
+                    sid = event.get("speaker_id")
+                    # Not `or "-"`: speaker 0 is a real speaker and is falsy.
+                    print(f"  [{meta}] speaker {'-' if sid is None else sid}, "
+                          f"{len(event['text'])} chars", flush=True)
             elif kind == "error":
                 print(f"  [error] {event.get('message')}", flush=True)
             if not clients:
