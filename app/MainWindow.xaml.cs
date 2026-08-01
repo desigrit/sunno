@@ -467,8 +467,20 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         while (Lines.Count > MaxLines) Lines.RemoveAt(0);
     }
 
-    private void ScrollToEnd() =>
+    /// <summary>
+    /// Put the newest caption at the bottom of the view.
+    ///
+    /// The layout pass is forced first, deliberately. ScrollableHeight is derived from the
+    /// extent as it currently stands, and every caller of this runs from the handler that has
+    /// just added or replaced a line — so reading it straight away returns the height the list
+    /// had *before* the new words existed, and the view stops a line short. The newest caption
+    /// is the one the user is reading, and it was being clipped by the command bar.
+    /// </summary>
+    private void ScrollToEnd()
+    {
+        CaptionScroller.UpdateLayout();
         CaptionScroller.ChangeView(null, CaptionScroller.ScrollableHeight, null, disableAnimation: false);
+    }
 
     // ---------- status ----------
 
@@ -926,7 +938,17 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // the OS's, and RequestAccessAsync is a proven no-op for a full-trust packaged
             // app — it returns Allowed without prompting. Re-querying consent here also
             // reintroduces the repeat-CheckAccess call that killed the process.
+            //
+            // The status is advanced to Allowed rather than replayed. Replaying it re-rendered
+            // whatever Windows reported *before* the user answered, and when that was
+            // UserPromptRequired it was the very banner they had just clicked - so the button
+            // did nothing whatsoever, and on a packaged first run there was no other way to
+            // grant the microphone. Their click is the answer; if Windows disagrees, capture
+            // fails and the backend says so, which is the honest signal rather than a guess.
             _micDeclined = false;
+            _micStatus = AppCapabilityAccessStatus.Allowed;
+            _settings.MicrophoneAsked = true;
+            _settings.Save();
             ApplyMicrophoneStatus(_micStatus);
             return;
         }
@@ -954,8 +976,31 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         var status = _micStatus;
         App.Trace($"mic: reusing status={status}");
 
-        if (!_settings.MicrophoneAsked && status is null or AppCapabilityAccessStatus.Allowed)
+        // UserPromptRequired means Windows has no answer on file yet, which is precisely when
+        // to ask. It used to be excluded here, so a packaged first run - where CheckAccess
+        // reports exactly that - skipped the consent dialog and went straight to a warning bar
+        // whose only button did nothing, leaving no way to grant the microphone at all.
+        if (!_settings.MicrophoneAsked
+            && status is null or AppCapabilityAccessStatus.Allowed
+                             or AppCapabilityAccessStatus.UserPromptRequired)
+        {
             await AskForMicrophoneAsync();
+
+            // Declining already painted its own bar, and that answer outranks whatever Windows
+            // last reported. Rendering the status on top would replace "Microphone is off /
+            // Turn on" with a warning about access the user has just chosen not to give.
+            if (_micDeclined)
+            {
+                MicrophoneAccess.Changed += OnMicAccessChanged;
+                App.Trace("mic: declined");
+                return;
+            }
+
+            // They consented, and for a full-trust packaged app that is the only consent step
+            // there is: Windows never raises its own prompt, so this dialog is it.
+            if (status is AppCapabilityAccessStatus.UserPromptRequired)
+                status = _micStatus = AppCapabilityAccessStatus.Allowed;
+        }
 
         ApplyMicrophoneStatus(status);
 
