@@ -71,6 +71,17 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private bool _micProblem;
     /// <summary>WebSocket reachability, mirrored so capture can be deferred until it's up.</summary>
     private bool _connected;
+
+    /// <summary>
+    /// Last reported model, kept for the diagnostics report.
+    ///
+    /// The compute device comes from the model catalogue frame, never from the status frame:
+    /// that one's "device" is the *audio* device name (server/app.py sets it to
+    /// stream.device_name), and reading it as a compute device once printed a hearing aid's name
+    /// into a report that promised it held no device names.
+    /// </summary>
+    private string? _activeModel;
+    private string? _computeDevice;
     /// <summary>Microphone consent is settled in our favour.</summary>
     private bool _micGranted;
     /// <summary>The backend was launched with --start-stopped and still needs a start command.</summary>
@@ -174,7 +185,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _client.DownloadProgress += p => _ui.TryEnqueue(() => OnDownloadProgress(p));
         _client.DownloadComplete += _ => _ui.TryEnqueue(OnDownloadComplete);
         _client.DownloadFailed += msg => _ui.TryEnqueue(() => OnDownloadFailed(msg));
-        _client.ModelCatalog += (current, list) => _ui.TryEnqueue(() => OnModelCatalog(current, list));
+        _client.ModelCatalog += (current, device, list) =>
+            _ui.TryEnqueue(() => OnModelCatalog(current, device, list));
         _backend.Crashed += msg => _ui.TryEnqueue(() => OnBackendCrashed(msg));
 
         Closed += (_, _) =>
@@ -281,7 +293,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void OnPartial(CaptionEvent ev)
     {
         if (string.IsNullOrWhiteSpace(ev.Text)) return;
-        EmptyState.Visibility = Visibility.Collapsed;
+        SetEmptyStateVisible(false);
 
         if (_provisional is null || _currentUtterance != ev.Id)
         {
@@ -303,7 +315,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             return;
         }
 
-        EmptyState.Visibility = Visibility.Collapsed;
+        SetEmptyStateVisible(false);
         var line = _provisional is not null && _currentUtterance == ev.Id
             ? _provisional
             : AddLine(ev.Id);
@@ -459,6 +471,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         if (st.Running is bool running) SetRunning(running);
         _backendLoading = st.State == "loading";
+
+        // Remember the model the engine reported, for the diagnostics report. Only overwrite on
+        // a frame that actually carries it: error frames and plain running/paused updates leave
+        // it null, and losing it would make the report say "unknown" for the rest of the session.
+        // st.Device is deliberately not captured; see the _activeModel declaration.
+        if (!string.IsNullOrEmpty(st.Model)) _activeModel = st.Model;
 
         if (st.State == "error")
         {
@@ -653,6 +671,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void ShowActionableError(StatusEvent st)
     {
         _micProblem = st.Code is "mic_denied" or "mic_unavailable";
+        // Taking the bar over, so drop any stickiness it inherited. Otherwise a device notice
+        // raised seconds earlier keeps this bar pinned, and OnStatus will not close it once the
+        // user has picked a working microphone: they would read "Microphone unavailable" while
+        // captions were flowing. ShowFatalBackendError does the same for the same reason.
+        _infoSticky = false;
 
         switch (st.Code)
         {
@@ -912,13 +935,25 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
             _micProblem = false;
             _micCanPrompt = false;
-            MicInfoBar.IsOpen = false;
+            // Only the microphone's own message. This runs on every launch where access is
+            // fine, and it used to close the bar outright, which discarded any sticky notice
+            // raised moments earlier — the device-rot warning always, and a model fallback
+            // notice whenever one arrived before consent resolved. Same idiom as OnStatus.
+            if (!_infoSticky) MicInfoBar.IsOpen = false;
+            // Put back a device notice that a permission problem had taken the bar over from.
+            RenderDeviceNotice();
             _micGranted = true;
             TryStartCapture();
             return;
         }
 
         _micProblem = true;
+        // Taking the bar over for a microphone problem, so release any sticky notice first.
+        // Otherwise the check in the recovery path above never fires and the "microphone access
+        // is off, nothing can be transcribed" banner stays on screen after the user has turned
+        // access back on: they follow the app's instructions, it appears to do nothing, and a
+        // deaf user is told captioning is dead while it is running.
+        _infoSticky = false;
         MicInfoBar.Severity = InfoBarSeverity.Warning;
         MicActionLink.Visibility = Visibility.Visible;
 
@@ -1043,7 +1078,16 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         return Models.FirstOrDefault(m => m.Available && m.Id != failed)?.Id;
     }
 
-    private void OnMicInfoClosed(InfoBar sender, object args) => _infoSticky = false;
+    /// <summary>
+    /// The user closed the bar. Drop the stickiness and forget the device notice: re-opening
+    /// something they have just dismissed, which is what would happen the next time the
+    /// microphone permission path re-rendered it, is its own bug.
+    /// </summary>
+    private void OnMicInfoClosed(InfoBar sender, object args)
+    {
+        _infoSticky = false;
+        _deviceNotice = null;
+    }
 
     private bool _modelSectionOpen;
 
@@ -1077,8 +1121,43 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         AnimateChevron(_modelSectionOpen ? 180 : 0);
     }
 
+    /// <summary>
+    /// Whether the user wants animation at all.
+    ///
+    /// Settings > Accessibility > Visual effects > Animation effects. Sunno exists for people
+    /// with a disability, and motion sensitivity is one; someone who has turned animation off
+    /// system-wide has asked every app to stop, and an accessibility app has less excuse than
+    /// most to ignore that. Read per use rather than cached, because the setting can change
+    /// while the app is running.
+    /// </summary>
+    private static bool AnimationsWanted
+    {
+        get
+        {
+            try { return new Windows.UI.ViewManagement.UISettings().AnimationsEnabled; }
+            catch { return true; }   // never let a diagnostics lookup break the UI
+        }
+    }
+
+    // Held so they can be stopped before a direct assignment. A completed Storyboard defaults to
+    // FillBehavior.HoldEnd, and an animation value outranks a local value in dependency-property
+    // precedence, so assigning Height or Angle directly while a previous run still holds the
+    // property is silently ignored. Reachable by animating with effects on, then turning
+    // "Animation effects" off — which AnimationsWanted is written to observe live — and then
+    // collapsing the panel, which would otherwise refuse to close.
+    private Storyboard? _modelPanelStory;
+    private Storyboard? _chevronStory;
+
     private void AnimateModelPanel(double toHeight)
     {
+        _modelPanelStory?.Stop();
+
+        if (!AnimationsWanted)
+        {
+            ModelPanel.Height = toHeight;
+            return;
+        }
+
         var animation = new DoubleAnimation
         {
             To = toHeight,
@@ -1089,13 +1168,21 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         Storyboard.SetTarget(animation, ModelPanel);
         Storyboard.SetTargetProperty(animation, "Height");
 
-        var story = new Storyboard();
-        story.Children.Add(animation);
-        story.Begin();
+        _modelPanelStory = new Storyboard();
+        _modelPanelStory.Children.Add(animation);
+        _modelPanelStory.Begin();
     }
 
     private void AnimateChevron(double angle)
     {
+        _chevronStory?.Stop();
+
+        if (!AnimationsWanted)
+        {
+            ModelChevronRotate.Angle = angle;
+            return;
+        }
+
         var animation = new DoubleAnimation
         {
             To = angle,
@@ -1106,9 +1193,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         Storyboard.SetTarget(animation, ModelChevronRotate);
         Storyboard.SetTargetProperty(animation, "Angle");
 
-        var story = new Storyboard();
-        story.Children.Add(animation);
-        story.Begin();
+        _chevronStory = new Storyboard();
+        _chevronStory.Children.Add(animation);
+        _chevronStory.Begin();
     }
 
     /// <summary>
@@ -1132,8 +1219,13 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         ToolTipService.SetToolTip(HeaderModelName, active?.Tooltip);
     }
 
-    private void OnModelCatalog(string current, IReadOnlyList<ModelOption> options)
+    private void OnModelCatalog(string current, string? computeDevice,
+                                IReadOnlyList<ModelOption> options)
     {
+        // "cuda" or "cpu", for the diagnostics report. This frame is the only one that carries
+        // it; the status frame's "device" is the audio device name.
+        if (!string.IsNullOrEmpty(computeDevice)) _computeDevice = computeDevice;
+
         _suppressModelEvent = true;
         try
         {
@@ -1257,8 +1349,58 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         EmptyGlyph.Visibility = Visibility.Collapsed;
         EmptyTitle.Text = title;
         EmptyDetail.Text = "This takes about half a minute.";
-        EmptyState.Visibility = Lines.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        SetEmptyStateVisible(Lines.Count == 0);
     }
+
+    /// <summary>
+    /// Show or hide the empty state, crossfading rather than snapping.
+    ///
+    /// Every caller goes through here so the fade cannot be half-applied: the transcript
+    /// arriving, the engine reloading and the transcript being cleared all toggle this, and a
+    /// caption landing mid-fade must not leave a ghosted panel over the text.
+    ///
+    /// Opacity only. This panel is a sibling of CaptionScroller, not inside it, but opacity is
+    /// composition-driven and costs no layout pass either way, which matters at exactly the
+    /// moment this fires: the first word of a conversation arriving.
+    /// </summary>
+    private void SetEmptyStateVisible(bool visible)
+    {
+        if (_emptyStateVisible == visible) return;
+        _emptyStateVisible = visible;
+
+        _emptyFadeStory?.Stop();   // see the note on _modelPanelStory about held animation values
+
+        if (!AnimationsWanted)
+        {
+            EmptyState.Opacity = visible ? 1 : 0;
+            EmptyState.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            return;
+        }
+
+        if (visible) EmptyState.Visibility = Visibility.Visible;
+
+        var fade = new DoubleAnimation
+        {
+            To = visible ? 1 : 0,
+            Duration = new Duration(TimeSpan.FromMilliseconds(160)),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        Storyboard.SetTarget(fade, EmptyState);
+        Storyboard.SetTargetProperty(fade, "Opacity");
+
+        _emptyFadeStory = new Storyboard();
+        _emptyFadeStory.Children.Add(fade);
+        // Re-check the field rather than the captured value: the state can flip back during the
+        // 160 ms, and collapsing on a stale decision would hide a panel that should be showing.
+        _emptyFadeStory.Completed += (_, _) =>
+        {
+            if (!_emptyStateVisible) EmptyState.Visibility = Visibility.Collapsed;
+        };
+        _emptyFadeStory.Begin();
+    }
+
+    private bool _emptyStateVisible = true;
+    private Storyboard? _emptyFadeStory;
 
     private void ShowReadyState()
     {
@@ -1314,16 +1456,49 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     private void OnRoster(IReadOnlyList<SpeakerInfo> speakers)
     {
-        Speakers.Clear();
-        foreach (var s in speakers)
+        // Reconciled in place rather than cleared and rebuilt.
+        //
+        // The roster is re-sent for any change to any speaker: a rename, marking someone as
+        // yourself, a merge, a reset, or simply a new person being heard. Clearing the
+        // collection recreated every row each time, which threw away the scroll position and
+        // made the list-entrance animation fire on all four rows every time one person was
+        // renamed. A row should animate when that person is genuinely new, and stay still
+        // otherwise.
+        //
+        // Depends on the backend numbering speakers by list position and emitting them in
+        // ascending id order (server/speaker.py), so survivors are always a prefix and new
+        // people always arrive at the tail. One consequence worth knowing: a merge renumbers,
+        // so the row that plays the removal animation is the last one while the merged-away
+        // person's row is relabelled in place.
+        for (var i = Speakers.Count - 1; i >= 0; i--)
+            if (!speakers.Any(s => s.Id == Speakers[i].Id))
+                Speakers.RemoveAt(i);
+
+        for (var i = 0; i < speakers.Count; i++)
         {
-            Speakers.Add(new SpeakerRow
+            var s = speakers[i];
+            var label = s.IsSelf ? $"{s.Label} (You)" : s.Label;
+            var existing = Speakers.FirstOrDefault(r => r.Id == s.Id);
+
+            if (existing is null)
             {
-                Id = s.Id,
-                Label = s.IsSelf ? $"{s.Label} (You)" : s.Label,
-                IsSelf = s.IsSelf,
-                Named = s.Named,
-            });
+                // The clamp is a guard against a malformed roster repeating an id, not routine:
+                // with a well-formed one every entry processed so far is already in the
+                // collection, so Count >= i always holds.
+                Speakers.Insert(Math.Min(i, Speakers.Count), new SpeakerRow
+                {
+                    Id = s.Id,
+                    Label = label,
+                    IsSelf = s.IsSelf,
+                    Named = s.Named,
+                });
+                continue;
+            }
+
+            // Assign through the properties so only what actually changed raises a notification.
+            existing.Label = label;
+            existing.IsSelf = s.IsSelf;
+            existing.Named = s.Named;
         }
 
         NoSpeakers.Visibility = Speakers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -1583,6 +1758,185 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         {
             _suppressDeviceEvent = false;
         }
+
+        // Only now, with the event no longer suppressed, so that correcting the picker below
+        // runs through the ordinary selection handler.
+        ValidateRememberedDevice();
+    }
+
+    /// <summary>
+    /// Check that the device index we launched on still means the device the user chose.
+    ///
+    /// PortAudio numbers devices by enumeration order, so the numbers move whenever the set of
+    /// audio devices changes. Measured on one machine across two launches: the same Umik-1 went
+    /// from index 30 to 27, and index 26 stopped meaning "Microphone (2- Logitech BRIO)" and
+    /// started meaning "Headset (R-Phonak hearing aid)". Nothing errored. The app simply
+    /// captioned a different microphone than the one on the table, which is the failure this
+    /// product can least afford: it does not look broken, it just gets quietly worse.
+    ///
+    /// Validate rather than resolve. Capture has to start before the device list exists, because
+    /// the list is served by the very process being started, so the index stays the fast path
+    /// and this runs once the list arrives. When it matches, which is the overwhelmingly common
+    /// case, nothing happens at all.
+    /// </summary>
+    private void ValidateRememberedDevice()
+    {
+        var loopback = _settings.LoopbackDeviceIndex is not null;
+        var wantedIndex = _settings.LoopbackDeviceIndex ?? _settings.DeviceIndex;
+        var wantedName = loopback ? _settings.LoopbackDeviceName : _settings.DeviceName;
+
+        // No remembered device: the system default is in use and there is nothing to check.
+        if (wantedIndex is null) return;
+
+        // Entries for the right kind of device only. /devices.json is a single flat array
+        // holding two different index spaces — microphones are numbered by sounddevice and
+        // loopback endpoints by pyaudiowpatch — and the ranges overlap, so index 27 exists in
+        // both. Comparing across them would measure a microphone against a speaker.
+        var candidates = DevicePicker.Items.OfType<ComboBoxItem>()
+            .Select(i => new { Item = i, Entry = i.Tag as DeviceEntry })
+            .Where(x => x.Entry is not null && x.Entry.Device.Loopback == loopback)
+            .ToList();
+        if (candidates.Count == 0) return;
+
+        var atIndex = candidates.FirstOrDefault(x => x.Entry!.Aliases.Contains(wantedIndex.Value));
+
+        // Upgrading from a build that only stored the index. An absent name is not evidence of
+        // rot, it is evidence of an older settings file, so adopt whatever is there now and
+        // start checking from the next launch. Warning here would fire on every existing
+        // install, about a device that is working perfectly.
+        if (string.IsNullOrEmpty(wantedName))
+        {
+            if (atIndex?.Entry is null) return;
+            if (loopback) _settings.LoopbackDeviceName = atIndex.Entry.Device.Name;
+            else _settings.DeviceName = atIndex.Entry.Device.Name;
+            _settings.Save();
+            // Index and outcome only. The device name is the string Diagnostics refuses to emit,
+            // because "Headset (R-Phonak hearing aid)" discloses that someone wears a hearing
+            // aid, and startup-trace.log survives on disk for the next launch.
+            App.Trace($"device name adopted for existing setting at index {wantedIndex}");
+            return;
+        }
+
+        var wantedKey = DeviceKey(CleanDeviceName(wantedName!));
+        if (wantedKey.Length == 0) return;
+
+        // Exact key comparison, deliberately not IsSameDevice.
+        //
+        // IsSameDevice tolerates a prefix match when the shorter name sits exactly on MME's
+        // 31-character truncation boundary, and it decides that from the *raw* PortAudio name
+        // length. The name stored here has already been cleaned and whitespace-collapsed, so its
+        // length says nothing about truncation: passing it in would let any stored name that
+        // happens to be 31 characters — "Microphone (HD Pro Webcam C920)" is exactly 31 — match
+        // a longer device by prefix. That would silently select a different microphone, which is
+        // the failure this whole change exists to remove.
+        //
+        // The keys being compared were both built by DeviceKey from cleaned names, so equality
+        // is the right test and the truncation tolerance is neither needed nor safe.
+        if (atIndex?.Entry is not null && atIndex.Entry.Key == wantedKey)
+            return;   // index still means the right device, which is the usual case
+
+        var correct = candidates.FirstOrDefault(x => x.Entry!.Key == wantedKey);
+
+        if (correct is null)
+        {
+            // The remembered device is not present at all: unplugged, powered off, or renamed by
+            // a driver update. Do not silently substitute another one, which is the behaviour
+            // being fixed here.
+            App.Trace($"remembered device (index {wantedIndex}) not present in this enumeration");
+
+            if (atIndex?.Entry is not null)
+            {
+                // The index still resolves to a real device, so capture is running on that one.
+                ShowDeviceNotice($"{wantedName} is not available, so Sunno is using "
+                                 + $"{atIndex.Entry.Device.Name} instead.");
+            }
+            else
+            {
+                // The index resolves to nothing. Capture is not quietly falling back: the
+                // backend tries every format against the stale index and then raises
+                // MicrophoneOpenError, so nothing is being captured at all. Saying "Sunno is
+                // listening to the default microphone" here would tell a deaf user captioning
+                // was running when it was not, on the one path whose entire purpose is to stop
+                // silent capture failures.
+                ShowDeviceNotice($"{wantedName} is not available. Choose a microphone below to "
+                                 + "start captioning.");
+            }
+            return;
+        }
+
+        App.Trace($"device index {wantedIndex} rotted; correcting to index {correct.Entry!.Device.Index}");
+
+        // Hand this to the ordinary selection handler rather than restarting the backend here.
+        // OnDeviceChanged does six things before it restarts — clears status, pauses the capture
+        // clock, and resets _captureRequested, _connected, _engineReadyThisSession and
+        // _startedPaused. Restarting directly at this point, which is seconds after launch and
+        // after consent has already latched _captureRequested, would bring the backend up paused
+        // with nothing left to un-pause it: no error on screen and no captions, ever.
+        DevicePicker.SelectedItem = correct.Item;
+    }
+
+    /// <summary>
+    /// Tell the user their remembered microphone is gone, without implying something broke.
+    ///
+    /// Informational rather than Warning: in the common case captions are still working, just
+    /// from a different device than they picked. The point is that they find out, because the
+    /// alternative is an app that quietly listens to the wrong microphone and seems to have got
+    /// less accurate.
+    ///
+    /// Sticky, and that is the whole thing working. This fires while the engine is still
+    /// loading, and OnStatus closes any non-sticky bar the moment "listening" arrives — which
+    /// is precisely the frame on which the app starts captioning the wrong device. Without the
+    /// flag the one visible output of the entire device-rot fix is dismissed by the app itself,
+    /// a second before it matters.
+    ///
+    /// Declines to speak over a microphone problem. Those bars carry an actionable link
+    /// ("Open Settings") and a fix; replacing that with a note about device names would leave
+    /// the user with no route to the thing actually blocking them. Kept in _deviceNotice so the
+    /// microphone path can put it back after it has finished with the bar.
+    /// </summary>
+    private void ShowDeviceNotice(string message)
+    {
+        _deviceNotice = message;
+        if (_micProblem) return;
+        RenderDeviceNotice();
+    }
+
+    private void RenderDeviceNotice()
+    {
+        if (_deviceNotice is null) return;
+        MicInfoBar.Severity = InfoBarSeverity.Informational;
+        MicInfoBar.Title = "Microphone changed";
+        MicInfoBar.Message = _deviceNotice;
+        MicActionLink.Visibility = Visibility.Collapsed;
+        MicInfoBar.IsOpen = true;
+        _infoSticky = true;
+    }
+
+    /// <summary>
+    /// The device notice, kept so it can be re-asserted.
+    ///
+    /// A microphone-permission problem outranks it and takes the bar over. Once the user fixes
+    /// that, the recovery path closes the bar — and without this the device warning would be
+    /// gone for good, having been raised milliseconds before the permission bar arrived.
+    ///
+    /// Retired by whatever resolves it: choosing a device (the remedy the notice asks for) or
+    /// dismissing the bar. Without that it would outlive its own instruction — the user picks a
+    /// working microphone, captions flow, and the bar still reads "not available, choose a
+    /// microphone below", or worse still names a device that is no longer the one being
+    /// captured.
+    /// </summary>
+    private string? _deviceNotice;
+
+    /// <summary>Forget the device notice and take it off screen if it is the bar showing.</summary>
+    private void ClearDeviceNotice()
+    {
+        if (_deviceNotice is null) return;
+        _deviceNotice = null;
+        if (MicInfoBar.IsOpen && !_micProblem && !_backendFatal)
+        {
+            _infoSticky = false;
+            MicInfoBar.IsOpen = false;
+        }
     }
 
     /// <summary>One kept device plus the indices of the duplicates it absorbed.</summary>
@@ -1732,12 +2086,24 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (DevicePicker.SelectedItem is not ComboBoxItem { Tag: DeviceEntry entry }) return;
         var device = entry.Device;
 
+        // Choosing a device is the remedy the device notice asks for, so retire it here.
+        // Otherwise it would survive its own instruction and keep naming a device that is no
+        // longer the one being captured.
+        ClearDeviceNotice();
+
         ToolTipService.SetToolTip(DevicePicker, device.Loopback
             ? $"Captioning system audio from {device.Name}"
             : $"Captioning the microphone {device.Name}");
 
         _settings.DeviceIndex = device.Loopback ? null : device.Index;
         _settings.LoopbackDeviceIndex = device.Loopback ? device.Index : null;
+        // Record the name as well as the index. The index is what gets passed to the backend at
+        // launch, but it is only valid for as long as the machine's device set is unchanged;
+        // the name is what lets the next launch tell whether that index still means this device.
+        // Taken from entry.Device.Name, which is the cleaned label the picker itself shows, so
+        // it can be compared later with the same matching rules that built this list.
+        _settings.DeviceName = device.Loopback ? null : device.Name;
+        _settings.LoopbackDeviceName = device.Loopback ? device.Name : null;
         _settings.Save();
 
         // Switching capture device means restarting the backend; the model reload is the slow
@@ -1808,12 +2174,122 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             presenter.IsAlwaysOnTop = AlwaysOnTopItem.IsChecked;
     }
 
+    /// <summary>
+    /// Show the diagnostics report, then let the user copy it.
+    ///
+    /// Shown before it is copied, on purpose. Sunno asks people to believe their conversations
+    /// stay on their machine; handing them an opaque blob to email to a stranger would undercut
+    /// that in the one place it matters most. They read exactly what they are about to share.
+    /// </summary>
+    private async void OnCopyDiagnostics(object sender, RoutedEventArgs e)
+    {
+        string report;
+        try
+        {
+            report = Diagnostics.Build(_settings, _activeModel, _computeDevice,
+                                       _backend.IsRunning, _connected);
+        }
+        catch (Exception ex)
+        {
+            report = $"Could not build the report: {ex.GetType().Name}: {ex.Message}";
+        }
+
+        var body = new TextBox
+        {
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.NoWrap,
+            FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+            FontSize = 12,
+            // Explicit size, not MaxHeight. ContentDialog sizes itself to its content's desired
+            // size, and a TextBox's desired height is one line however much text it holds, so
+            // MaxHeight alone produced a single-line box — which defeats the entire point of
+            // showing the report before it is copied.
+            Height = 320,
+            Width = 560,
+        };
+        // Assigned after construction, deliberately. Object initializers assign in the order
+        // written, and a TextBox with AcceptsReturn still false silently keeps only the text up
+        // to the first line break. Setting Text inside the initializer showed exactly one line,
+        // "Sunno diagnostics", and hid the entire report from the person being asked to share it.
+        body.Text = report;
+
+        ScrollViewer.SetVerticalScrollBarVisibility(body, ScrollBarVisibility.Auto);
+        ScrollViewer.SetHorizontalScrollBarVisibility(body, ScrollBarVisibility.Auto);
+
+        var status = new TextBlock
+        {
+            Visibility = Visibility.Collapsed,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+
+        var panel = new StackPanel();
+        panel.Children.Add(body);
+        panel.Children.Add(status);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Diagnostics",
+            Content = panel,
+            PrimaryButtonText = "Copy",
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        // Handled here rather than after ShowAsync returns, because by then the dialog has
+        // already closed. An earlier version told the user to "select the text in the
+        // diagnostics window and press Ctrl+C" after that window was gone — an instruction that
+        // cannot be followed. The clipboard really does fail on this machine: a COMException
+        // from SetContent is sitting in startup-error.log.
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            try
+            {
+                var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+                package.SetText(report);
+                Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+            }
+            catch (Exception ex)
+            {
+                App.Trace($"diagnostics copy failed: {ex.GetType().Name}");
+                // Keep the dialog open so the advice below is actually actionable. No retry
+                // loop: this thread is STA and the clipboard needs its message pump running for
+                // the current owner to let go, so sleeping here would make a second attempt
+                // less likely to succeed than the first, not more.
+                args.Cancel = true;
+                status.Text = "Something else is holding the clipboard. The text above is "
+                              + "selected; press Ctrl+C to copy it.";
+                status.Visibility = Visibility.Visible;
+                body.SelectAll();
+                body.Focus(FocusState.Programmatic);
+                return;
+            }
+
+            try
+            {
+                // Hand ownership to the system so the text survives Sunno closing. Someone
+                // copying a report is usually about to quit and paste it elsewhere. Separate
+                // from the block above on purpose: if this throws, the report is already on the
+                // clipboard, so reporting failure would be wrong.
+                Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
+            }
+            catch (Exception ex)
+            {
+                App.Trace($"clipboard flush failed (content is still copied): {ex.GetType().Name}");
+            }
+        };
+
+        await dialog.ShowAsync();
+    }
+
     private void OnClear(object sender, RoutedEventArgs e)
     {
         Lines.Clear();
         _provisional = null;
         _currentUtterance = -1;
-        EmptyState.Visibility = Visibility.Visible;
+        SetEmptyStateVisible(true);
 
         // The transcript is the conversation, so clearing it starts a new one and the timer
         // begins again. This is the only place the count is thrown away — pausing, switching

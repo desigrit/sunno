@@ -251,15 +251,53 @@ public sealed class BackendHost : IDisposable
     /// Mirror backend output to disk. A native crash in a bundled .pyd produces no Python
     /// traceback and no window, so without a file on disk the only evidence is a Windows Error
     /// Reporting entry the user will never think to look for.
+    ///
+    /// Rotated at <see cref="MaxLogBytes"/>, keeping one previous file. Before rotation existed
+    /// this grew without limit for the life of the install, which on a machine used daily is a
+    /// file that only ever gets bigger and is never read.
     /// </summary>
     private static void AppendToLogFile(string line)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            RotateIfLarge();
             File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss} {line}{Environment.NewLine}");
         }
         catch { /* logging must never take the app down */ }
+    }
+
+    /// <summary>Size at which the log is rolled over. One previous file is kept.</summary>
+    private const long MaxLogBytes = 2 * 1024 * 1024;
+
+    private static int _sinceSizeCheck;
+
+    private static void RotateIfLarge()
+    {
+        // Stat'ing the file on every line would put a syscall in the path of every line the
+        // backend prints. Check on the first line of each session and periodically after that:
+        // checking only every 200th would mean a user whose sessions each log fewer than 200
+        // lines never checks at all, and the file grows across launches forever, which is the
+        // exact condition the cap exists for.
+        //
+        // Interlocked because stdout and stderr are drained on two different threadpool
+        // threads, so a plain ++ can lose an increment and skip the check indefinitely.
+        var n = System.Threading.Interlocked.Increment(ref _sinceSizeCheck) - 1;
+        if (n != 0 && n % 200 != 0) return;
+
+        // Its own try: a failed rotation must not cost the caller its log line, which is what
+        // happens if this throws into AppendToLogFile's catch. The line matters more than the
+        // rollover.
+        try
+        {
+            var info = new FileInfo(LogPath);
+            if (!info.Exists || info.Length < MaxLogBytes) return;
+
+            var previous = LogPath + ".1";
+            File.Delete(previous);
+            File.Move(LogPath, previous, overwrite: true);
+        }
+        catch { /* try again in another 200 lines */ }
     }
 
     public static string LogPath { get; } = Path.Combine(

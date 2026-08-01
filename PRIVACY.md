@@ -81,7 +81,15 @@ In `%LOCALAPPDATA%\Sunno`:
 | `hardware.json` | Timing measurements of your PC, used to estimate caption delay |
 | `speakers.json` | Pinned speakers only: name, voice fingerprint, and whether that person is you |
 | `backend.log` | Diagnostic output, so a crash can be investigated |
+| `backend.log.1` | The previous diagnostic log, kept when the current one is rotated |
 | `startup-trace.log` | A few lines recording how far startup got, for diagnosing launch failures |
+
+**On the input device in `settings.json`.** Sunno records the *name* of the microphone you chose,
+not only its position in the list, because Windows renumbers audio devices whenever the set of
+them changes and the app would otherwise silently start listening to a different one. Device
+names sometimes describe the hardware in ways you might not expect, for example
+"Headset (R-Phonak hearing aid)". That name stays on your computer and is never sent anywhere.
+It is also deliberately left out of the diagnostics report described below.
 
 `speakers.json` does not exist until you pin someone. Delete the file to forget every pinned
 speaker at once.
@@ -96,6 +104,25 @@ directly can pass `--echo-transcript` to print recognised text to their own cons
 never does this and never writes transcript text to disk.
 
 You can delete any of these files at any time. Sunno will recreate what it needs.
+
+---
+
+## The diagnostics report
+
+Sunno can produce a short report to attach to a bug report, from the overflow menu, "Copy
+diagnostics". It is shown to you in full before it is copied, so you can read exactly what you
+would be sharing.
+
+It contains the app version and package identity, your Windows version, processor architecture and
+count, the .NET version, whether the GPU or the processor is being used, which speech model is
+loaded and which is selected, whether the engine is running and connected, whether the source is a
+microphone or system audio, whether a device is chosen and whether its name is stored, whether the
+microphone consent question has been asked, your caption size and always-on-top preference,
+whether a vocabulary is set, and the timing measurements from `hardware.json`.
+
+It deliberately contains **none** of the following: transcript text, speaker names, voice
+fingerprints, vocabulary entries, device names, or any part of the log files. Where a device is
+concerned it reports only *whether* one is chosen, never which one.
 
 **Transcripts are not saved.** When you close Sunno, or clear the transcript, the captions are
 gone. If you want to keep something, select it and copy it out yourself.

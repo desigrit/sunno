@@ -68,6 +68,16 @@
                               ItemClick="OnSpeakerClicked"
                               Padding="8,0,8,8"
                               AutomationProperties.Name="Speakers. Select one to rename.">
+                        <!-- A person appearing in this list is a real event: the app has decided
+                             someone new is in the room. Sliding the row in marks that, where a
+                             row simply existing on the next frame does not. AddDeleteThemeTransition
+                             is the framework's own, so it honours Settings > Accessibility >
+                             Visual effects > Animation effects without being asked. -->
+                        <ListView.ItemContainerTransitions>
+                            <TransitionCollection>
+                                <AddDeleteThemeTransition />
+                            </TransitionCollection>
+                        </ListView.ItemContainerTransitions>
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="models:SpeakerRow">
                                 <Grid ColumnSpacing="10" Padding="4,7"
@@ -457,6 +467,13 @@
                     <MenuFlyoutSeparator />
                     <MenuFlyoutItem Text="Clear transcript" Click="OnClear">
                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutSeparator />
+                    <!-- Shows the report before copying it, deliberately. Asking someone to
+                         send a diagnostic file they cannot read would sit badly with an app
+                         whose whole claim is that nothing leaves their machine. -->
+                    <MenuFlyoutItem Text="Copy diagnostics" Click="OnCopyDiagnostics">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE9D5;" /></MenuFlyoutItem.Icon>
                     </MenuFlyoutItem>
                 </MenuFlyout>
             </Button.Flyout>

@@ -46,8 +46,15 @@ public sealed class CaptionClient : IAsyncDisposable
     public event Action<IReadOnlyList<SpeakerInfo>>? Roster;
     public event Action<bool>? ConnectionChanged;
     public event Action<IReadOnlyList<ModelOption>>? ModelRequired;
-    /// <summary>Catalogue served on demand, with the id of the model currently loaded.</summary>
-    public event Action<string, IReadOnlyList<ModelOption>>? ModelCatalog;
+    /// <summary>
+    /// The catalogue, the model currently selected, and the compute device the engine resolved.
+    ///
+    /// The device string here is "cuda" or "cpu" — the backend sends settings.device on this
+    /// frame. Do not take it from the status frame instead: that one carries the *audio* device
+    /// name, and reading it as a compute device once put a user's hearing aid into a diagnostics
+    /// report.
+    /// </summary>
+    public event Action<string, string?, IReadOnlyList<ModelOption>>? ModelCatalog;
     public event Action<DownloadProgressEvent>? DownloadProgress;
     public event Action<string>? DownloadComplete;
     public event Action<string>? DownloadFailed;
@@ -169,7 +176,8 @@ public sealed class CaptionClient : IAsyncDisposable
                 ModelRequired?.Invoke(ParseCatalog(root));
                 break;
             case "model_catalog":
-                ModelCatalog?.Invoke(GetString(root, "current") ?? "", ParseCatalog(root));
+                ModelCatalog?.Invoke(GetString(root, "current") ?? "",
+                                     GetString(root, "device"), ParseCatalog(root));
                 break;
             case "download_progress":
                 DownloadProgress?.Invoke(new DownloadProgressEvent(
