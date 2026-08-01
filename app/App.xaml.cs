@@ -31,6 +31,18 @@ public partial class App : Application
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(CrashLog)!);
+
+            // Bounded, unlike before. A crash loop can fire this handler repeatedly, and the
+            // file was appended to for the life of the install with nothing ever trimming it.
+            // Truncating on overflow rather than rotating: the most recent crashes are the ones
+            // that explain the state the user is in now, and a second file to reason about is
+            // not worth it for a log this small.
+            const long maxBytes = 256 * 1024;
+            var info = new FileInfo(CrashLog);
+            if (info.Exists && info.Length > maxBytes)
+                File.WriteAllText(CrashLog,
+                    $"{DateTime.Now:O}\n(earlier entries dropped; the log exceeded {maxBytes / 1024} KB)\n\n");
+
             File.AppendAllText(CrashLog,
                 $"{DateTime.Now:O}\n{ex.GetType().FullName}: {ex.Message}\n{ex.StackTrace}\n\n");
         }

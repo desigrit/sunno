@@ -80,21 +80,88 @@ public static class Diagnostics
 
         sb.AppendLine("-- Measured performance --");
         sb.AppendLine(HardwareJson());
-        sb.AppendLine();
-
-        sb.AppendLine("This report contains no transcript text, no speaker names or voice");
-        sb.AppendLine("fingerprints, no vocabulary entries and no device names.");
 
         return sb.ToString();
     }
 
-    private static bool HasDevice(AppSettings s) =>
-        s.DeviceIndex is not null || s.LoopbackDeviceIndex is not null;
+    /// <summary>
+    /// The full text a user saves and sends when asked for "the logs".
+    ///
+    /// Deliberately does NOT include backend.log.
+    ///
+    /// That file is the backend's raw stdout, and raw stdout is not safe to forward. Until
+    /// 42b44f5 it recorded every finalised caption, so on any machine that ran an earlier build
+    /// it still holds verbatim conversation — on the machine this was written on, 316 lines of
+    /// it including a work meeting. The transcript print is also still reachable today behind
+    /// --echo-transcript, so this is not purely historical. Filtering it was designed and
+    /// reviewed three times; each round found a way the filter let something through or stripped
+    /// everything useful, and the filter would have been the only thing between a user and a
+    /// disclosure.
+    ///
+    /// What is included is safe by construction rather than by filtering:
+    ///   * the diagnostics report, an allow-list of named fields
+    ///   * startup-trace.log, which records stage names, indices and outcomes only
+    ///   * startup-error.log, which is .NET exception text written by App.Log
+    ///   * the last crash detail, already narrowed by BackendHost.IsDiagnostic
+    ///
+    /// A user who genuinely needs to send backend.log can still do it deliberately: the crash
+    /// banner names the path. That is a decision they make with their eyes open, which is not
+    /// the same as an app bundling it for them.
+    /// </summary>
+    public static string BuildExport(AppSettings settings, string? activeModel,
+                                     string? computeDevice, bool backendRunning, bool connected,
+                                     string? lastCrashDetail)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("================ Sunno diagnostics ================");
+        sb.AppendLine();
+        sb.AppendLine("Includes: this report, startup breadcrumbs, the .NET error log and the");
+        sb.AppendLine("last engine failure. Excludes transcript text, speaker names, voice");
+        sb.AppendLine("fingerprints, vocabulary, device names and the speech engine's log.");
+        sb.AppendLine("File paths below may contain your Windows user name.");
+        sb.AppendLine();
+        sb.AppendLine(Build(settings, activeModel, computeDevice, backendRunning, connected));
+
+        sb.AppendLine();
+        sb.AppendLine("================ Last engine failure ================");
+        sb.AppendLine(string.IsNullOrWhiteSpace(lastCrashDetail)
+            ? "(none this session)"
+            : lastCrashDetail);
+
+        sb.AppendLine();
+        sb.AppendLine("================ Startup breadcrumbs ================");
+        sb.AppendLine(ReadLocal("startup-trace.log"));
+
+        sb.AppendLine();
+        sb.AppendLine("================ Errors ================");
+        sb.AppendLine(ReadLocal("startup-error.log"));
+
+        return sb.ToString();
+    }
+
+    private static string ReadLocal(string name)
+    {
+        try
+        {
+            var path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Sunno", name);
+            if (!File.Exists(path)) return "(none)";
+            var text = File.ReadAllText(path).Trim();
+            return text.Length == 0 ? "(empty)" : text;
+        }
+        catch (Exception ex)
+        {
+            return $"(unreadable: {ex.GetType().Name})";
+        }
+    }
+
+    private static bool HasDevice(AppSettings s) =>        s.DeviceIndex is not null || s.LoopbackDeviceIndex is not null;
 
     private static bool HasDeviceName(AppSettings s) =>
         !string.IsNullOrEmpty(s.DeviceName) || !string.IsNullOrEmpty(s.LoopbackDeviceName);
 
-    private static string AppVersion()
+    internal static string AppVersion()
     {
         try
         {

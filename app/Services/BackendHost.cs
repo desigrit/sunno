@@ -23,7 +23,8 @@ public sealed class BackendHost : IDisposable
     /// indistinguishable from a slow-loading one: the socket simply never opens and the UI sits
     /// on "Starting the speech engine…" forever.
     /// </summary>
-    public event Action<string>? Crashed;
+    /// <summary>Fired when the backend exits unexpectedly: a human reason, and the detail.</summary>
+    public event Action<string, string>? Crashed;
 
     /// <summary>Set during Dispose so a deliberate shutdown isn't reported as a crash.</summary>
     private bool _stopping;
@@ -109,7 +110,8 @@ public sealed class BackendHost : IDisposable
     }
 
     public string Start(string? device = null, string model = "large-v3", string? vocabulary = null,
-                        bool startStopped = false, int? loopbackDevice = null)
+                        bool startStopped = false, int? loopbackDevice = null,
+                        string? computeDevice = null)
     {
         if (IsRunning) return "already running";
 
@@ -118,13 +120,28 @@ public sealed class BackendHost : IDisposable
         // kill-on-close — a capture process able to outlive a killed UI with the microphone
         // still open. Refuse rather than start something unsafe; use Restart to cycle.
         if (_job.IsDisposed)
-            return "Backend host has been shut down; restart the app.";
+            return "Sunno needs to be restarted before speech recognition can start again.";
         _stopping = false;
 
         var python = FindPython();
         var root = FindBackendRoot();
-        if (python is null) return "Python backend not found.";
-        if (root is null) return "Backend 'server' package not found.";
+        // Both mean the install is incomplete, which is one situation to the person looking at
+        // the banner even though it is two causes here. The remedy is identical - reinstall - so
+        // the distinction is no use to them, but it is the first thing a maintainer wants from a
+        // bug report. It goes to App.Trace rather than Record because the diagnostics export
+        // reads startup-trace.log and deliberately does not read backend.log.
+        if (python is null)
+        {
+            App.Trace("engine not started: no Python runtime found");
+            return "Part of Sunno is missing, so speech recognition cannot start. "
+                   + "Reinstalling Sunno should replace it.";
+        }
+        if (root is null)
+        {
+            App.Trace("engine not started: 'server' package not found");
+            return "Part of Sunno is missing, so speech recognition cannot start. "
+                   + "Reinstalling Sunno should replace it.";
+        }
 
         var args = new List<string> { "-m", "server.app", "--model", model };
         if (!string.IsNullOrWhiteSpace(device)) { args.Add("--device"); args.Add(device); }
@@ -139,6 +156,13 @@ public sealed class BackendHost : IDisposable
         // Load the model but leave the microphone alone. Used while consent is still being
         // resolved, so the ~33 s load overlaps the dialog instead of following it.
         if (startStopped) args.Add("--start-stopped");
+        // Omitted rather than passed as "auto" when the user has expressed no preference, so
+        // the backend's own default stays the single definition of what "auto" means.
+        if (!string.IsNullOrEmpty(computeDevice) && computeDevice != "auto")
+        {
+            args.Add("--compute-device");
+            args.Add(computeDevice);
+        }
 
         var psi = new ProcessStartInfo(python)
         {
@@ -166,7 +190,8 @@ public sealed class BackendHost : IDisposable
             if (_stopping) return;
             var code = -1;
             try { code = _process?.ExitCode ?? -1; } catch { /* raced with disposal */ }
-            Crashed?.Invoke(DescribeExit(code));
+            var (reason, detail) = DescribeExit(code);
+            Crashed?.Invoke(reason, detail);
         };
 
         try
@@ -193,7 +218,16 @@ public sealed class BackendHost : IDisposable
         catch (Exception ex)
         {
             _process = null;
-            return $"Failed to start backend: {ex.Message}";
+            // Same split as DescribeExit: a friendly sentence on screen, the exception text kept
+            // for whoever reads the bug report. It goes to App.Trace, not Record, because this
+            // failure means no process ever started - nothing will call DescribeExit, so the
+            // export's crash section stays empty and startup-trace.log is the only part of the
+            // export that can carry it. This used to return ex.Message directly, which put raw
+            // framework text - and for a missing file, an absolute path - on the banner as the
+            // whole explanation.
+            App.Trace($"engine failed to start: {ex.GetType().Name}: {ex.Message}");
+            return "Sunno could not start its speech engine. Restarting Sunno usually clears "
+                   + "this; if it keeps happening, reinstalling will replace a missing file.";
         }
 
         return string.Empty;
@@ -208,7 +242,8 @@ public sealed class BackendHost : IDisposable
     /// is suppressed across the swap so a deliberate stop isn't announced as a failure.
     /// </summary>
     public string Restart(string? device, string model, string? vocabulary,
-                          bool startStopped = false, int? loopbackDevice = null)
+                          bool startStopped = false, int? loopbackDevice = null,
+                          string? computeDevice = null)
     {
         _stopping = true;
         try
@@ -232,7 +267,7 @@ public sealed class BackendHost : IDisposable
         {
             _stopping = false;
         }
-        return Start(device, model, vocabulary, startStopped, loopbackDevice);
+        return Start(device, model, vocabulary, startStopped, loopbackDevice, computeDevice);
     }
 
     private void Record(string? line)
@@ -327,26 +362,43 @@ public sealed class BackendHost : IDisposable
         }
     }
 
-    /// <summary>Turn an exit code into something a non-developer can act on.</summary>
-    private string DescribeExit(int code)
+    /// <summary>
+    /// Turn an exit code into something a non-developer can act on, plus the technical detail
+    /// separately.
+    ///
+    /// Split deliberately. The banner used to carry both, so a port conflict presented the user
+    /// with a Python traceback full of absolute paths as the entire explanation. The reason goes
+    /// on screen; the detail goes behind "Copy details", where someone filing a bug report can
+    /// still get all of it.
+    /// </summary>
+    private (string Reason, string Detail) DescribeExit(int code)
     {
         // Anchored on the backend's own markers, not a substring scan. The same stream carries
         // every caption, so matching "error" anywhere in a line meant a speaker saying "an
         // error" or "terror" landed in the crash banner — and could push the real traceback
         // out of the three lines shown. Putting transcript text where the failure should be is
         // worse than showing no detail at all.
-        var errorLines = RecentLog()
-            .Where(IsDiagnostic)
-            .TakeLast(3)
-            .ToList();
+        var detail = RecentDiagnostics();
 
-        // A negative or very large code means the OS terminated the process rather than it
-        // exiting. The number carries nothing a user could act on, so don't show it.
-        var reason = code is < 0 or > 0x40000000
-            ? "The speech engine stopped unexpectedly."
-            : $"The speech engine exited with code {code}.";
+        // Name the cause when the backend's own output identifies it. Anything not recognised
+        // falls through to the generic wording rather than guessing: a wrong explanation sends
+        // someone hunting for a problem they do not have.
+        //
+        // Deliberately not mapped: PortAudio errno values. -9998 is paInvalidChannelCount and
+        // appears on nearly every failed open because _candidate_formats probes several channel
+        // counts, so keying off it would shadow the real cause. Microphone failures already
+        // arrive as human sentences from server/audio.py, with more information than an errno
+        // has, and go through ShowActionableError instead.
+        var reason = detail.Contains("10048") || detail.Contains("only one usage of each socket")
+            ? "Sunno's speech engine could not start because its connection was still in use. "
+              + "Restarting Sunno should clear it."
+            : code is < 0 or > 0x40000000
+                // A negative or very large code means the OS terminated the process rather than
+                // it exiting. The number carries nothing a user could act on, so don't show it.
+                ? "Sunno's speech engine stopped unexpectedly."
+                : "Sunno's speech engine stopped.";
 
-        return errorLines.Count == 0 ? reason : $"{reason}\n{string.Join("\n", errorLines)}";
+        return (reason, detail);
     }
 
     /// <summary>
@@ -370,6 +422,21 @@ public sealed class BackendHost : IDisposable
     {
         lock (_logLock) return _log.ToArray();
     }
+
+    /// <summary>
+    /// The last few lines the engine printed about a problem, narrowed to its own diagnostics.
+    ///
+    /// The only sanctioned way to put the engine's words in front of a user or into the
+    /// diagnostics export. RecentLog() is the raw stream and carries every caption; this
+    /// applies IsDiagnostic, which anchors on the backend's own markers so transcript text is
+    /// excluded by construction rather than by hoping the message looks technical.
+    ///
+    /// A caller that reaches past this and uses a backend-supplied string directly is how the
+    /// export's promise - no transcript text, no speaker names, no device names - stops being
+    /// enforced by anything.
+    /// </summary>
+    public string RecentDiagnostics(int lines = 3) =>
+        string.Join("\n", RecentLog().Where(IsDiagnostic).TakeLast(lines));
 
     public void Dispose()
     {

@@ -252,7 +252,26 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                     if speaker.set_self(int(msg.get("id", -1)), bool(msg.get("value", True))):
                         emit({"type": "roster", "speakers": speaker.roster()})
                 elif cmd == "merge_speakers" and speaker is not None:
-                    if speaker.merge(int(msg.get("source", -1)), int(msg.get("target", -1))):
+                    source = int(msg.get("source", -1))
+                    target = int(msg.get("target", -1))
+                    if speaker.merge(source, target):
+                        # Announced before the roster, and it has to stay that way. Speaker
+                        # ids are durable now, so a merged-away id simply vanishes from the
+                        # roster and the UI's relabel pass skips the captions carrying it -
+                        # they would keep the old name for good. This tells the UI to move
+                        # those lines onto the survivor first; the roster that follows then
+                        # names them correctly.
+                        emit({"type": "speaker_merged", "from": source, "into": target})
+                        emit({"type": "roster", "speakers": speaker.roster()})
+                elif cmd == "delete_speaker" and speaker is not None:
+                    target_id = int(msg.get("id", -1))
+                    fallback = speaker.delete(target_id)
+                    if fallback is not None:
+                        # Like speaker_merged, this goes out before the roster and for the
+                        # same reason: the deleted id is gone from the roster, so the UI's
+                        # relabel pass skips those captions and they would keep the name of
+                        # someone the user just asked the app to forget.
+                        emit({"type": "speaker_deleted", "id": target_id, "label": fallback})
                         emit({"type": "roster", "speakers": speaker.roster()})
                 elif cmd == "reset_speakers" and speaker is not None:
                     speaker.reset()
@@ -444,7 +463,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                                     "device": stream.device_name,
                                 }
                             )
-                            print(f"Listening on: {stream.device_name}", flush=True)
+                            print("Listening.", flush=True)
                             pipeline.run(stream.frames(lambda: controller.is_running))
                     except MicrophoneOpenError as exc:
                         # Surface a distinguishable code so the UI can offer the right fix
@@ -460,7 +479,19 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                         controller.pause()
                         continue
                     except Exception as exc:
-                        emit({"type": "error", "message": str(exc), "running": False})
+                        # Carries a code and a human sentence, like MicrophoneOpenError above.
+                        # This used to emit str(exc) as the message, which put raw PortAudio
+                        # text on the user's screen - "[Errno -9996] Invalid device info" was
+                        # the banner a user actually saw. Nearly everything that lands here is
+                        # a capture device that could not be opened, and the remedy is the
+                        # same, so say that and keep the diagnostics in detail.
+                        emit({
+                            "type": "error",
+                            "code": "capture_failed",
+                            "message": "Sunno could not start listening on this microphone.",
+                            "detail": str(exc),
+                            "running": False,
+                        })
                         print(f"[error] {exc}", flush=True)
                         controller.pause()
                         continue

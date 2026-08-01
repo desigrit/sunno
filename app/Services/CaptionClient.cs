@@ -44,6 +44,12 @@ public sealed class CaptionClient : IAsyncDisposable
     public event Action<StatusEvent>? Status;
     public event Action<LevelEvent>? Level;
     public event Action<IReadOnlyList<SpeakerInfo>>? Roster;
+    /// <summary>Two speakers were folded into one: captions tagged with the first id belong
+    /// to the second now. Raised immediately before the roster that reflects the merge.</summary>
+    public event Action<int, int>? SpeakersMerged;
+    /// <summary>A speaker was forgotten. Captions tagged with that id should fall back to the
+    /// supplied generic label. Raised immediately before the roster that reflects the removal.</summary>
+    public event Action<int, string>? SpeakerDeleted;
     public event Action<bool>? ConnectionChanged;
     public event Action<IReadOnlyList<ModelOption>>? ModelRequired;
     /// <summary>
@@ -172,6 +178,22 @@ public sealed class CaptionClient : IAsyncDisposable
                 Roster?.Invoke(list);
                 break;
             }
+            case "speaker_merged":
+            {
+                // Must be handled before the roster frame that follows it, and it is: frames
+                // are dispatched one at a time as they are read off the socket.
+                var from = GetInt(root, "from");
+                var into = GetInt(root, "into");
+                if (from is int f && into is int t) SpeakersMerged?.Invoke(f, t);
+                break;
+            }
+            case "speaker_deleted":
+            {
+                var id = GetInt(root, "id");
+                var label = GetString(root, "label");
+                if (id is int d && !string.IsNullOrEmpty(label)) SpeakerDeleted?.Invoke(d, label);
+                break;
+            }
             case "model_required":
                 ModelRequired?.Invoke(ParseCatalog(root));
                 break;
@@ -256,6 +278,9 @@ public sealed class CaptionClient : IAsyncDisposable
 
     public Task MergeSpeakersAsync(int source, int target) =>
         SendAsync(new { cmd = "merge_speakers", source, target });
+
+    public Task DeleteSpeakerAsync(int id) =>
+        SendAsync(new { cmd = "delete_speaker", id });
 
     private async Task SendAsync(object payload)
     {

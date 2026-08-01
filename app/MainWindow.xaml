@@ -39,7 +39,7 @@
         </Grid>
 
         <!-- body -->
-        <Grid Grid.Row="1">
+        <Grid x:Name="BodyArea" Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="240" />
                 <ColumnDefinition Width="*" />
@@ -83,6 +83,21 @@
                                 <Grid ColumnSpacing="10" Padding="4,7"
                                       AutomationProperties.Name="{x:Bind Label, Mode=OneWay}"
                                       ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}">
+                                    <!-- On the row itself rather than the ListView, so the
+                                         menu knows which person it is acting on however it
+                                         was summoned. ContextFlyout answers the Menu key and
+                                         Shift+F10 as well as right-click, so Delete is not
+                                         mouse-only. -->
+                                    <Grid.ContextFlyout>
+                                        <MenuFlyout>
+                                            <MenuFlyoutItem Text="Edit" Click="OnSpeakerEditRequested">
+                                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE70F;" /></MenuFlyoutItem.Icon>
+                                            </MenuFlyoutItem>
+                                            <MenuFlyoutItem Text="Delete" Click="OnSpeakerDeleteRequested">
+                                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>
+                                            </MenuFlyoutItem>
+                                        </MenuFlyout>
+                                    </Grid.ContextFlyout>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
@@ -370,7 +385,7 @@
         </Grid>
 
         <!-- command bar -->
-        <Border Grid.Row="2" Height="76"
+        <Border x:Name="CommandArea" Grid.Row="2" Height="76"
                 Background="{ThemeResource LayerFillColorAltBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="0,1,0,0">
@@ -445,10 +460,20 @@
             <FontIcon Glyph="&#xE712;" FontSize="15" />
             <Button.Flyout>
                 <MenuFlyout Placement="Bottom">
-                    <MenuFlyoutItem Text="Larger text" Click="OnBigger">
+                    <!-- The override is rendered verbatim in the menu row, but WinUI also builds
+                         the hover tooltip from it, and it does that by splitting on spaces and
+                         rejoining with "+" - so "Ctrl +" came out as "Ctrl++". An explicit
+                         tooltip stops it generating one, which is what the keyboard-accelerator
+                         guidance recommends anyway. Notepad writes these as "Ctrl+Plus" and
+                         "Ctrl+Minus"; the spaced form is a deliberate choice here. -->
+                    <MenuFlyoutItem Text="Larger text" Click="OnBigger"
+                                    KeyboardAcceleratorTextOverride="Ctrl +"
+                                    ToolTipService.ToolTip="Make captions larger (Ctrl +)">
                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E8;" /></MenuFlyoutItem.Icon>
                     </MenuFlyoutItem>
-                    <MenuFlyoutItem Text="Smaller text" Click="OnSmaller">
+                    <MenuFlyoutItem Text="Smaller text" Click="OnSmaller"
+                                    KeyboardAcceleratorTextOverride="Ctrl -"
+                                    ToolTipService.ToolTip="Make captions smaller (Ctrl -)">
                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E7;" /></MenuFlyoutItem.Icon>
                     </MenuFlyoutItem>
                     <MenuFlyoutSeparator />
@@ -469,11 +494,8 @@
                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>
                     </MenuFlyoutItem>
                     <MenuFlyoutSeparator />
-                    <!-- Shows the report before copying it, deliberately. Asking someone to
-                         send a diagnostic file they cannot read would sit badly with an app
-                         whose whole claim is that nothing leaves their machine. -->
-                    <MenuFlyoutItem Text="Copy diagnostics" Click="OnCopyDiagnostics">
-                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE9D5;" /></MenuFlyoutItem.Icon>
+                    <MenuFlyoutItem Text="Settings" Click="OnOpenSettings">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;" /></MenuFlyoutItem.Icon>
                     </MenuFlyoutItem>
                 </MenuFlyout>
             </Button.Flyout>
@@ -572,6 +594,186 @@
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                Text="You can change the model later. Larger models are more accurate on accented speech and at a distance from the microphone." />
                 </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- Settings. A full-window page rather than a dialog, matching the inbox apps.
+             Declared after SetupOverlay so it draws above it, but OnOpenSettings refuses to
+             open while setup is up, so the two are never both on screen.
+
+             RowSpan=3 and an opaque background on purpose: it covers the error banner and
+             the empty-state text together. A partial cover would hide one and not the other,
+             and the empty state points at the banner ("the message above explains what
+             happened"), so the app would end up contradicting itself. -->
+        <Grid x:Name="SettingsPage" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed"
+              Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+            <Grid.Resources>
+                <Style x:Key="SettingsCard" TargetType="Border">
+                    <Setter Property="Background"
+                            Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                    <Setter Property="BorderBrush"
+                            Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                    <Setter Property="BorderThickness" Value="1" />
+                    <Setter Property="CornerRadius" Value="6" />
+                    <Setter Property="Padding" Value="16,14" />
+                </Style>
+            </Grid.Resources>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Padding="16,44,32,4">
+                <Button x:Name="SettingsBackButton" Click="OnCloseSettings"
+                        Width="36" Height="36" Padding="0"
+                        Background="Transparent" BorderThickness="0"
+                        HorizontalAlignment="Left"
+                        AutomationProperties.Name="Back"
+                        ToolTipService.ToolTip="Back">
+                    <FontIcon Glyph="&#xE72B;" FontSize="14" />
+                </Button>
+                <TextBlock Text="Settings" Margin="20,6,0,0"
+                           Style="{StaticResource TitleTextBlockStyle}"
+                           AutomationProperties.HeadingLevel="Level1" />
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <Grid Padding="36,20,36,32" ColumnSpacing="36" MaxWidth="1040"
+                      HorizontalAlignment="Left">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="300" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Spacing="18" MaxWidth="620">
+
+                        <TextBlock Text="Captions" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <Border Style="{StaticResource SettingsCard}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Spacing="2">
+                                    <TextBlock Text="Clarity score on your own lines" />
+                                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}"
+                                               TextWrapping="Wrap"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               Text="How clearly you were heard, shown on speech you have marked as your own." />
+                                </StackPanel>
+                                <ToggleSwitch x:Name="ClarityToggle" Grid.Column="1"
+                                              IsOn="True" Toggled="OnClarityToggled"
+                                              AutomationProperties.Name="Show clarity score on your own lines" />
+                            </Grid>
+                        </Border>
+
+                        <TextBlock Text="Speech engine" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <Border Style="{StaticResource SettingsCard}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Spacing="2">
+                                    <TextBlock Text="Use the processor instead of the graphics card" />
+                                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}"
+                                               TextWrapping="Wrap"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               Text="Slower, but a way back in if a driver update stops the engine starting. Reloads the model, which takes about half a minute." />
+                                </StackPanel>
+                                <ToggleSwitch x:Name="ForceCpuToggle" Grid.Column="1"
+                                              Toggled="OnForceCpuToggled"
+                                              AutomationProperties.Name="Use the processor instead of the graphics card" />
+                            </Grid>
+                        </Border>
+
+                        <TextBlock Text="Speakers" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <Border Style="{StaticResource SettingsCard}" Padding="16,10">
+                            <StackPanel Spacing="4">
+                                <TextBlock x:Name="NoSpeakersInSettings"
+                                           Text="Nobody has been recognised yet."
+                                           Margin="0,4,0,6"
+                                           Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                <ItemsControl x:Name="SettingsSpeakerList" ItemsSource="{x:Bind Speakers}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="models:SpeakerRow">
+                                            <Grid ColumnSpacing="12" Padding="0,6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <Ellipse Grid.Column="0" Width="10" Height="10"
+                                                         VerticalAlignment="Center"
+                                                         Fill="{x:Bind local:MainWindow.SpeakerBrush(ColourIndex)}" />
+                                                <TextBlock Grid.Column="1" Text="{x:Bind Label, Mode=OneWay}"
+                                                           VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <Button Grid.Column="2" Content="Edit"
+                                                        Click="OnSpeakerEditRequested"
+                                                        AutomationProperties.Name="{x:Bind EditActionName, Mode=OneWay}" />
+                                                <Button Grid.Column="3" Content="Delete"
+                                                        Click="OnSpeakerDeleteRequested"
+                                                        AutomationProperties.Name="{x:Bind DeleteActionName, Mode=OneWay}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="Diagnostics" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel Spacing="10">
+                                <TextBlock TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           Text="If something isn't working, send these logs to the developer. Everything that would be shared is below." />
+                                <!-- A read-only TextBox rather than a TextBlock: selectable, so
+                                     Ctrl+C still works when the clipboard button fails, which it
+                                     genuinely does on this machine. -->
+                                <TextBox x:Name="DiagnosticsBox" IsReadOnly="True"
+                                         AcceptsReturn="True" TextWrapping="NoWrap"
+                                         FontFamily="Consolas" FontSize="12" Height="240"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                         AutomationProperties.Name="Diagnostics report" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="Copy" Click="OnCopyDiagnostics" />
+                                    <Button Content="Save to a file…" Click="OnSaveDiagnostics" />
+                                    <Button Content="Clear logs" Click="OnClearDiagnostics" />
+                                </StackPanel>
+                                <TextBlock x:Name="DiagnosticsStatus" Visibility="Collapsed"
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource CaptionTextBlockStyle}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Spacing="10">
+                        <TextBlock Text="About this app"
+                                   Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <TextBlock x:Name="AboutVersion" Text="Sunno"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,4"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="Open source. Runs entirely on this PC." />
+                        <HyperlinkButton Content="Privacy policy" Padding="0"
+                                         NavigateUri="https://github.com/desigrit/sunno/blob/master/PRIVACY.md" />
+                        <HyperlinkButton Content="Source code" Padding="0"
+                                         NavigateUri="https://github.com/desigrit/sunno" />
+                        <HyperlinkButton Content="Third-party notices" Padding="0"
+                                         NavigateUri="https://github.com/desigrit/sunno/blob/master/THIRD-PARTY-NOTICES.md" />
+                        <HyperlinkButton Content="Report a problem" Padding="0"
+                                         NavigateUri="https://github.com/desigrit/sunno/issues" />
+                    </StackPanel>
+                </Grid>
             </ScrollViewer>
         </Grid>
     </Grid>

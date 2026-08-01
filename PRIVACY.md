@@ -83,6 +83,7 @@ In `%LOCALAPPDATA%\Sunno`:
 | `backend.log` | Diagnostic output, so a crash can be investigated |
 | `backend.log.1` | The previous diagnostic log, kept when the current one is rotated |
 | `startup-trace.log` | A few lines recording how far startup got, for diagnosing launch failures |
+| `startup-error.log` | Error text from the app itself, written only when something goes wrong |
 
 **On the input device in `settings.json`.** Sunno records the *name* of the microphone you chose,
 not only its position in the list, because Windows renumbers audio devices whenever the set of
@@ -109,20 +110,40 @@ You can delete any of these files at any time. Sunno will recreate what it needs
 
 ## The diagnostics report
 
-Sunno can produce a short report to attach to a bug report, from the overflow menu, "Copy
-diagnostics". It is shown to you in full before it is copied, so you can read exactly what you
-would be sharing.
+Sunno can produce a report to attach to a bug report. Open the overflow menu, then "Settings".
+Everything it would share is shown in the box on screen first, so you can read exactly what you
+would be sending. Copy and "Save to a file..." both use that same text, unchanged.
 
-It contains the app version and package identity, your Windows version, processor architecture and
-count, the .NET version, whether the GPU or the processor is being used, which speech model is
-loaded and which is selected, whether the engine is running and connected, whether the source is a
-microphone or system audio, whether a device is chosen and whether its name is stored, whether the
-microphone consent question has been asked, your caption size and always-on-top preference,
-whether a vocabulary is set, and the timing measurements from `hardware.json`.
+It is in four parts. The first is the report itself, which contains the app version and package
+identity, your Windows version, processor architecture and count, the .NET version, whether the
+GPU or the processor is being used, which speech model is loaded and which is selected, whether
+the engine is running and connected, whether the source is a microphone or system audio, whether a
+device is chosen and whether its name is stored, whether the microphone consent question has been
+asked, your caption size and always-on-top preference, whether a vocabulary is set, and the timing
+measurements from `hardware.json`.
 
-It deliberately contains **none** of the following: transcript text, speaker names, voice
-fingerprints, vocabulary entries, device names, or any part of the log files. Where a device is
-concerned it reports only *whether* one is chosen, never which one.
+The report deliberately contains **none** of the following: transcript text, speaker names, voice
+fingerprints, vocabulary entries, or device names. Where a device is concerned it reports only
+*whether* one is chosen, never which one.
+
+The other three parts are there because a report on its own rarely explains a crash:
+
+| Also included | What it is |
+|---|---|
+| `startup-trace.log` | Stage names and outcomes from startup, no content |
+| `startup-error.log` | Error text from the app when something has gone wrong |
+| The last engine failure | The same detail the error banner offers under "Copy details": the failure lines from the engine and the path of its log |
+
+These three can contain file paths from your computer, which usually include your Windows user
+name. They are shown to you in the box along with everything else.
+
+**`backend.log` is not included**, in either the on-screen report or the saved file. That is the
+one file that records anything about the audio you captured, even indirectly, so Sunno does not
+bundle it up for you. If a maintainer ever needs it, the error banner names its path and you can
+send it deliberately.
+
+You choose where the file is written, and nothing is uploaded. Sending it to anyone is your
+decision and your action.
 
 **Transcripts are not saved.** When you close Sunno, or clear the transcript, the captions are
 gone. If you want to keep something, select it and copy it out yourself.

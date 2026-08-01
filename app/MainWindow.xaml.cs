@@ -180,6 +180,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _client.Level += lv => _ui.TryEnqueue(() => OnLevel(lv));
         _client.Status += st => _ui.TryEnqueue(() => OnStatus(st));
         _client.Roster += r => _ui.TryEnqueue(() => OnRoster(r));
+        // Subscribed and enqueued ahead of the roster it precedes. TryEnqueue preserves order
+        // on the dispatcher queue, so the remap always runs before the relabel that depends
+        // on it.
+        _client.SpeakersMerged += (from, into) => _ui.TryEnqueue(() => OnSpeakersMerged(from, into));
+        _client.SpeakerDeleted += (id, label) => _ui.TryEnqueue(() => OnSpeakerDeleted(id, label));
         _client.ConnectionChanged += ok => _ui.TryEnqueue(() => OnConnection(ok));
         _client.ModelRequired += m => _ui.TryEnqueue(() => OnModelRequired(m));
         _client.DownloadProgress += p => _ui.TryEnqueue(() => OnDownloadProgress(p));
@@ -187,7 +192,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _client.DownloadFailed += msg => _ui.TryEnqueue(() => OnDownloadFailed(msg));
         _client.ModelCatalog += (current, device, list) =>
             _ui.TryEnqueue(() => OnModelCatalog(current, device, list));
-        _backend.Crashed += msg => _ui.TryEnqueue(() => OnBackendCrashed(msg));
+        _backend.Crashed += (reason, detail) => _ui.TryEnqueue(() => OnBackendCrashed(reason, detail));
 
         Closed += (_, _) =>
         {
@@ -219,8 +224,13 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             model: _settings.Model,
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
-            loopbackDevice: _settings.LoopbackDeviceIndex);
-        if (!string.IsNullOrEmpty(error)) SetStatus(error);
+            loopbackDevice: _settings.LoopbackDeviceIndex,
+            computeDevice: _settings.ForceCpu ? "cpu" : "auto");
+        // Through the banner, not SetStatus. SetStatus writes to the small elapsed-time label in
+        // the corner, which is sized for "1:08" - a failure sentence put there is invisible, so
+        // an install missing its engine showed the loading text and nothing else, forever. The
+        // two other Start/Restart call sites already report failures this way.
+        if (!string.IsNullOrEmpty(error)) ShowFatalBackendError(error);
         App.Trace($"backend.Start -> {(string.IsNullOrEmpty(error) ? "ok" : error)}");
         _client.Start();
         _ = LoadDevicesAsync();
@@ -231,6 +241,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // sits paused behind a dialog that never appears.
         if (Content is FrameworkElement root)
         {
+            RegisterShortcuts(root);
+
             root.Loaded += (_, _) =>
             {
                 App.Trace("content Loaded");
@@ -272,6 +284,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         Title = "Sunno";
         ApplyTitleBarIcon();
+        // Before any caption can arrive, so the first line already agrees with the preference.
+        Sunno.Models.CaptionLine.ClarityEnabled = _settings.ShowClarity;
 
         if (MicaController.IsSupported())
             SystemBackdrop = new MicaBackdrop { Kind = MicaKind.Base };
@@ -282,10 +296,14 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         AppWindow.Resize(new SizeInt32(1040, 660));
         if (AppWindow.Presenter is OverlappedPresenter presenter)
         {
-            presenter.IsAlwaysOnTop = true;   // captions need to stay readable over other apps
+            // Honour the saved choice. Defaults to on, because captions need to stay readable
+            // over whatever the user is actually doing, but someone who turned it off should
+            // not find it back on at every launch.
+            presenter.IsAlwaysOnTop = _settings.AlwaysOnTop;
             presenter.PreferredMinimumWidth = 720;
             presenter.PreferredMinimumHeight = 420;
         }
+        AlwaysOnTopItem.IsChecked = _settings.AlwaysOnTop;
     }
 
     // ---------- caption stream ----------
@@ -469,6 +487,20 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     private void OnStatus(StatusEvent st)
     {
+        // Frames that arrive after the engine has been declared dead are stale, and acting on
+        // them is worse than ignoring them. The crash is reported from Process.Exited while
+        // status frames come off the socket - two independent producers, so TryEnqueue's FIFO
+        // guarantees nothing between them. A backend that reports a fault and then exits leaves
+        // that last frame sitting in the socket buffer, which outlives the process: dispatched
+        // after the fatal banner, an "error" frame repaints it and clears the crash detail, and
+        // a "listening" frame closes the banner outright and puts "Listening for speech" back on
+        // screen while nothing is being captured.
+        //
+        // Safe to drop only because the deliberate restart paths clear _backendFatal before they
+        // revive the engine; without that this would ignore the recovered backend's own frames
+        // and leave a permanent "speech engine stopped" over a working app.
+        if (_backendFatal) return;
+
         if (st.Running is bool running) SetRunning(running);
         _backendLoading = st.State == "loading";
 
@@ -671,6 +703,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void ShowActionableError(StatusEvent st)
     {
         _micProblem = st.Code is "mic_denied" or "mic_unavailable";
+        // No longer describing a crash, so the copy-details payload must not survive: OnMicAction
+        // takes the copy branch whenever _crashDetail is non-null, which meant a microphone
+        // banner offering "Open Settings" quietly copied stale crash text instead.
+        _crashDetail = null;
         // Taking the bar over, so drop any stickiness it inherited. Otherwise a device notice
         // raised seconds earlier keeps this bar pinned, and OnStatus will not close it once the
         // user has picked a working microphone: they would read "Microphone unavailable" while
@@ -699,11 +735,35 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 MicActionLink.Visibility = Visibility.Collapsed;
                 break;
 
+            case "capture_failed":
+                MicInfoBar.Severity = InfoBarSeverity.Warning;
+                MicInfoBar.Title = "Microphone unavailable";
+                MicInfoBar.Message =
+                    (st.Message ?? "The microphone could not be opened.") +
+                    " Try choosing a different microphone below.";
+                MicActionLink.Visibility = Visibility.Collapsed;
+                break;
+
             default:
+                // Never the backend's own words. An unrecognised failure used to print
+                // st.Message straight onto the banner, which is how "[Errno -9996] Invalid
+                // device info" ended up as the entire explanation offered to the user.
                 MicInfoBar.Severity = InfoBarSeverity.Error;
                 MicInfoBar.Title = "Something went wrong";
-                MicInfoBar.Message = st.Message ?? "Unknown error.";
-                MicActionLink.Visibility = Visibility.Collapsed;
+                MicInfoBar.Message =
+                    "Sunno hit a problem it doesn't have a specific explanation for. "
+                    + "Restarting Sunno usually clears it.";
+                // Details come from the engine's log through IsDiagnostic, not from st.Message.
+                // _crashDetail is embedded verbatim in the diagnostics export, under a header
+                // promising no transcript text, no speaker names and no device names - and an
+                // arbitrary backend-supplied string is exactly what would make that promise
+                // unenforceable. The same narrowing the crash path uses applies here.
+                var engineDetail = _backend.RecentDiagnostics();
+                _crashDetail = string.IsNullOrWhiteSpace(engineDetail)
+                    ? $"No further detail was recorded.\n\nLog: {BackendHost.DisplayLogPath}"
+                    : $"{engineDetail}\n\nLog: {BackendHost.DisplayLogPath}";
+                MicActionLink.Content = "Copy details";
+                MicActionLink.Visibility = Visibility.Visible;
                 break;
         }
         MicInfoBar.IsOpen = true;
@@ -713,9 +773,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// The backend died. Say so plainly and point at the log — a user who is relying on this to
     /// follow a conversation must never be left watching a spinner that will never resolve.
     /// </summary>
-    private void OnBackendCrashed(string message)
+    private void OnBackendCrashed(string reason, string detail)
     {
-        App.Trace($"backend crashed: {message.Split('\n')[0]}");
+        App.Trace($"backend crashed: {reason}");
         _backendLoading = false;
 
         // A crash while switching means the new model never came up. Fall back to something
@@ -761,33 +821,62 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         }
 
         _backendFatal = true;
-        ShowFatalBackendError(message);
+        ShowFatalBackendError(reason, detail);
     }
 
     /// <summary>
     /// Report a backend we cannot recover from. Split out so the restart path can reuse it:
     /// a failed restart has already killed the old process, so silently returning would leave
     /// "Reconnecting…" on screen forever with nothing left to reconnect to.
+    ///
+    /// The banner gets the human reason; the technical detail goes to "Copy details" only. It
+    /// used to carry both, so a port conflict presented the user with a Python traceback full of
+    /// absolute paths as the whole explanation.
     /// </summary>
-    private void ShowFatalBackendError(string message)
+    private void ShowFatalBackendError(string reason, string? detail = null)
     {
         _backendFatal = true;
         _backendLoading = false;
-        // The InfoBar below carries the title, the detail and the log path.
         ClearStatus();
         _micProblem = false;
         _micCanPrompt = false;
         _infoSticky = false;
         MicInfoBar.Severity = InfoBarSeverity.Error;
-        MicInfoBar.Title = "The speech engine stopped";
-        MicInfoBar.Message = $"{message}\n\nDetails were written to {BackendHost.DisplayLogPath}";
+        MicInfoBar.Title = "Sunno's speech engine stopped";
+        MicInfoBar.Message = reason;
         MicActionLink.Content = "Copy details";
         MicActionLink.Visibility = Visibility.Visible;
         MicInfoBar.IsOpen = true;
-        _crashDetail = $"{message}\n\nLog: {BackendHost.DisplayLogPath}";
+        ShowFailedState();
+
+        _crashDetail = string.IsNullOrWhiteSpace(detail)
+            ? $"{reason}\n\nLog: {BackendHost.DisplayLogPath}"
+            : $"{reason}\n\n{detail}\n\nLog: {BackendHost.DisplayLogPath}";
     }
 
+    /// <summary>
+    /// The last fatal backend detail, for "Copy details".
+    ///
+    /// Cleared whenever the bar stops describing a crash. It was previously set once and never
+    /// reset, so after any fatal error a later microphone problem rendered a link labelled
+    /// "Open Settings" that copied stale crash text instead of doing anything useful.
+    /// </summary>
     private string? _crashDetail;
+
+    /// <summary>
+    /// Take the engine out of its dead state, for the paths that deliberately start a new one.
+    ///
+    /// _backendFatal is otherwise set-once: it stops reconnect chatter painting over a real
+    /// failure. But a model switch, a device change and the Force CPU toggle all replace the
+    /// process on purpose, and leaving the flag set makes the app ignore the new process's own
+    /// status frames while permanently suppressing device notices. Also clears the crash detail,
+    /// which describes a process that is no longer the one running.
+    /// </summary>
+    private void ClearBackendFatal()
+    {
+        _backendFatal = false;
+        _crashDetail = null;
+    }
 
     /// <summary>Explain a demotion the user didn't ask for, and keep it on screen.</summary>
     private void RaiseFallbackNotice(string failedId, string fallbackId)
@@ -939,15 +1028,40 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // fine, and it used to close the bar outright, which discarded any sticky notice
             // raised moments earlier — the device-rot warning always, and a model fallback
             // notice whenever one arrived before consent resolved. Same idiom as OnStatus.
-            if (!_infoSticky) MicInfoBar.IsOpen = false;
-            // Put back a device notice that a permission problem had taken the bar over from.
-            RenderDeviceNotice();
+            //
+            // _backendFatal is checked for the same reason: a start failure is reported from the
+            // constructor, which runs before this, so closing the bar here erased the only
+            // explanation on screen and left the empty state pointing at a banner that was no
+            // longer there.
+            //
+            // This guard is load-bearing and is NOT the redundant one. It protects a *close*,
+            // and there is no central guard for closing the bar. The qualifier on the
+            // RenderDeviceNotice() call below is the redundant one - RenderDeviceNotice guards
+            // itself. If either is ever trimmed, trim that one, never this.
+            if (!_infoSticky && !_backendFatal) MicInfoBar.IsOpen = false;
+            // Put back a device notice that a permission problem had taken the bar over from —
+            // but never over a fatal one. "Your microphone changed" is an informational notice;
+            // painting it over "the speech engine stopped" would replace the only explanation
+            // of why nothing is being captioned with a message implying everything is fine.
+            if (!_backendFatal) RenderDeviceNotice();
             _micGranted = true;
             TryStartCapture();
             return;
         }
 
         _micProblem = true;
+        // A dead engine outranks a microphone problem, and the state above is still worth
+        // recording — the bar just must not be repainted. Two things go wrong otherwise: the
+        // banner blames the microphone for an engine crash and erases the real explanation,
+        // and the link below is relabelled "Open Settings" while _crashDetail is still set,
+        // which makes OnMicAction take its copy branch and silently put a crash dump on the
+        // clipboard instead of opening anything.
+        //
+        // This is the second writer to reach the bar without knowing about _backendFatal (the
+        // first was OnStatus). If a third appears, the guards should become one ShowInfoBar
+        // chokepoint that refuses to overwrite a fatal banner, rather than a rule re-stated at
+        // every writer.
+        if (_backendFatal) return;
         // Taking the bar over for a microphone problem, so release any sticky notice first.
         // Otherwise the check in the recovery path above never fires and the "microphone access
         // is off, nothing can be transcribed" banner stays on screen after the user has turned
@@ -1306,6 +1420,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _engineReadyThisSession = false;
         _startedPaused = !_micGranted || _micDeclined;
         _awaitingSwitchReconnect = true;
+        // Deliberately reviving the engine, so it is no longer dead. Left set, this would
+        // outlive the failure it described: the new process's own status frames are ignored
+        // while _backendFatal holds, and the device-rot notice stays suppressed for the rest
+        // of the session. Cleared here rather than on the frame that proves recovery, because
+        // that frame is exactly what the flag would block.
+        ClearBackendFatal();
         // The backend is about to be replaced, so the microphone closes — but the transcript
         // survives and so does the conversation, so the count freezes rather than resetting.
         PauseCaptureClock();
@@ -1318,7 +1438,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             model: id,
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
-            loopbackDevice: _settings.LoopbackDeviceIndex);
+            loopbackDevice: _settings.LoopbackDeviceIndex,
+            computeDevice: _settings.ForceCpu ? "cpu" : "auto");
 
         if (!string.IsNullOrEmpty(error))
         {
@@ -1422,6 +1543,21 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         EmptyDetail.Text = "Press the microphone button to start listening.";
     }
 
+    /// <summary>
+    /// The engine is not coming up. Without this the centre of the window kept its loading
+    /// text, so a failed start left "Starting the speech engine - this takes about half a
+    /// minute the first time" on screen indefinitely: a promise of captions that will never
+    /// arrive, which is the exact failure this app cannot afford.
+    /// </summary>
+    private void ShowFailedState()
+    {
+        LoadingRing.IsAnimating = false;
+        LoadingRing.Visibility = Visibility.Collapsed;
+        EmptyGlyph.Visibility = Visibility.Visible;
+        EmptyTitle.Text = "Captions aren't running";
+        EmptyDetail.Text = "The message above explains what happened.";
+    }
+
     private void OnConnection(bool connected)
     {
         _connected = connected;
@@ -1440,6 +1576,16 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             {
                 // The picker is always visible now, so it needs its contents up front.
                 _ = _client.RequestModelsAsync();
+            }
+            if (DevicePicker.Items.Count == 0)
+            {
+                // Same idea for the microphone list, and for a sharper reason: the device list
+                // is fetched over HTTP once from the constructor, and it gives up after twenty
+                // seconds. A backend that fails to start - a port conflict, say - outlasts that,
+                // so the picker ends up empty. Recovering the engine afterwards brought captions
+                // back but left the user unable to change microphone for the rest of the
+                // session, with an empty dropdown and no explanation.
+                _ = LoadDevicesAsync();
             }
             return;
         }
@@ -1465,11 +1611,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // renamed. A row should animate when that person is genuinely new, and stay still
         // otherwise.
         //
-        // Depends on the backend numbering speakers by list position and emitting them in
-        // ascending id order (server/speaker.py), so survivors are always a prefix and new
-        // people always arrive at the tail. One consequence worth knowing: a merge renumbers,
-        // so the row that plays the removal animation is the last one while the merged-away
-        // person's row is relabelled in place.
+        // Depends on the backend emitting speakers in ascending id order (server/speaker.py
+        // sorts the roster), so a genuinely new person always arrives at the tail. Ids are
+        // durable and are never reused, so they can have gaps in them: a merged-away speaker
+        // leaves one behind. That is deliberate. Ids used to be list positions, which meant a
+        // merge renumbered everyone above the merged-away person and the relabel pass below
+        // then rewrote their already-scrolled captions with the next person's name.
         for (var i = Speakers.Count - 1; i >= 0; i--)
             if (!speakers.Any(s => s.Id == Speakers[i].Id))
                 Speakers.RemoveAt(i);
@@ -1515,6 +1662,79 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     }
 
     private SpeakerRow? FindSpeaker(int id) => Speakers.FirstOrDefault(s => s.Id == id);
+
+    /// <summary>
+    /// Two speakers turned out to be one person, so move the absorbed speaker's captions onto
+    /// the survivor.
+    ///
+    /// This has to happen before the roster frame that follows: ids are durable, so the
+    /// absorbed id is simply gone from the new roster, and OnRoster's relabel pass skips any
+    /// line whose id it cannot find. Without this the merged-away person's lines would keep
+    /// their old name permanently, which is the whole point of merging two speakers.
+    /// </summary>
+    private void OnSpeakersMerged(int from, int into)
+    {
+        foreach (var line in Lines)
+            if (line.SpeakerId == from)
+                line.SpeakerId = into;
+    }
+
+    /// <summary>
+    /// A speaker was forgotten, so their captions stop claiming to know who spoke.
+    ///
+    /// The id is deliberately left on the line: it is retired and can never be handed to
+    /// anyone else, so it keeps the lines grouped and their colour stable while no longer
+    /// naming a person. IsSelf is cleared with it - if the deleted profile was the user's
+    /// own, those lines should not go on being rendered as theirs.
+    /// </summary>
+    private void OnSpeakerDeleted(int id, string fallbackLabel)
+    {
+        foreach (var line in Lines)
+        {
+            if (line.SpeakerId != id) continue;
+            line.SpeakerLabel = fallbackLabel;
+            line.IsSelf = false;
+        }
+    }
+
+    /// <summary>
+    /// Forget a speaker, after checking the user means it when there is something to lose.
+    ///
+    /// Named speakers are confirmed because naming one pins their voice profile and that
+    /// survives restarts: deleting is the only way to lose it, and it cannot be undone.
+    /// Automatically discovered speakers are not confirmed - they carry no work of the
+    /// user's and reappear the moment that person speaks again.
+    /// </summary>
+    private async Task DeleteSpeakerAsync(SpeakerRow row)
+    {
+        if (row.Named)
+        {
+            var name = row.Label.Replace(" (You)", string.Empty);
+            var confirm = new ContentDialog
+            {
+                Title = $"Forget {name}?",
+                Content = "Sunno will stop recognising this voice, and lines already in the "
+                          + "transcript will no longer show their name. This cannot be undone.",
+                PrimaryButtonText = "Forget",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            try
+            {
+                if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+            }
+            catch (Exception ex)
+            {
+                // One ContentDialog at a time per window; if another is somehow up, do
+                // nothing rather than delete without having asked.
+                App.Trace($"delete confirm failed to open: {ex.GetType().Name}");
+                return;
+            }
+        }
+
+        await _client.DeleteSpeakerAsync(row.Id);
+    }
 
     private void SetRunning(bool running)
     {
@@ -1665,26 +1885,43 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     // ---------- devices ----------
 
+    private bool _loadingDevices;
+
     private async Task LoadDevicesAsync()
     {
-        App.Trace("LoadDevicesAsync start");
-        // The backend needs a moment to bind its HTTP port on a cold start.
-        for (var attempt = 0; attempt < 40; attempt++)
+        // One at a time. The constructor starts a fetch and the reconnect path starts another
+        // when the picker is still empty, which on a normal cold start is simply because the
+        // first is still polling — two loops then poll the same endpoint every 500 ms and both
+        // populate. Harmless but wasteful, and it makes the trace hard to read.
+        if (_loadingDevices) return;
+        _loadingDevices = true;
+        try
         {
-            List<AudioDevice>? devices = null;
-            try
+            App.Trace("LoadDevicesAsync start");
+            // The backend needs a moment to bind its HTTP port on a cold start.
+            for (var attempt = 0; attempt < 40; attempt++)
             {
-                var json = await _http.GetStringAsync("http://127.0.0.1:8765/devices.json");
-                devices = ParseDevices(json);
-            }
-            catch
-            {
-                await Task.Delay(500);
-                continue;
-            }
+                List<AudioDevice>? devices = null;
+                try
+                {
+                    var json = await _http.GetStringAsync("http://127.0.0.1:8765/devices.json");
+                    devices = ParseDevices(json);
+                }
+                catch
+                {
+                    await Task.Delay(500);
+                    continue;
+                }
 
-            if (devices is { Count: > 0 }) _ui.TryEnqueue(() => PopulateDevices(devices));
-            return;
+                if (devices is { Count: > 0 }) _ui.TryEnqueue(() => PopulateDevices(devices));
+                return;
+            }
+        }
+        finally
+        {
+            // Cleared even on the give-up path, so a later reconnect can try again — that is
+            // the whole point of the retry from OnConnection.
+            _loadingDevices = false;
         }
     }
 
@@ -1897,13 +2134,25 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void ShowDeviceNotice(string message)
     {
         _deviceNotice = message;
+        // A dead engine outranks a changed microphone, and this has to be checked before the
+        // two lines below rather than at the call sites. Nulling _crashDetail would throw away
+        // the "Copy details" payload for the crash, and the notice itself is Informational —
+        // painting "Microphone changed" over "the speech engine stopped" tells a user whose
+        // captions have died that everything is fine. Reachable on a broken install: the
+        // constructor raises the fatal banner, then LoadDevicesAsync finishes and device-rot
+        // detection fires this.
+        if (_backendFatal) return;
+        _crashDetail = null;
         if (_micProblem) return;
         RenderDeviceNotice();
     }
 
     private void RenderDeviceNotice()
     {
-        if (_deviceNotice is null) return;
+        // Guarded here as well as in ShowDeviceNotice, so the rule lives with the thing it
+        // protects rather than being re-stated at every caller. Same reason the Settings page
+        // disables regions rather than enumerating what each one contains.
+        if (_deviceNotice is null || _backendFatal) return;
         MicInfoBar.Severity = InfoBarSeverity.Informational;
         MicInfoBar.Title = "Microphone changed";
         MicInfoBar.Message = _deviceNotice;
@@ -2122,13 +2371,15 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _connected = false;
         _engineReadyThisSession = false;
         _startedPaused = !_micGranted || _micDeclined;
+        ClearBackendFatal();   // see SwitchModelAsync: a deliberate restart un-kills the engine
 
         var error = _backend.Restart(
             device: device.Loopback ? null : device.Index.ToString(),
             model: _settings.Model,
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
-            loopbackDevice: device.Loopback ? device.Index : null);
+            loopbackDevice: device.Loopback ? device.Index : null,
+            computeDevice: _settings.ForceCpu ? "cpu" : "auto");
         if (!string.IsNullOrEmpty(error)) ShowFatalBackendError(error);
     }
 
@@ -2157,6 +2408,64 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void OnBigger(object sender, RoutedEventArgs e) => SetFontSize(CaptionSize + 3);
     private void OnSmaller(object sender, RoutedEventArgs e) => SetFontSize(CaptionSize - 3);
 
+    /// <summary>
+    /// Window-wide keyboard shortcuts.
+    ///
+    /// Registered on the content root rather than on the menu items they belong to: an
+    /// accelerator declared on a MenuFlyoutItem only fires while that flyout is open, because
+    /// the flyout's content is not in the visual tree until it is shown. The menu items carry
+    /// KeyboardAcceleratorTextOverride so the shortcut is still discoverable where a user
+    /// would look for it.
+    ///
+    /// Caption size is the shortcut that matters here. It is adjusted mid-conversation by
+    /// someone using the app to follow that conversation, and reaching for a menu costs them
+    /// the sentence being spoken while they do it.
+    /// </summary>
+    private void RegisterShortcuts(FrameworkElement root)
+    {
+        // The +/- on the main keyboard row are OEM keys, not VirtualKey.Add/Subtract, which
+        // are the numeric keypad. Both are registered, because "Ctrl and the plus key" means
+        // whichever one the user's hand is nearest - and on most layouts the main-row one
+        // needs Shift to produce an actual "+", so the unshifted key is what to listen for.
+        const Windows.System.VirtualKey OemPlus = (Windows.System.VirtualKey)187;
+        const Windows.System.VirtualKey OemMinus = (Windows.System.VirtualKey)189;
+
+        Add(OemPlus, () => SetFontSize(CaptionSize + 3));
+        Add(Windows.System.VirtualKey.Add, () => SetFontSize(CaptionSize + 3));
+        Add(OemMinus, () => SetFontSize(CaptionSize - 3));
+        Add(Windows.System.VirtualKey.Subtract, () => SetFontSize(CaptionSize - 3));
+
+        // Escape leaves Settings, from wherever focus is inside the page.
+        var escape = new KeyboardAccelerator { Key = Windows.System.VirtualKey.Escape };
+        escape.Invoked += (_, args) =>
+        {
+            if (SettingsPage.Visibility != Visibility.Visible) return;
+            CloseSettings();
+            args.Handled = true;
+        };
+        root.KeyboardAccelerators.Add(escape);
+
+        void Add(Windows.System.VirtualKey key, Action action)
+        {
+            var accelerator = new KeyboardAccelerator
+            {
+                Key = key,
+                Modifiers = Windows.System.VirtualKeyModifiers.Control,
+            };
+            accelerator.Invoked += (_, args) =>
+            {
+                // Marked handled either way: while an overlay is up the window behind it is
+                // inert, and letting the keystroke fall through would resize a transcript the
+                // user cannot see.
+                args.Handled = true;
+                if (SettingsPage.Visibility == Visibility.Visible) return;
+                if (SetupOverlay.Visibility == Visibility.Visible) return;
+                action();
+            };
+            root.KeyboardAccelerators.Add(accelerator);
+        }
+    }
+
     private void SetFontSize(double size)
     {
         CaptionSize = Math.Clamp(size, MinFont, MaxFont);
@@ -2172,116 +2481,13 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         if (AppWindow.Presenter is OverlappedPresenter presenter)
             presenter.IsAlwaysOnTop = AlwaysOnTopItem.IsChecked;
-    }
 
-    /// <summary>
-    /// Show the diagnostics report, then let the user copy it.
-    ///
-    /// Shown before it is copied, on purpose. Sunno asks people to believe their conversations
-    /// stay on their machine; handing them an opaque blob to email to a stranger would undercut
-    /// that in the one place it matters most. They read exactly what they are about to share.
-    /// </summary>
-    private async void OnCopyDiagnostics(object sender, RoutedEventArgs e)
-    {
-        string report;
-        try
-        {
-            report = Diagnostics.Build(_settings, _activeModel, _computeDevice,
-                                       _backend.IsRunning, _connected);
-        }
-        catch (Exception ex)
-        {
-            report = $"Could not build the report: {ex.GetType().Name}: {ex.Message}";
-        }
-
-        var body = new TextBox
-        {
-            IsReadOnly = true,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.NoWrap,
-            FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
-            FontSize = 12,
-            // Explicit size, not MaxHeight. ContentDialog sizes itself to its content's desired
-            // size, and a TextBox's desired height is one line however much text it holds, so
-            // MaxHeight alone produced a single-line box — which defeats the entire point of
-            // showing the report before it is copied.
-            Height = 320,
-            Width = 560,
-        };
-        // Assigned after construction, deliberately. Object initializers assign in the order
-        // written, and a TextBox with AcceptsReturn still false silently keeps only the text up
-        // to the first line break. Setting Text inside the initializer showed exactly one line,
-        // "Sunno diagnostics", and hid the entire report from the person being asked to share it.
-        body.Text = report;
-
-        ScrollViewer.SetVerticalScrollBarVisibility(body, ScrollBarVisibility.Auto);
-        ScrollViewer.SetHorizontalScrollBarVisibility(body, ScrollBarVisibility.Auto);
-
-        var status = new TextBlock
-        {
-            Visibility = Visibility.Collapsed,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 8, 0, 0),
-        };
-
-        var panel = new StackPanel();
-        panel.Children.Add(body);
-        panel.Children.Add(status);
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = Content.XamlRoot,
-            Title = "Diagnostics",
-            Content = panel,
-            PrimaryButtonText = "Copy",
-            CloseButtonText = "Close",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-
-        // Handled here rather than after ShowAsync returns, because by then the dialog has
-        // already closed. An earlier version told the user to "select the text in the
-        // diagnostics window and press Ctrl+C" after that window was gone — an instruction that
-        // cannot be followed. The clipboard really does fail on this machine: a COMException
-        // from SetContent is sitting in startup-error.log.
-        dialog.PrimaryButtonClick += (_, args) =>
-        {
-            try
-            {
-                var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
-                package.SetText(report);
-                Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
-            }
-            catch (Exception ex)
-            {
-                App.Trace($"diagnostics copy failed: {ex.GetType().Name}");
-                // Keep the dialog open so the advice below is actually actionable. No retry
-                // loop: this thread is STA and the clipboard needs its message pump running for
-                // the current owner to let go, so sleeping here would make a second attempt
-                // less likely to succeed than the first, not more.
-                args.Cancel = true;
-                status.Text = "Something else is holding the clipboard. The text above is "
-                              + "selected; press Ctrl+C to copy it.";
-                status.Visibility = Visibility.Visible;
-                body.SelectAll();
-                body.Focus(FocusState.Programmatic);
-                return;
-            }
-
-            try
-            {
-                // Hand ownership to the system so the text survives Sunno closing. Someone
-                // copying a report is usually about to quit and paste it elsewhere. Separate
-                // from the block above on purpose: if this throws, the report is already on the
-                // clipboard, so reporting failure would be wrong.
-                Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
-            }
-            catch (Exception ex)
-            {
-                App.Trace($"clipboard flush failed (content is still copied): {ex.GetType().Name}");
-            }
-        };
-
-        await dialog.ShowAsync();
+        // Persisted, which it previously was not. AppSettings had an AlwaysOnTop property that
+        // nothing ever wrote: the window hardcoded it true on load and the menu item hardcoded
+        // IsChecked="True" in XAML, so turning it off lasted exactly until the next launch and
+        // the diagnostics report said "True" whatever the user had chosen.
+        _settings.AlwaysOnTop = AlwaysOnTopItem.IsChecked;
+        _settings.Save();
     }
 
     private void OnClear(object sender, RoutedEventArgs e)
@@ -2305,16 +2511,35 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     }
 
     /// <summary>
+    /// The row a context menu item was invoked on. The flyout lives inside the item template,
+    /// so its DataContext is that row - read it from the menu item rather than from the list's
+    /// selection, which right-clicking does not necessarily change.
+    /// </summary>
+    private static SpeakerRow? RowFromMenu(object sender) =>
+        (sender as FrameworkElement)?.DataContext as SpeakerRow;
+
+    private void OnSpeakerEditRequested(object sender, RoutedEventArgs e)
+    {
+        if (RowFromMenu(sender) is SpeakerRow row) _ = ShowSpeakerDialogAsync(row);
+    }
+
+    private void OnSpeakerDeleteRequested(object sender, RoutedEventArgs e)
+    {
+        if (RowFromMenu(sender) is SpeakerRow row) _ = DeleteSpeakerAsync(row);
+    }
+
+    /// <summary>
     /// Name a speaker, mark them as the user, or merge two speakers. Merge exists because
     /// automatic labelling sometimes splits one person across two labels.
     /// </summary>
     private async Task ShowSpeakerDialogAsync(SpeakerRow row)
     {
+        var originalName = row.Named ? row.Label.Replace(" (You)", string.Empty) : string.Empty;
         var nameBox = new TextBox
         {
             Header = "Name",
             PlaceholderText = "e.g. Priya",
-            Text = row.Named ? row.Label.Replace(" (You)", string.Empty) : string.Empty,
+            Text = originalName,
         };
 
         var isSelf = new CheckBox { Content = "This is me", IsChecked = row.IsSelf };
@@ -2340,11 +2565,31 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         }
         merge.SelectedIndex = 0;
 
+        // Names the outcome. "Same person as: Marco" reads as though Marco is being changed,
+        // when in fact this speaker is the one that disappears - so say which name survives
+        // before the user commits to it.
+        var who = string.IsNullOrEmpty(originalName) ? "This speaker" : originalName;
+        var mergeHint = new TextBlock
+        {
+            Text = $"{who} will be removed from the list, and their lines will move to "
+                   + "whoever you choose here.",
+            TextWrapping = TextWrapping.Wrap,
+            Opacity = 0.7,
+            Visibility = Visibility.Collapsed,
+        };
+        // Only once a target is actually picked: with "Nobody" selected, nothing is being
+        // removed and the warning would describe something that is not going to happen.
+        merge.SelectionChanged += (_, _) =>
+            mergeHint.Visibility = merge.SelectedIndex > 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
         var panel = new StackPanel { Spacing = 12, Width = 320 };
         panel.Children.Add(nameBox);
         panel.Children.Add(isSelf);
         panel.Children.Add(hint);
         panel.Children.Add(merge);
+        panel.Children.Add(mergeHint);
 
         var dialog = new ContentDialog
         {
@@ -2358,8 +2603,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
         if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
 
+        // Sent whenever the box differs from what was in it, so emptying it removes the name
+        // rather than being read as "no change". The backend already treats an empty string
+        // as unname-and-unpin; this guard was the only thing stopping a user from undoing a
+        // name they had typed by mistake.
         var name = nameBox.Text.Trim();
-        if (!string.IsNullOrEmpty(name)) await _client.RenameSpeakerAsync(row.Id, name);
+        if (name != originalName) await _client.RenameSpeakerAsync(row.Id, name);
         await _client.SetSelfAsync(row.Id, isSelf.IsChecked == true);
         if (merge.SelectedIndex > 0)
             await _client.MergeSpeakersAsync(row.Id, mergeIds[merge.SelectedIndex - 1]);

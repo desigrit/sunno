@@ -20,3 +20,15 @@ packaging/out/
 
 # Recordings / scratch
 testdata/
+
+# Diagnostics and logs, whether this machine's or someone else's.
+#
+# Sunno's diagnostics export saves wherever the user chooses, so it never lands here by itself.
+# The risk runs the other way: a user emails a report, it gets dropped in the repo to read, and
+# `git add .` publishes their device names and logs to a public repository. These patterns make
+# that impossible rather than merely unlikely.
+#
+# local/ is the place for anything of that kind. Nothing in it is ever tracked.
+local/
+*.log
+sunno-diagnostics*.txt

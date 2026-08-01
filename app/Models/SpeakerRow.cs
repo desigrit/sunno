@@ -14,8 +14,22 @@ public sealed class SpeakerRow : INotifyPropertyChanged
     public string Label
     {
         get => _label;
-        set { if (Set(ref _label, value)) Notify(nameof(Tooltip)); }
+        set
+        {
+            if (!Set(ref _label, value)) return;
+            Notify(nameof(Tooltip));
+            // The Settings page repeats an Edit and a Delete button per row, so each needs a
+            // name of its own: a screen reader otherwise reads out a column of buttons all
+            // called "Delete" with no way to tell whose is whose.
+            Notify(nameof(EditActionName));
+            Notify(nameof(DeleteActionName));
+        }
     }
+
+    public string EditActionName => $"Edit {DisplayName}";
+    public string DeleteActionName => $"Delete {DisplayName}";
+
+    private string DisplayName => string.IsNullOrWhiteSpace(_label) ? "this speaker" : _label;
 
     /// <summary>Full name plus the affordance, since long names trim in a 240px pane.</summary>
     public string Tooltip => string.IsNullOrWhiteSpace(_label)

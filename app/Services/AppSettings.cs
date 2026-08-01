@@ -41,6 +41,16 @@ public sealed class AppSettings
     public string? Vocabulary { get; set; }
     public double CaptionFontSize { get; set; } = 26;
     public bool AlwaysOnTop { get; set; } = true;
+
+    /// <summary>Whether the clarity badge appears on the user's own lines.</summary>
+    public bool ShowClarity { get; set; } = true;
+
+    /// <summary>
+    /// Pin the engine to the processor. Off means "let it choose", which prefers the graphics
+    /// card. Exists as a way back in when a driver update stops CUDA loading: without it the
+    /// app is dead with no recourse from inside the UI.
+    /// </summary>
+    public bool ForceCpu { get; set; }
     /// <summary>Whether the one-time microphone consent dialog has been shown.</summary>
     public bool MicrophoneAsked { get; set; }
 

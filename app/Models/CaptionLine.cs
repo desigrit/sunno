@@ -91,7 +91,19 @@ public sealed class CaptionLine : INotifyPropertyChanged
 
     public bool HasSpeaker => !string.IsNullOrEmpty(DisplayLabel);
     public string DisplayLabel => _isSelf ? "You" : _speakerLabel ?? string.Empty;
-    public bool ShowClarity => _isSelf && _isFinal && _clarity is not null;
+
+    /// <summary>
+    /// The user's preference, shared by every line rather than copied into each one: a line
+    /// created after the toggle was flipped must agree with the lines already on screen, and a
+    /// per-instance copy could only be set at construction.
+    /// </summary>
+    public static bool ClarityEnabled { get; set; } = true;
+
+    public bool ShowClarity => ClarityEnabled && _isSelf && _isFinal && _clarity is not null;
+
+    /// <summary>Re-evaluate after the shared preference changes; a static has no notification
+    /// of its own, so the window tells each line to look again.</summary>
+    public void RefreshClarity() => Notify(nameof(ShowClarity));
 
     /// <summary>
     /// Per-word confidence, used to mark uncertain words. Empty on provisional lines, which

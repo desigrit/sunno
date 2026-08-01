@@ -105,8 +105,16 @@ class MicrophoneOpenError(RuntimeError):
                 f"or choose a different microphone."
             )
         else:
+            # Deliberately does not name the device.
+            #
+            # This message is printed to stdout, which the app captures into backend.log, and
+            # the crash banner points users at that file — so anything here is something they
+            # will be asked to send to a stranger. A capture device name like
+            # "Headset (R-Phonak hearing aid)" says the person wears a hearing aid, which is
+            # health information arriving through a field nobody thinks of as sensitive. The
+            # UI already shows which device was chosen; the log does not need to.
             message = (
-                f"Could not open input device {device!r}. "
+                "Could not open the selected input device. "
                 "It may be unplugged or in use by another app."
             )
         super().__init__(message)

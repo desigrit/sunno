@@ -45,10 +45,11 @@ def _l2_normalise(vec: np.ndarray) -> np.ndarray:
 class _Profile:
     """Running centroid for one speaker."""
 
-    __slots__ = ("centroid", "count", "name", "pinned", "is_self")
+    __slots__ = ("id", "centroid", "count", "name", "pinned", "is_self")
 
-    def __init__(self, embedding: np.ndarray, name: str | None = None,
+    def __init__(self, profile_id: int, embedding: np.ndarray, name: str | None = None,
                  pinned: bool = False, is_self: bool = False) -> None:
+        self.id = profile_id
         self.centroid = embedding
         self.count = 1
         self.name = name
@@ -68,7 +69,23 @@ class _Profile:
 
 
 class SpeakerIdentifier:
-    """Assigns stable speaker ids to utterances, discovering speakers as they appear."""
+    """Assigns stable speaker ids to utterances, discovering speakers as they appear.
+
+    Ids are handed out from a counter and never reused within a session. They are
+    deliberately NOT positions in a list: merging one speaker into another used to delete
+    from the middle of a list and renumber everybody above, while the UI relabels existing
+    captions by matching on id. The visible effect was that folding two speakers together
+    silently re-attributed other people's already-scrolled lines to the wrong person - in a
+    transcript that is, for a deaf user, the only record of who said what.
+
+    Profiles are held in a dict keyed by id rather than a list, so indexing by position is
+    not merely discouraged but unavailable.
+
+    Ids are not persisted. Nothing refers to one across a restart: the transcript is
+    session-only, and saved speakers are re-matched by centroid, not by id. Loading assigns
+    fresh compact ids in file order, which keeps the numbers small and needs no migration
+    for profiles written before ids existed.
+    """
 
     def __init__(
         self,
@@ -96,42 +113,54 @@ class SpeakerIdentifier:
         self.min_identify_samples = int(min_identify_s * SAMPLE_RATE)
         self.min_new_speaker_samples = int(min_new_speaker_s * SAMPLE_RATE)
         self.profile_path = Path(profile_path) if profile_path else None
-        self._profiles: list[_Profile] = []
+        self._profiles: dict[int, _Profile] = {}
+        self._next_id = 0
         self._lock = threading.Lock()
         if self.profile_path:
             self.load()
+
+    def _mint(self, embedding: np.ndarray, name: str | None = None,
+              pinned: bool = False, is_self: bool = False) -> _Profile:
+        """Create a profile under a fresh id. Caller holds the lock."""
+        profile = _Profile(self._next_id, embedding, name=name, pinned=pinned, is_self=is_self)
+        self._profiles[profile.id] = profile
+        self._next_id += 1
+        return profile
 
     @property
     def num_speakers(self) -> int:
         return len(self._profiles)
 
     def label(self, speaker_id: int | None) -> str | None:
-        if speaker_id is None or speaker_id >= len(self._profiles):
+        profile = self._profiles.get(speaker_id) if speaker_id is not None else None
+        if profile is None:
             return None
-        profile = self._profiles[speaker_id]
-        return profile.name or f"Speaker {speaker_id + 1}"
+        return profile.name or f"Speaker {profile.id + 1}"
 
     def roster(self) -> list[dict]:
+        # Sorted by id so the UI, which inserts new rows at the roster's own index, still
+        # sees people in the order they were first heard even once ids have gaps in them.
         with self._lock:
             return [
-                {"id": i, "label": p.name or f"Speaker {i + 1}",
+                {"id": p.id, "label": p.name or f"Speaker {p.id + 1}",
                  "named": p.name is not None, "is_self": p.is_self}
-                for i, p in enumerate(self._profiles)
+                for p in sorted(self._profiles.values(), key=lambda p: p.id)
             ]
 
     def reset(self) -> None:
         """Forget discovered speakers, keeping any the user has named."""
         with self._lock:
-            self._profiles = [p for p in self._profiles if p.pinned]
+            self._profiles = {i: p for i, p in self._profiles.items() if p.pinned}
 
     def rename(self, speaker_id: int, name: str) -> bool:
         """Name a speaker and pin their profile so it stops drifting."""
         with self._lock:
-            if not (0 <= speaker_id < len(self._profiles)):
+            profile = self._profiles.get(speaker_id)
+            if profile is None:
                 return False
             cleaned = name.strip()
-            self._profiles[speaker_id].name = cleaned or None
-            self._profiles[speaker_id].pinned = bool(cleaned)
+            profile.name = cleaned or None
+            profile.pinned = bool(cleaned)
         self.save()
         return True
 
@@ -143,11 +172,11 @@ class SpeakerIdentifier:
         their own lines never get confused with what other people said.
         """
         with self._lock:
-            if not (0 <= speaker_id < len(self._profiles)):
+            if speaker_id not in self._profiles:
                 return False
-            for i, profile in enumerate(self._profiles):
+            for profile in self._profiles.values():
                 # Only one speaker can be "you".
-                profile.is_self = is_self and i == speaker_id
+                profile.is_self = is_self and profile.id == speaker_id
             if is_self:
                 # Pin it: this profile must stay stable or the marking will drift off.
                 self._profiles[speaker_id].pinned = True
@@ -158,22 +187,55 @@ class SpeakerIdentifier:
         if speaker_id is None:
             return False
         with self._lock:
-            return 0 <= speaker_id < len(self._profiles) and self._profiles[speaker_id].is_self
+            profile = self._profiles.get(speaker_id)
+            return profile is not None and profile.is_self
+
+    def delete(self, speaker_id: int) -> str | None:
+        """Forget one speaker entirely. Returns the label their old captions should fall
+        back to, or None if there was no such speaker.
+
+        The returned label is the generic one derived from the retired id, never a name.
+        That is safe precisely because ids are never reused: no live speaker can ever be
+        shown under this label, so captions from the deleted person cannot be confused with
+        anybody else's. Their lines keep saying "someone said this" without claiming who.
+        """
+        with self._lock:
+            profile = self._profiles.pop(speaker_id, None)
+            if profile is None:
+                return None
+            fallback = f"Speaker {profile.id + 1}"
+        self.save()
+        return fallback
 
     def merge(self, source_id: int, target_id: int) -> bool:
         """Fold one speaker into another, for when discovery split one person in two."""
         with self._lock:
-            n = len(self._profiles)
-            if not (0 <= source_id < n and 0 <= target_id < n) or source_id == target_id:
+            target = self._profiles.get(target_id)
+            source = self._profiles.get(source_id)
+            if target is None or source is None or source_id == target_id:
                 return False
-            target = self._profiles[target_id]
-            source = self._profiles[source_id]
             total = target.count + source.count
             target.centroid = _l2_normalise(
                 (target.centroid * target.count + source.centroid * source.count) / total
             )
             target.count = total
+            # Everything the user asserted about either profile has to survive, because the
+            # premise of a merge is that these were always one person.
+            #
+            # Pinning matters as much as the name: save() only writes pinned profiles, so a
+            # named-but-unpinned survivor is reported as named in the roster and then silently
+            # forgotten on the next launch. That happens whenever a named speaker is folded
+            # into a discovered one, which is the ordinary direction for "this stranger is
+            # actually Priya". rename() and set_self() both keep named/self profiles pinned;
+            # merge used to copy the name across without it.
             target.name = target.name or source.name
+            target.is_self = target.is_self or source.is_self
+            if target.name is not None or target.is_self:
+                target.pinned = True
+            # The source id is retired, not recycled. Every other speaker keeps the id their
+            # existing captions were labelled with; only the merged-away person's lines need
+            # moving, and app.py announces that mapping so the UI can move them deliberately
+            # rather than inferring it from a renumbering.
             del self._profiles[source_id]
         self.save()
         return True
@@ -198,16 +260,18 @@ class SpeakerIdentifier:
             if not self._profiles:
                 if len(audio) < self.min_new_speaker_samples:
                     return None, 0.0
-                self._profiles.append(_Profile(embedding))
-                return 0, 1.0
+                return self._mint(embedding).id, 1.0
 
-            scores = np.array([float(p.centroid @ embedding) for p in self._profiles])
+            # Compared in a fixed order so `best` indexes back into the same sequence, but
+            # what leaves this method is the winner's durable id, never its position.
+            candidates = sorted(self._profiles.values(), key=lambda p: p.id)
+            scores = np.array([float(p.centroid @ embedding) for p in candidates])
             best = int(np.argmax(scores))
             best_score = float(scores[best])
 
             if best_score >= self.threshold:
-                self._profiles[best].update(embedding)
-                return best, best_score
+                candidates[best].update(embedding)
+                return candidates[best].id, best_score
 
             # Below threshold: only mint a new speaker given enough audio to trust it,
             # otherwise one short noisy turn fragments the roster.
@@ -215,21 +279,24 @@ class SpeakerIdentifier:
                 len(self._profiles) < self.max_speakers
                 and len(audio) >= self.min_new_speaker_samples
             ):
-                self._profiles.append(_Profile(embedding))
-                return len(self._profiles) - 1, 1.0 - best_score
+                return self._mint(embedding).id, 1.0 - best_score
 
             return None, best_score
 
     # --- persistence -----------------------------------------------------
     def save(self) -> None:
-        """Persist named speakers so they're recognised in later sessions."""
+        """Persist named speakers so they're recognised in later sessions.
+
+        Ids are deliberately absent: they mean nothing outside the session that minted them,
+        and writing them would only create a file format to migrate later.
+        """
         if not self.profile_path:
             return
         with self._lock:
             payload = [
                 {"name": p.name, "count": p.count, "is_self": p.is_self,
                  "centroid": p.centroid.tolist()}
-                for p in self._profiles
+                for p in sorted(self._profiles.values(), key=lambda p: p.id)
                 if p.pinned
             ]
         self.profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -243,11 +310,10 @@ class SpeakerIdentifier:
         except (ValueError, OSError):
             return
         for entry in payload:
-            profile = _Profile(
+            profile = self._mint(
                 np.asarray(entry["centroid"], dtype=np.float32),
                 name=entry.get("name"),
                 pinned=True,
                 is_self=entry.get("is_self", False),
             )
             profile.count = entry.get("count", 1)
-            self._profiles.append(profile)
