@@ -12,7 +12,11 @@
 param(
   [switch]$SkipStage,
   [switch]$SkipPublish,
-  [string]$CertSubject = "CN=LiveCaptionsDev"
+  # Must equal Package/Identity/Publisher in app/Package.appxmanifest or signtool refuses the
+  # package with a publisher mismatch. That value is assigned by Partner Center and is not a
+  # human-readable name. This certificate is self-signed and only exists so the package can be
+  # sideloaded for testing; the Store discards it and re-signs with a Microsoft certificate.
+  [string]$CertSubject = "CN=A2015C41-8111-42CA-8A27-273B3309C099"
 )
 
 $ErrorActionPreference = "Stop"
@@ -176,8 +180,8 @@ if (-not $cert) {
             -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
 }
 
-$pfx = Join-Path $out "LiveCaptionsDev.pfx"
-$cer = Join-Path $out "LiveCaptionsDev.cer"
+$pfx = Join-Path $out "SunnoDev.pfx"
+$cer = Join-Path $out "SunnoDev.cer"
 $pwd = ConvertTo-SecureString -String "Sunno-dev" -Force -AsPlainText
 Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pwd | Out-Null
 Export-Certificate  -Cert $cert -FilePath $cer | Out-Null

@@ -5,18 +5,25 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap rescap">
 
-  <!-- Publisher must match the signing certificate's subject DN exactly, or installation
-       fails with a signature mismatch. For Store submission this is replaced by the
-       identity assigned in Partner Center. -->
+  <!-- Assigned by Partner Center (Product management > Product identity) and not free to
+       change: an upload whose identity differs from the reserved product is rejected.
+
+       Publisher must also match the signing certificate's subject DN exactly or installation
+       fails with a signature mismatch, so local builds now need
+       `build-msix.ps1 -CertSubject "CN=A2015C41-8111-42CA-8A27-273B3309C099"`. That certificate
+       is only for sideload testing; the Store strips it and re-signs with its own.
+
+       Package Family Name: DesigritLabs.Sunno_keem9te2jkvxm
+       Store ID: 9MSV0V6JV8HK -->
   <Identity
-    Name="Sunno.Offline"
-    Publisher="CN=LiveCaptionsDev"
+    Name="DesigritLabs.Sunno"
+    Publisher="CN=A2015C41-8111-42CA-8A27-273B3309C099"
     Version="1.0.57.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
     <DisplayName>Sunno</DisplayName>
-    <PublisherDisplayName>Sunno</PublisherDisplayName>
+    <PublisherDisplayName>Desigrit Labs</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <Description>Offline live captioning. Speech is transcribed on your PC and never leaves the device.</Description>
   </Properties>
