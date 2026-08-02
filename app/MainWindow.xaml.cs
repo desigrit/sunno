@@ -2394,6 +2394,17 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// </summary>
     private void RegisterShortcuts(FrameworkElement root)
     {
+        // WinUI shows an accelerator's key combination as a tooltip on whichever element owns
+        // it, and the default placement mode is Auto, meaning "show it". These are owned by the
+        // content root because they must work window-wide - so the tooltip appeared on hover
+        // anywhere in the app, reading "Ctrl++" because Ctrl + the OEM plus key formats that
+        // way. It also outlived the thing that spawned it and sat over the transcript.
+        //
+        // This is the actual source. Two earlier attempts blamed the menu's
+        // KeyboardAcceleratorTextOverride and neither removed it, because the tooltip was never
+        // coming from the menu at all.
+        root.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
+
         // The +/- on the main keyboard row are OEM keys, not VirtualKey.Add/Subtract, which
         // are the numeric keypad. Both are registered, because "Ctrl and the plus key" means
         // whichever one the user's hand is nearest - and on most layouts the main-row one

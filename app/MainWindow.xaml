@@ -639,14 +639,18 @@
             </StackPanel>
 
             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                <Grid Padding="36,20,36,32" ColumnSpacing="36" MaxWidth="1040"
-                      HorizontalAlignment="Left">
+                <!-- Stretches with the window rather than sitting in a fixed column on the
+                     left, which on a maximised window left most of the screen empty. The cap
+                     keeps a line of body text readable on a very wide display; the About
+                     column stays a fixed width beside it. -->
+                <Grid Padding="36,20,36,32" ColumnSpacing="36" MaxWidth="1400"
+                      HorizontalAlignment="Stretch">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="300" />
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" Spacing="18" MaxWidth="620">
+                    <StackPanel Grid.Column="0" Spacing="18">
 
                         <TextBlock Text="Captions" Style="{StaticResource BodyStrongTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />
@@ -665,6 +669,8 @@
                                 </StackPanel>
                                 <ToggleSwitch x:Name="ClarityToggle" Grid.Column="1"
                                               IsOn="True" Toggled="OnClarityToggled"
+                                              MinWidth="0" OnContent="" OffContent=""
+                                              HorizontalAlignment="Right"
                                               AutomationProperties.Name="Show clarity score on your own lines" />
                             </Grid>
                         </Border>
@@ -686,6 +692,8 @@
                                 </StackPanel>
                                 <ToggleSwitch x:Name="ForceCpuToggle" Grid.Column="1"
                                               Toggled="OnForceCpuToggled"
+                                              MinWidth="0" OnContent="" OffContent=""
+                                              HorizontalAlignment="Right"
                                               AutomationProperties.Name="Use the processor instead of the graphics card" />
                             </Grid>
                         </Border>
