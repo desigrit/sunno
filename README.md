@@ -29,9 +29,8 @@ the table at dinner, beside you in a meeting, or pass a small mic to whoever is 
   long paragraph. Rename anyone, and mark which one is you so your own lines step back.
 - **Captions your PC's audio too,** which covers video calls, YouTube, podcasts, anything coming
   out of your speakers.
-- **Handles accents well,** including Indian, Italian and French speakers. This was the whole
-  reason for choosing Whisper large-v3 over faster alternatives. See
-  [the engineering notes](docs/ENGINEERING.md#why-these-choices).
+- **Handles accented speech well.** This was the whole reason for choosing Whisper large-v3 over
+  faster alternatives. See [the engineering notes](docs/ENGINEERING.md#why-these-choices).
 - Adjustable text size, always on top, and you can select and copy any part of the transcript.
 
 ## It runs on your PC. All of it.
