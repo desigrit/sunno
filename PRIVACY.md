@@ -118,9 +118,8 @@ It is in four parts. The first is the report itself, which contains the app vers
 identity, your Windows version, processor architecture and count, the .NET version, whether the
 GPU or the processor is being used, which speech model is loaded and which is selected, whether
 the engine is running and connected, whether the source is a microphone or system audio, whether a
-device is chosen and whether its name is stored, whether the microphone consent question has been
-asked, your caption size and always-on-top preference, whether a vocabulary is set, and the timing
-measurements from `hardware.json`.
+device is chosen and whether its name is stored, your caption size and always-on-top preference,
+whether a vocabulary is set, and the timing measurements from `hardware.json`.
 
 The report deliberately contains **none** of the following: transcript text, speaker names, voice
 fingerprints, vocabulary entries, or device names. Where a device is concerned it reports only

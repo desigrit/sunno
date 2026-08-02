@@ -51,8 +51,6 @@ public sealed class AppSettings
     /// app is dead with no recourse from inside the UI.
     /// </summary>
     public bool ForceCpu { get; set; }
-    /// <summary>Whether the one-time microphone consent dialog has been shown.</summary>
-    public bool MicrophoneAsked { get; set; }
 
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -88,10 +86,10 @@ public sealed class AppSettings
             // choice with nothing on screen to explain it.
             //
             // File.Move(overwrite) rather than File.Replace: Replace throws
-            // FileNotFoundException when the destination does not exist yet, and the very first
-            // save this app ever performs is MicrophoneAsked = true on a machine with no
-            // settings.json. The catch below would have swallowed that, and the consent dialog
-            // would have re-appeared on every launch, forever, on every new install.
+            // FileNotFoundException when the destination does not exist yet, and plenty of
+            // first saves happen on a machine that has no settings.json - the first caption
+            // size change, the first device choice. The catch below would have swallowed that,
+            // and the setting would have failed to persist on every new install, silently.
             var temp = FilePath + ".tmp";
             File.WriteAllText(temp,
                 JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));

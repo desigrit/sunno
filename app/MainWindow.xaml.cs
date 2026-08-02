@@ -111,9 +111,6 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private bool _engineReadyThisSession;
     /// <summary>Consent as read once at startup; re-reading it later proved fatal.</summary>
     private AppCapabilityAccessStatus? _micStatus;
-    /// <summary>Whether the InfoBar's action can still raise the dialog, or must fall back to
-    /// Settings because Windows will not prompt a second time.</summary>
-    private bool _micCanPrompt;
     /// <summary>The backend died; stop reporting progress that will never happen.</summary>
     private bool _backendFatal;
     /// <summary>Set while the engine is reloading onto a different model.</summary>
@@ -208,15 +205,21 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
         _elapsedTimer.Tick += (_, _) => TickElapsed();
 
-        // Consent has to be settled before anything opens the microphone. On first run we haven't
-        // asked yet, so the backend starts paused regardless of what Windows reports — otherwise
-        // the microphone would already be live behind our own consent dialog, which would make
-        // asking dishonest.
+        // Windows does the asking. It raises its own consent prompt the first time the device
+        // is actually opened - verified on a packaged install, where the per-app registry entry
+        // flipped from Prompt to Allow at the moment capture started. That prompt is the
+        // trustworthy one: it is native, the user has seen it before, and Windows records the
+        // answer so nobody is asked twice.
+        //
+        // So "undecided" is treated as "go ahead and try". Only a recorded refusal keeps the
+        // microphone shut, because Windows will not prompt again for those and the user has to
+        // be sent to Settings instead.
         var micStatus = MicrophoneAccess.Check();
         _micStatus = micStatus;
         _lastGoodModel = _settings.Model;
-        _micGranted = (micStatus is null or AppCapabilityAccessStatus.Allowed)
-                      && _settings.MicrophoneAsked;
+        _micGranted = micStatus is null
+                          or AppCapabilityAccessStatus.Allowed
+                          or AppCapabilityAccessStatus.UserPromptRequired;
         _startedPaused = !_micGranted;
 
         var error = _backend.Start(
@@ -728,7 +731,6 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         switch (st.Code)
         {
             case "mic_denied":
-                _micCanPrompt = false;
                 MicInfoBar.Severity = InfoBarSeverity.Warning;
                 MicInfoBar.Title = "Microphone access is off";
                 MicInfoBar.Message =
@@ -851,7 +853,6 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _backendLoading = false;
         ClearStatus();
         _micProblem = false;
-        _micCanPrompt = false;
         _infoSticky = false;
         MicInfoBar.Severity = InfoBarSeverity.Error;
         MicInfoBar.Title = "Sunno's speech engine stopped";
@@ -932,26 +933,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(data);
             return;
         }
-        if (_micCanPrompt)
-        {
-            // No OS round trip in either branch. A declined dialog was our own decision, not
-            // the OS's, and RequestAccessAsync is a proven no-op for a full-trust packaged
-            // app — it returns Allowed without prompting. Re-querying consent here also
-            // reintroduces the repeat-CheckAccess call that killed the process.
-            //
-            // The status is advanced to Allowed rather than replayed. Replaying it re-rendered
-            // whatever Windows reported *before* the user answered, and when that was
-            // UserPromptRequired it was the very banner they had just clicked - so the button
-            // did nothing whatsoever, and on a packaged first run there was no other way to
-            // grant the microphone. Their click is the answer; if Windows disagrees, capture
-            // fails and the backend says so, which is the honest signal rather than a guess.
-            _micDeclined = false;
-            _micStatus = AppCapabilityAccessStatus.Allowed;
-            _settings.MicrophoneAsked = true;
-            _settings.Save();
-            ApplyMicrophoneStatus(_micStatus);
-            return;
-        }
+        // Every remaining state is one Windows has already recorded a refusal for, and it will
+        // not prompt again for those - so the only useful action is the Settings app. There is
+        // no "ask again" branch any more: undecided consent never reaches this bar, because
+        // Windows raises its own prompt when the device is opened.
         await Windows.System.Launcher.LaunchUriAsync(
             new Uri("ms-settings:privacy-microphone"));
     }
@@ -959,14 +944,16 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// <summary>
     /// Settle microphone consent.
     ///
-    /// Windows will not raise its own dialog here: a runFullTrust packaged app is granted the
-    /// microphone by default and RequestAccessAsync returns Allowed without prompting (verified
-    /// against a live package for the never-asked, Prompt and Deny consent states). The
-    /// Camera-style system prompt is an AppContainer behaviour, and full trust is non-negotiable
-    /// because CUDA cannot load inside a container. So we ask once ourselves — which also lets
-    /// us say the thing that actually reassures people, that audio never leaves the machine.
+    /// The app no longer asks. Windows raises its own prompt the first time the microphone is
+    /// actually opened — verified on a packaged install, where the per-app consent entry went
+    /// from Prompt to Allow at the moment capture started. Asking first meant asking a question
+    /// the OS was about to ask properly: two dialogs for one decision, and only one of them
+    /// recorded anywhere.
+    ///
+    /// What is left here is reporting a refusal Windows has already recorded, because those
+    /// states never produce a prompt and the only way out is the Settings app.
     /// </summary>
-    private async Task EnsureMicrophoneAccessAsync()
+    private Task EnsureMicrophoneAccessAsync()
     {
         // Deliberately reuses the status read during construction rather than calling
         // CheckAccess again. A second call from inside the Loaded handler reproducibly took
@@ -976,68 +963,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         var status = _micStatus;
         App.Trace($"mic: reusing status={status}");
 
-        // UserPromptRequired means Windows has no answer on file yet, which is precisely when
-        // to ask. It used to be excluded here, so a packaged first run - where CheckAccess
-        // reports exactly that - skipped the consent dialog and went straight to a warning bar
-        // whose only button did nothing, leaving no way to grant the microphone at all.
-        if (!_settings.MicrophoneAsked
-            && status is null or AppCapabilityAccessStatus.Allowed
-                             or AppCapabilityAccessStatus.UserPromptRequired)
-        {
-            await AskForMicrophoneAsync();
-
-            // Declining already painted its own bar, and that answer outranks whatever Windows
-            // last reported. Rendering the status on top would replace "Microphone is off /
-            // Turn on" with a warning about access the user has just chosen not to give.
-            if (_micDeclined)
-            {
-                MicrophoneAccess.Changed += OnMicAccessChanged;
-                App.Trace("mic: declined");
-                return;
-            }
-
-            // They consented, and for a full-trust packaged app that is the only consent step
-            // there is: Windows never raises its own prompt, so this dialog is it.
-            if (status is AppCapabilityAccessStatus.UserPromptRequired)
-                status = _micStatus = AppCapabilityAccessStatus.Allowed;
-        }
-
         ApplyMicrophoneStatus(status);
 
         // Notice a later grant from Settings, so the fallback isn't a dead end that needs a relaunch.
         MicrophoneAccess.Changed += OnMicAccessChanged;
         App.Trace("mic: done");
-    }
-
-    /// <summary>Ask once, in two sentences, with the honest answer to "where does my voice go".</summary>
-    private async Task AskForMicrophoneAsync()
-    {
-        _settings.MicrophoneAsked = true;
-        _settings.Save();
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = Content.XamlRoot,
-            Title = "Use your microphone?",
-            Content = "Sunno listens to your microphone to caption what people say. " +
-                      "Audio is transcribed on this PC and never leaves it.",
-            PrimaryButtonText = "Allow",
-            CloseButtonText = "Not now",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary) return;
-
-        // Declining is a real answer, so honour it rather than quietly listening anyway.
-        _micDeclined = true;
-        _micProblem = true;
-        _micCanPrompt = true;
-        MicInfoBar.Severity = InfoBarSeverity.Informational;
-        MicInfoBar.Title = "Microphone is off";
-        MicInfoBar.Message = "Sunno isn't listening. Turn it on whenever you're ready.";
-        MicActionLink.Content = "Turn on";
-        MicActionLink.Visibility = Visibility.Visible;
-        MicInfoBar.IsOpen = true;
+        return Task.CompletedTask;
     }
 
     private bool _micDeclined;
@@ -1061,14 +992,21 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         App.Trace($"ApplyMicrophoneStatus({status}) declined={_micDeclined}");
         // Null means no package identity (an unpackaged dev build). There is no consent state
         // to honour, so let the backend's runtime error be the only signal.
-        if (status is null or AppCapabilityAccessStatus.Allowed)
+        //
+        // UserPromptRequired belongs here too, and that is the point of letting Windows ask:
+        // it means the OS has no answer on file and will raise its own prompt the moment the
+        // device is opened. Showing a banner for it put a question in front of the user that
+        // Windows was about to ask properly, and the banner's own button was the thing that
+        // had no way to answer it.
+        if (status is null
+                   or AppCapabilityAccessStatus.Allowed
+                   or AppCapabilityAccessStatus.UserPromptRequired)
         {
             // An explicit "not now" outranks the OS default, which for a full-trust app is
             // always Allowed and would otherwise silently overturn the user's own answer.
             if (_micDeclined) return;
 
             _micProblem = false;
-            _micCanPrompt = false;
             // Only the microphone's own message. This runs on every launch where access is
             // fine, and it used to close the bar outright, which discarded any sticky notice
             // raised moments earlier — the device-rot warning always, and a model fallback
@@ -1118,19 +1056,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
         switch (status)
         {
-            case AppCapabilityAccessStatus.UserPromptRequired:
-                // RequestAccessAsync is documented never to return this, so arriving here means
-                // the prompt could not be shown. Offer it as an explicit action rather than
-                // pretending the user refused.
-                _micCanPrompt = true;
-                MicInfoBar.Title = "Allow microphone access";
-                MicInfoBar.Message =
-                    "Sunno needs your microphone to transcribe what people say. " +
-                    "Audio is processed on this PC and never leaves it.";
-                break;
-
             case AppCapabilityAccessStatus.DeniedByUser:
-                _micCanPrompt = false;
                 MicInfoBar.Title = "Microphone access is off";
                 MicInfoBar.Message =
                     "Microphone access for Sunno is turned off, so nothing can be " +
@@ -1138,7 +1064,6 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 break;
 
             case AppCapabilityAccessStatus.DeniedBySystem:
-                _micCanPrompt = false;
                 MicInfoBar.Title = "Microphone is off for this device";
                 MicInfoBar.Message =
                     "Microphone access is turned off for the whole device, or for all desktop " +
@@ -1148,7 +1073,6 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
             default:
                 // NotDeclaredByApp: a packaging defect, not something the user can fix.
-                _micCanPrompt = false;
                 MicInfoBar.Severity = InfoBarSeverity.Error;
                 MicInfoBar.Title = "Microphone capability missing";
                 MicInfoBar.Message =
@@ -1158,7 +1082,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 break;
         }
 
-        MicActionLink.Content = _micCanPrompt ? "Allow" : "Open Settings";
+        // Always Settings now. Every state that reaches here is a refusal Windows has recorded
+        // and will not re-prompt for, so there is nothing this app can ask.
+        MicActionLink.Content = "Open Settings";
         MicInfoBar.IsOpen = true;
     }
 

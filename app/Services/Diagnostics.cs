@@ -69,7 +69,6 @@ public static class Diagnostics
         sb.AppendLine($"Source          {(loopback ? "system audio" : "microphone")}");
         sb.AppendLine($"Device chosen   {(HasDevice(settings) ? "yes" : "no, using system default")}");
         sb.AppendLine($"Device name set {(HasDeviceName(settings) ? "yes" : "no")}");
-        sb.AppendLine($"Mic consent     {(settings.MicrophoneAsked ? "asked" : "not yet asked")}");
         sb.AppendLine();
 
         sb.AppendLine("-- Preferences --");

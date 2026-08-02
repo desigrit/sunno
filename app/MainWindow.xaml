@@ -460,19 +460,21 @@
             <FontIcon Glyph="&#xE712;" FontSize="15" />
             <Button.Flyout>
                 <MenuFlyout Placement="Bottom">
-                    <!-- No KeyboardAcceleratorTextOverride on these two, deliberately. WinUI
-                         auto-generates a hover tooltip from that property, and the tooltip
-                         orphaned itself: it stayed on screen after the menu closed, floating
-                         in the middle of the window, and reappeared on any hover. Its text was
-                         mangled too - the generator splits the value on spaces and rejoins
-                         with "+", so "Ctrl +" rendered as "Ctrl++" - but the stuck tooltip is
-                         the real defect, and no spelling avoids it. The shortcuts themselves
-                         are registered on the content root in RegisterShortcuts and work
-                         regardless; they are listed on the Settings page instead. -->
-                    <MenuFlyoutItem Text="Larger text" Click="OnBigger">
+                    <!-- The shortcut is part of the label rather than a
+                         KeyboardAcceleratorTextOverride. That property makes WinUI render a
+                         right-aligned accelerator column, and it also auto-generates a hover
+                         tooltip from the same string - mangled ("Ctrl +" became "Ctrl++") and,
+                         worse, orphaned: it outlived the menu and floated over the window,
+                         reappearing on any hover. An explicit ToolTipService.ToolTip on the item
+                         does not suppress it, because the generated one belongs to the
+                         accelerator text block inside the item. Putting the text in the label
+                         means no such element exists, so nothing can generate a tooltip from it,
+                         and the spacing reads the way it should. The accelerators themselves are
+                         registered on the window in RegisterShortcuts. -->
+                    <MenuFlyoutItem Text="Larger text (Ctrl +)" Click="OnBigger">
                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E8;" /></MenuFlyoutItem.Icon>
                     </MenuFlyoutItem>
-                    <MenuFlyoutItem Text="Smaller text" Click="OnSmaller">
+                    <MenuFlyoutItem Text="Smaller text (Ctrl -)" Click="OnSmaller">
                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E7;" /></MenuFlyoutItem.Icon>
                     </MenuFlyoutItem>
                     <MenuFlyoutSeparator />
@@ -664,27 +666,6 @@
                                 <ToggleSwitch x:Name="ClarityToggle" Grid.Column="1"
                                               IsOn="True" Toggled="OnClarityToggled"
                                               AutomationProperties.Name="Show clarity score on your own lines" />
-                            </Grid>
-                        </Border>
-
-                        <TextBlock Text="Keyboard shortcuts" Style="{StaticResource BodyStrongTextBlockStyle}"
-                                   AutomationProperties.HeadingLevel="Level2" />
-                        <Border Style="{StaticResource SettingsCard}">
-                            <Grid ColumnSpacing="16" RowSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Make captions larger" />
-                                <TextBlock Grid.Row="0" Grid.Column="1" Text="Ctrl +"
-                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Make captions smaller" />
-                                <TextBlock Grid.Row="1" Grid.Column="1" Text="Ctrl -"
-                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </Grid>
                         </Border>
 
