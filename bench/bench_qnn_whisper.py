@@ -167,7 +167,38 @@ def fetch_model(name: str, url: str, cache: Path) -> Path | None:
     return None
 
 
-def make_session(path: Path, provider: str):
+def register_qnn() -> tuple[bool, str]:
+    """Make the QNN provider visible to onnxruntime, and say plainly if it cannot be.
+
+    onnxruntime-qnn is a plugin package, not a build of onnxruntime. It installs as
+    ``onnxruntime_qnn`` and carries onnxruntime_providers_qnn.dll plus the Hexagon libraries,
+    while the ``onnxruntime`` it pulls in is the ordinary one. So QNNExecutionProvider is absent
+    from get_available_providers() until the library is registered - which reads exactly like
+    "this machine has no NPU" and is nothing of the sort.
+    """
+    try:
+        import onnxruntime_qnn
+    except ImportError:
+        return False, "onnxruntime-qnn is not installed (re-run with --setup)"
+
+    try:
+        import onnxruntime as ort
+
+        name = onnxruntime_qnn.get_ep_name()
+        library = onnxruntime_qnn.get_library_path()
+        if not Path(library).is_file():
+            return False, f"provider library missing at {library}"
+        if name in ort.get_available_providers():
+            return True, name
+        ort.register_execution_provider_library(name, library)
+        if name not in ort.get_available_providers():
+            return False, f"registered {name} but onnxruntime still does not list it"
+        return True, name
+    except Exception as exc:  # noqa: BLE001
+        return False, f"could not register the QNN provider: {str(exc)[:180]}"
+
+
+def make_session(path: Path, provider: str, ep_name: str = "QNNExecutionProvider"):
     """Open an EPContext ONNX on the requested provider.
 
     The .onnx here is a wrapper: a single EPContext node naming a .bin beside it that holds the
@@ -179,13 +210,29 @@ def make_session(path: Path, provider: str):
     options = ort.SessionOptions()
     options.log_severity_level = 3
 
-    if provider == "qnn":
-        import onnxruntime_qnn
+    if provider != "qnn":
+        return _open(ort, path, options, ["CPUExecutionProvider"])
 
-        providers = [("QNNExecutionProvider", {"backend_path": onnxruntime_qnn.get_qnn_htp_path()})]
-    else:
-        providers = ["CPUExecutionProvider"]
+    import onnxruntime_qnn
 
+    # Two ways of asking, because which one is right depends on the onnxruntime version:
+    # older builds want backend_path naming the Hexagon runtime, newer plugin-EP registration
+    # resolves it alone and rejects the option. Both errors are kept, since a failure here is
+    # the interesting result and reporting only the second would hide the real cause.
+    attempts = [
+        ("with backend_path", [(ep_name, {"backend_path": onnxruntime_qnn.get_qnn_htp_path()})]),
+        ("plain", [ep_name]),
+    ]
+    errors = []
+    for label, providers in attempts:
+        try:
+            return _open(ort, path, options, providers)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{label}: {str(exc)[:150]}")
+    raise RuntimeError(" | ".join(errors))
+
+
+def _open(ort, path: Path, options, providers):
     session = ort.InferenceSession(str(path), sess_options=options, providers=providers)
     return session, session.get_providers()
 
@@ -217,7 +264,7 @@ def synthetic_inputs(session, meta_inputs: dict, encoder_outputs: dict | None = 
     return feed
 
 
-def measure(model_dir: Path, provider: str) -> dict:
+def measure(model_dir: Path, provider: str, ep_name: str = "QNNExecutionProvider") -> dict:
     """Time an encoder pass and a run of decoder steps on one provider."""
     result: dict = {"provider": provider}
 
@@ -228,13 +275,13 @@ def measure(model_dir: Path, provider: str) -> dict:
 
     try:
         started = time.perf_counter()
-        encoder, enc_providers = make_session(encoder_path, provider)
-        decoder, dec_providers = make_session(decoder_path, provider)
+        encoder, enc_providers = make_session(encoder_path, provider, ep_name)
+        decoder, dec_providers = make_session(decoder_path, provider, ep_name)
         result["load_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
         result["encoder_providers"] = enc_providers
         result["decoder_providers"] = dec_providers
     except Exception as exc:  # noqa: BLE001
-        return {"error": f"load failed: {str(exc)[:220]}", **result}
+        return {"error": f"load failed: {str(exc)[:400]}", **result}
 
     try:
         enc_feed = synthetic_inputs(encoder, {})
@@ -314,18 +361,22 @@ def main() -> int:
         return 2
 
     print(f"  onnxruntime        {ort.__version__}")
-    available = ort.get_available_providers()
-    print(f"  providers          {', '.join(available)}")
 
-    if "QNNExecutionProvider" not in available:
+    qnn_ready, qnn_detail = register_qnn()
+    if qnn_ready:
+        print(f"  qnn provider       {qnn_detail}")
+    else:
+        print(f"  qnn provider       unavailable - {qnn_detail}")
+    machine["qnn"] = qnn_detail if qnn_ready else f"unavailable: {qnn_detail}"
+    print(f"  providers          {', '.join(ort.get_available_providers())}")
+
+    if not qnn_ready:
         if not args.cpu:
-            print("\n  No QNN provider. onnxruntime-qnn is a separate package from plain")
-            print("  onnxruntime; re-run with --setup to install it.")
+            print("\n  Without the QNN provider there is nothing to measure here: these graphs")
+            print("  are precompiled for Hexagon and the CPU cannot run them at all.")
             return 2
-        # --cpu alone is still worth running: it exercises the whole harness and gives a
-        # CPU number for these same graphs, which is the comparison the QNN result is judged
-        # against. Useful on a machine with no NPU at all.
-        print("\n  No QNN provider - measuring the CPU provider only.")
+        # --cpu alone is still worth running: it exercises the whole harness end to end.
+        print("\n  Measuring the CPU provider only - expect it to refuse these graphs.")
 
     print(f"\n  {args.model}")
     model_dir = fetch_model(args.model, ASSETS[args.model], Path(args.cache))
@@ -334,13 +385,13 @@ def main() -> int:
 
     results: dict[str, dict] = {}
     providers_to_try = []
-    if "QNNExecutionProvider" in available:
+    if qnn_ready:
         providers_to_try.append("qnn")
     if args.cpu or not providers_to_try:
         providers_to_try.append("cpu")
 
     for provider in providers_to_try:
-        measured = measure(model_dir, provider)
+        measured = measure(model_dir, provider, qnn_detail if qnn_ready else "QNNExecutionProvider")
         results[provider] = measured
         if "error" in measured:
             print(f"    {provider:4} {measured['error']}")
