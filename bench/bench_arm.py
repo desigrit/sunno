@@ -18,17 +18,22 @@ models) or has to drop to something smaller.
 
 Usage
 -----
-Copy the repo to the ARM machine, then:
+No checkout needed - this is a single self-contained file. On the ARM machine, with the
+**ARM64** build of Python 3.12 installed (python.org, ``python-3.12.10-arm64.exe``):
 
-    py -3.12 bench\\bench_arm.py --setup
+    curl -L -o bench_arm.py https://raw.githubusercontent.com/desigrit/sunno/master/bench/bench_arm.py
+    py -3.12 bench_arm.py --setup
 
-That creates a venv beside the repo, installs what it needs, and runs. Without ``--setup`` it
-assumes the packages are already present. Add ``--qnn`` to also try the NPU, ``--models`` to
-limit which are measured, and ``--wav`` to decode a specific clip.
+``--setup`` creates a venv beside the script, installs what it needs, and runs. Without it the
+packages are assumed present. Add ``--qnn`` to also try the NPU, ``--models`` to limit which are
+measured, and ``--wav`` to decode a specific clip.
 
-The run writes ``bench/arm-hardware.json``. That file is not read by the app - the shipped lag
-tables in ``server/hardware.py`` are source constants - so its numbers are transcribed by hand
-into the ARM catalog once they are known.
+It refuses to run under an emulated interpreter, because an x64 Python on a Snapdragon measures
+emulation rather than ARM - which is the thing being replaced, not the thing being measured.
+
+The run writes ``arm-hardware.json`` beside the script. That file is not read by the app - the
+shipped lag tables in ``server/hardware.py`` are source constants - so its numbers are
+transcribed by hand into the ARM catalog once they are known.
 """
 
 from __future__ import annotations
@@ -42,7 +47,64 @@ import wave
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+if not (ROOT / "server").is_dir():
+    # Running as a standalone download rather than from a checkout. Keep the venv, the model
+    # cache and the results beside the script instead of scattering them into whatever folder
+    # the file happened to land in.
+    ROOT = Path(__file__).resolve().parent
+
+_MACHINE_NAMES: dict[int, str] = {
+    0x0000: "unknown",
+    0x014C: "x86",
+    0x8664: "x64",
+    0x01C4: "ARM32",
+    0xAA64: "ARM64",
+}
+
+
+def machines() -> tuple[str, str]:
+    """(process machine, native machine) as Windows reports them.
+
+    Duplicated from server/hardware.py on purpose. This file has to run on a machine with no
+    checkout - downloading one script is a much smaller ask than cloning a repo with a 3 GB
+    model history - and the check it performs is the one that decides whether the numbers below
+    mean anything at all. A copy that always runs beats an import that sometimes does.
+
+    Deliberately not platform.machine(): that resolves through PROCESSOR_ARCHITECTURE and
+    PROCESSOR_ARCHITEW6432, both process-relative, so an emulated x64 Python on a Snapdragon
+    reports "AMD64" and the whole run silently measures the wrong thing.
+
+    IsWow64Process2 answers both halves, and the pair carries the meaning: pProcessMachine is
+    IMAGE_FILE_MACHINE_UNKNOWN when the process is not emulated, so native alone cannot tell a
+    native ARM64 Python from an x64 one running under Prism.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.IsWow64Process2.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.USHORT),
+            ctypes.POINTER(wintypes.USHORT),
+        ]
+        kernel32.IsWow64Process2.restype = wintypes.BOOL
+
+        process = wintypes.USHORT()
+        native = wintypes.USHORT()
+        if not kernel32.IsWow64Process2(
+            kernel32.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(native)
+        ):
+            return "unknown", "unknown"
+
+        native_name = _MACHINE_NAMES.get(native.value, f"0x{native.value:04x}")
+        if process.value == 0:
+            return native_name, native_name
+        return _MACHINE_NAMES.get(process.value, f"0x{process.value:04x}"), native_name
+    except Exception:
+        return "unknown", "unknown"
+
 
 # Ordered fastest-first, because on a slow machine the later entries may not be worth waiting
 # for and a partial table is still a useful answer.
@@ -132,27 +194,17 @@ def bootstrap(cache_root: Path) -> int:
 
 def describe_machine() -> dict:
     """Record what this actually ran on, including emulation, which changes the numbers."""
-    info = {
+    process, native = machines()
+    return {
         "python": platform.python_version(),
         "platform_machine": platform.machine(),
         "processor": platform.processor(),
+        "process_machine": process,
+        "native_machine": native,
+        # An unreadable answer degrades to "not emulated" rather than putting a slowness
+        # warning on a machine nothing is known about.
+        "emulated": process != native and "unknown" not in (process, native),
     }
-    try:
-        # Imported for native_machine() only. server/__init__ registers the CUDA DLL
-        # directories on import and warns when they are absent, which is noise here and on
-        # every ARM machine by definition - so the warning is suppressed rather than left to
-        # look like a benchmark failure.
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            from server import hardware
-        info["process_machine"] = hardware.process_machine()
-        info["native_machine"] = hardware.native_machine()
-        info["emulated"] = hardware.is_emulated()
-    except Exception as exc:  # noqa: BLE001
-        info["native_machine"] = f"unavailable ({exc})"
-    return info
 
 
 def make_speech_clip(dest: Path) -> Path | None:
