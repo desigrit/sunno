@@ -12,6 +12,38 @@ import threading
 from dataclasses import dataclass
 from typing import Callable
 
+# Every model id the engine can load, and where it lives on the Hub.
+#
+# Mirrors faster_whisper.utils._MODELS, which cannot be read without importing faster_whisper
+# and therefore ctranslate2 - a dependency this module needs for nothing else, and one with no
+# wheel on Windows on ARM.
+#
+# Deliberately the whole table rather than the four ids the picker offers. --model takes any
+# string (server/app.py) and so does the websocket download command, so an id missing from here
+# would not fail cleanly: it would be passed to the Hub as a bare repo name, come back 401, and
+# present as a download failure for a model already sitting in the cache.
+_REPOS: dict[str, str] = {
+    "tiny.en": "Systran/faster-whisper-tiny.en",
+    "tiny": "Systran/faster-whisper-tiny",
+    "base.en": "Systran/faster-whisper-base.en",
+    "base": "Systran/faster-whisper-base",
+    "small.en": "Systran/faster-whisper-small.en",
+    "small": "Systran/faster-whisper-small",
+    "medium.en": "Systran/faster-whisper-medium.en",
+    "medium": "Systran/faster-whisper-medium",
+    "large-v1": "Systran/faster-whisper-large-v1",
+    "large-v2": "Systran/faster-whisper-large-v2",
+    "large-v3": "Systran/faster-whisper-large-v3",
+    "large": "Systran/faster-whisper-large-v3",
+    "distil-large-v2": "Systran/faster-distil-whisper-large-v2",
+    "distil-medium.en": "Systran/faster-distil-whisper-medium.en",
+    "distil-small.en": "Systran/faster-distil-whisper-small.en",
+    "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
+    "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
+    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+}
+
 # Offered at first run. Ordered best-first; the UI marks the first as recommended.
 CATALOG: list[dict] = [
     {
@@ -63,11 +95,22 @@ class ModelStatus:
 
 
 def is_available(model_id: str) -> ModelStatus:
-    """True when the model is already in the local cache, so no download is needed."""
-    from faster_whisper.utils import download_model
+    """True when the model is already in the local cache, so no download is needed.
+
+    Asks huggingface_hub directly rather than faster_whisper.utils.download_model. The two
+    answer the same question over the same cache, but importing faster_whisper executes its
+    __init__, which imports ctranslate2 - so a plain "is this downloaded?" check could take the
+    whole backend down on a machine where CTranslate2 will not load, before anything had a
+    chance to explain why.
+    """
+    from huggingface_hub import snapshot_download
 
     try:
-        path = download_model(model_id, local_files_only=True)
+        path = snapshot_download(
+            _repo_id(model_id),
+            allow_patterns=_ALLOW_PATTERNS,
+            local_files_only=True,
+        )
         return ModelStatus(model_id, True, path)
     except Exception:
         return ModelStatus(model_id, False)
@@ -98,9 +141,15 @@ def catalog_with_status(device: str | None = None) -> list[dict]:
 
 
 def _repo_id(model_id: str) -> str:
-    from faster_whisper.utils import _MODELS
+    """The Hub repo holding a model id.
 
-    return model_id if "/" in model_id else _MODELS.get(model_id, model_id)
+    A path or an explicit "org/name" passes through, so a user-supplied model still works. An
+    id that is neither known nor qualified is returned unchanged and will fail at the Hub -
+    which is the same behaviour as before and is at least honest about not knowing it.
+    """
+    if "/" in model_id:
+        return model_id
+    return _REPOS.get(model_id, model_id)
 
 
 def total_size_bytes(model_id: str) -> int:
