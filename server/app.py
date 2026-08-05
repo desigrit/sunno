@@ -424,9 +424,9 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
               f"{settings.device} ...")
         emit({"type": "status", "state": "loading", "model": settings.model_size})
 
-        from .asr import WhisperEngine
+        from .engine import create_engine
 
-        engine = await asyncio.to_thread(WhisperEngine, settings)
+        engine = await asyncio.to_thread(create_engine, settings)
         warmup_ms = await asyncio.to_thread(engine.warmup)
         print(f"Model ready (warmup {warmup_ms:.0f} ms)")
 

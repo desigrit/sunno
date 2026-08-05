@@ -19,7 +19,7 @@ from typing import Callable, Iterable
 
 import numpy as np
 
-from .asr import WhisperEngine
+from .engine import SpeechEngine
 from .config import FRAME_MS, FRAME_SAMPLES, SAMPLE_RATE, Settings
 
 Emit = Callable[[dict], None]
@@ -81,7 +81,7 @@ class _Job:
 class AsrWorker:
     """Serialises GPU work, preferring finals and collapsing superseded partials."""
 
-    def __init__(self, engine: WhisperEngine, emit: Emit) -> None:
+    def __init__(self, engine: SpeechEngine, emit: Emit) -> None:
         self._engine = engine
         self._emit = emit
         self._lock = threading.Condition()
@@ -205,7 +205,7 @@ class CaptionPipeline:
     def __init__(
         self,
         settings: Settings,
-        engine: WhisperEngine,
+        engine: SpeechEngine,
         emit: Emit,
         should_run: Callable[[], bool] | None = None,
         speaker: "SpeakerIdentifier | None" = None,

@@ -1,32 +1,21 @@
-"""faster-whisper engine wrapper providing fast provisional and accurate final passes."""
+"""CTranslate2 engine, providing fast provisional and accurate final passes.
+
+The engine the app was built on and the one it uses everywhere CTranslate2 will load, which is
+every Intel and AMD machine. See server/engine.py for the seam and server/asr_onnx.py for the
+ARM implementation.
+"""
 
 from __future__ import annotations
 
 import re
 import time
 from collections import deque
-from dataclasses import dataclass, field
 
 import numpy as np
 
 from . import cuda_setup  # noqa: F401  (must precede ctranslate2 import)
 from .config import SAMPLE_RATE, Settings
-
-
-@dataclass
-class Word:
-    text: str
-    probability: float
-
-
-@dataclass
-class Transcript:
-    text: str
-    duration_s: float
-    latency_ms: float
-    is_final: bool
-    clarity: int | None = None  # 0-100, how confidently the model decoded this
-    words: list[Word] = field(default_factory=list)
+from .engine import Transcript, Word
 
 
 # Whisper was trained on subtitled video, so over near-silence it reproduces the caption
@@ -117,7 +106,7 @@ def _clarity_from_logprob(avg_logprob: float) -> int:
     return int(round(max(0.0, min(1.0, scaled)) * 100))
 
 
-class WhisperEngine:
+class CTranslate2Engine:
     """Wraps a single loaded Whisper model used for both provisional and final decoding.
 
     Only one model is held in VRAM; the two passes differ purely by decoding parameters

@@ -152,6 +152,35 @@ def _repo_id(model_id: str) -> str:
     return _REPOS.get(model_id, model_id)
 
 
+def onnx_model_path(model_id: str) -> Path:
+    """Where the ONNX build of a model lives locally.
+
+    Separate from the CTranslate2 cache because they are different artifacts: a genai model is
+    a directory of genai_config.json, the tokenizer, and an encoder/decoder pair, and nothing
+    about it is interchangeable with a CT2 conversion of the same weights.
+
+    Raises rather than downloading. Fetching several hundred megabytes is the download path's
+    job, which reports progress; doing it silently from inside engine construction would look
+    like a very slow startup.
+    """
+    root = _onnx_root() / model_id
+    if (root / "genai_config.json").is_file():
+        return root
+    # snapshot_download keeps the repo's own layout, so the config may sit one level down.
+    for nested in root.glob("*/genai_config.json"):
+        return nested.parent
+    raise FileNotFoundError(
+        f"No ONNX build of '{model_id}' at {root}. It has to be downloaded before the engine "
+        "can start."
+    )
+
+
+def _onnx_root() -> Path:
+    """Where ONNX models are kept. Beside the CT2 cache, under the user's local app data."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return Path(base) / "Sunno" / "onnx-models"
+
+
 def total_size_bytes(model_id: str) -> int:
     """Exact download size from the Hub, so progress is real rather than estimated."""
     import fnmatch
