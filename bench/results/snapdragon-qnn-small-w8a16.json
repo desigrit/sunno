@@ -1,0 +1,47 @@
+{
+  "machine": {
+    "python": "3.12.10",
+    "processor": "ARMv8 (64-bit) Family 8 Model 1 Revision 201, Qualcomm Technologies Inc",
+    "process_machine": "ARM64",
+    "native_machine": "ARM64",
+    "emulated": false,
+    "qnn": "QNNExecutionProvider",
+    "ep_devices": [
+      {
+        "ep": "CPUExecutionProvider",
+        "vendor": "Microsoft",
+        "type": "OrtHardwareDeviceType.CPU"
+      },
+      {
+        "ep": "QNNExecutionProvider",
+        "vendor": "Qualcomm",
+        "type": "OrtHardwareDeviceType.NPU"
+      },
+      {
+        "ep": "QNNExecutionProvider",
+        "vendor": "Qualcomm",
+        "type": "OrtHardwareDeviceType.GPU"
+      }
+    ]
+  },
+  "model": "small-w8a16-x-elite",
+  "results": {
+    "qnn": {
+      "provider": "qnn",
+      "load_ms": 801.4,
+      "encoder_providers": [
+        "QNNExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "decoder_providers": [
+        "QNNExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "encoder_ms": 713.5,
+      "decode_total_ms": 418.9,
+      "decode_step_ms": 17.46,
+      "utterance_ms": 1132.4,
+      "responsive": false
+    }
+  }
+}

@@ -61,22 +61,28 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-REQUIREMENTS = ["onnxruntime-qnn", "numpy"]
+REQUIREMENTS = ["onnxruntime-qnn", "numpy", "huggingface_hub"]
 
-# Qualcomm AI Hub, model whisper_small_quantized, release v0.59.0. w8a16 - weights at 8 bits,
-# activations at 16 - which is the precision their Snapdragon X build ships and the one HTP
-# wants. The float builds of the same model exist but are the case already shown to fall back.
-ASSETS = {
-    "small-w8a16-x-elite": (
-        "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/"
-        "whisper_small_quantized/releases/v0.59.0/"
-        "whisper_small_quantized-precompiled_qnn_onnx-w8a16-qualcomm_snapdragon_x_elite.zip"
-    ),
-    "small-w8a16-x2-elite": (
-        "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/"
-        "whisper_small_quantized/releases/v0.59.0/"
-        "whisper_small_quantized-precompiled_qnn_onnx-w8a16-qualcomm_snapdragon_x2_elite.zip"
-    ),
+# Qualcomm publishes these on HuggingFace with a release_assets.json naming per-chipset
+# downloads, so the URLs are resolved at run time rather than pinned here - their release
+# version moves, and a stale URL would look like a missing model.
+#
+# Small-Quantized is the only w8a16 build; the rest are float. Both run on HTP, which supports
+# fp16, so the float ones are worth measuring too - especially large-v3-turbo, whose decoder is
+# 4 layers against medium's 24 and which is the only one of these with the accent accuracy the
+# app was built around.
+MODELS = {
+    "tiny": "qualcomm/Whisper-Tiny",
+    "base": "qualcomm/Whisper-Base",
+    "small": "qualcomm/Whisper-Small",
+    "small-quantized": "qualcomm/Whisper-Small-Quantized",
+    "medium": "qualcomm/Whisper-Medium",
+    "large-v3-turbo": "qualcomm/Whisper-Large-V3-Turbo",
+}
+
+CHIPSETS = {
+    "x-elite": "qualcomm-snapdragon-x-elite",
+    "x2-elite": "qualcomm-snapdragon-x2-elite",
 }
 
 # A caption-length utterance. Whisper pads every window to 30 s so the encoder cost is fixed;
@@ -129,6 +135,37 @@ def bootstrap() -> int:
     forwarded = [a for a in sys.argv[1:] if a != "--setup"]
     print(f"  re-running inside {python.name}\n")
     return subprocess.run([str(python), str(Path(__file__).resolve()), *forwarded]).returncode
+
+
+def resolve_asset(repo: str, chipset: str) -> tuple[str, str] | None:
+    """Find the precompiled QNN download for one model on one chipset.
+
+    Read from the model's release_assets.json rather than pinned, because the release version
+    in the URL moves and a stale link would present as a missing model.
+    """
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        print("    huggingface_hub is not installed (re-run with --setup)")
+        return None
+
+    try:
+        path = hf_hub_download(repo, "release_assets.json")
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        print(f"    could not read release_assets.json for {repo}: {str(exc)[:140]}")
+        return None
+
+    for precision, block in data.get("precisions", {}).items():
+        entry = block.get("chipset_assets", {}).get(chipset, {}).get("precompiled_qnn_onnx")
+        if entry and entry.get("download_url"):
+            return precision, entry["download_url"]
+
+    have = sorted({c for b in data.get("precisions", {}).values()
+                   for c in b.get("chipset_assets", {})})
+    print(f"    {repo} has no precompiled_qnn_onnx for {chipset}")
+    print(f"    it does have: {', '.join(have[:6])}")
+    return None
 
 
 def fetch_model(name: str, url: str, cache: Path) -> Path | None:
@@ -365,8 +402,11 @@ def main() -> int:
                         help="create a venv, install onnxruntime-qnn, and run inside it")
     parser.add_argument("--cpu", "-cpu", action="store_true",
                         help="also try the CPU provider; expected to fail, see the note below")
-    parser.add_argument("--model", "-model", default="small-w8a16-x-elite",
-                        choices=sorted(ASSETS), help="which Qualcomm asset to measure")
+    parser.add_argument("--model", "-model", nargs="*", default=["small-quantized"],
+                        choices=sorted(MODELS),
+                        help="which Qualcomm models to measure; several may be given")
+    parser.add_argument("--chipset", "-chipset", default="x-elite", choices=sorted(CHIPSETS),
+                        help="which Snapdragon this laptop is")
     parser.add_argument("--cache", "-cache", default=str(ROOT / ".qnn-models"),
                         help="where to keep downloaded models")
     parser.add_argument("--out", "-out", default=None, help="where to write the results")
@@ -435,34 +475,47 @@ def main() -> int:
         # --cpu alone is still worth running: it exercises the whole harness end to end.
         print("\n  Measuring the CPU provider only - expect it to refuse these graphs.")
 
-    print(f"\n  {args.model}")
-    model_dir = fetch_model(args.model, ASSETS[args.model], Path(args.cache))
-    if model_dir is None:
-        return 1
-
+    chipset = CHIPSETS[args.chipset]
     results: dict[str, dict] = {}
-    providers_to_try = []
-    if qnn_ready:
-        providers_to_try.append("qnn")
-    if args.cpu or not providers_to_try:
-        providers_to_try.append("cpu")
 
-    for provider in providers_to_try:
-        measured = measure(model_dir, provider, qnn_detail if qnn_ready else "QNNExecutionProvider")
-        results[provider] = measured
-        if "error" in measured:
-            print(f"    {provider:4} {measured['error']}")
+    for model_name in args.model:
+        repo = MODELS[model_name]
+        print(f"\n  {model_name}  ({repo})")
+
+        resolved = resolve_asset(repo, chipset)
+        if resolved is None:
+            results[model_name] = {"error": "no asset for this chipset"}
             continue
-        print(f"    {provider:4} load {measured['load_ms']:>9.1f} ms")
-        print(f"         encoder      {measured['encoder_ms']:>8.1f} ms   (once per utterance)")
-        print(f"         decode step  {measured['decode_step_ms']:>8.2f} ms   x{DECODE_STEPS}"
-              f" = {measured['decode_total_ms']:.1f} ms")
-        print(f"         utterance    {measured['utterance_ms']:>8.1f} ms   "
-              f"{'responsive' if measured['responsive'] else 'over the 1000 ms budget'}")
-        print(f"         ran on       {measured['encoder_providers']}")
+        precision, url = resolved
+        print(f"    precision {precision}")
 
-    out = Path(args.out) if args.out else ROOT / f"qnn-whisper-{native}.json"
-    out.write_text(json.dumps({"machine": machine, "model": args.model, "results": results},
+        model_dir = fetch_model(f"{model_name}-{precision}-{args.chipset}", url, Path(args.cache))
+        if model_dir is None:
+            results[model_name] = {"error": "download failed"}
+            continue
+
+        providers_to_try = (["qnn"] if qnn_ready else []) + (["cpu"] if args.cpu else [])
+        if not providers_to_try:
+            providers_to_try = ["cpu"]
+
+        for provider in providers_to_try:
+            measured = measure(model_dir, provider,
+                               qnn_detail if qnn_ready else "QNNExecutionProvider")
+            measured["precision"] = precision
+            results[f"{model_name}:{provider}"] = measured
+            if "error" in measured:
+                print(f"    {provider:4} {measured['error'][:200]}")
+                continue
+            print(f"    {provider:4} load {measured['load_ms']:>9.1f} ms")
+            print(f"         encoder      {measured['encoder_ms']:>8.1f} ms   (once per utterance)")
+            print(f"         decode step  {measured['decode_step_ms']:>8.2f} ms   x{DECODE_STEPS}"
+                  f" = {measured['decode_total_ms']:.1f} ms")
+            print(f"         utterance    {measured['utterance_ms']:>8.1f} ms   "
+                  f"{'responsive' if measured['responsive'] else 'over the 1000 ms budget'}")
+            print(f"         ran on       {measured['encoder_providers']}")
+
+    out = Path(args.out) if args.out else ROOT / f"qnn-whisper-{args.chipset}.json"
+    out.write_text(json.dumps({"machine": machine, "chipset": chipset, "results": results},
                               indent=2), encoding="utf-8")
     print(f"\n  wrote {out}")
     print("\n  Note: this times the graphs, it does not transcribe. Timing is fair because every")
