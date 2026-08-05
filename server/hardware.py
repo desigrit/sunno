@@ -29,7 +29,7 @@ import functools
 import os
 
 # Measured on a Quadro RTX 8000 (float16) and an i9-14900K (int8), faster-whisper 1.x,
-# greedy decode, best of three, utterances of 2/4/8 s averaged. Rerun files/bench_latency.py
+# greedy decode, best of three, utterances of 2/4/8 s averaged. Rerun bench/bench_latency.py
 # to regenerate.
 _LAG_MS_CUDA: dict[str, int] = {
     "small": 250,
@@ -61,6 +61,84 @@ _REFERENCE_CPU_SCORE = 73.0
 _UNKNOWN_MODEL_LAG_MS = 5000
 
 
+_MACHINE_NAMES: dict[int, str] = {
+    0x0000: "unknown",
+    0x014C: "x86",
+    0x8664: "x64",
+    0x01C4: "ARM32",
+    0xAA64: "ARM64",
+}
+
+
+def native_machine() -> str:
+    """The machine Windows is really running on, not the one this process is emulating.
+
+    Deliberately not ``platform.machine()``. That resolves through PROCESSOR_ARCHITECTURE
+    and PROCESSOR_ARCHITEW6432, both of which are process-relative, so an x64 build running
+    under emulation on an ARM64 PC reports "AMD64" - precisely the blind spot this exists to
+    close. IsWow64Process2 reports the process machine and the native machine separately and
+    is unambiguous about the difference.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.IsWow64Process2.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.USHORT),
+            ctypes.POINTER(wintypes.USHORT),
+        ]
+        kernel32.IsWow64Process2.restype = wintypes.BOOL
+
+        process = wintypes.USHORT()
+        native = wintypes.USHORT()
+        if not kernel32.IsWow64Process2(
+            kernel32.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(native)
+        ):
+            return "unknown"
+        return _MACHINE_NAMES.get(native.value, f"0x{native.value:04x}")
+    except Exception:
+        # Older Windows, a non-Windows host, or a blocked call. An unknown answer is fine:
+        # every caller treats this as context for a log line, never as control flow.
+        return "unknown"
+
+
+def is_emulated() -> bool:
+    """True when this x64 build is running on an ARM64 PC under Prism emulation."""
+    return native_machine() == "ARM64"
+
+
+@functools.lru_cache(maxsize=1)
+def engine_importable() -> bool:
+    """Whether the inference engine's native extension loads at all.
+
+    Deliberately separate from :func:`has_cuda`. Loadability is not a GPU question, but it used
+    to be observable only as a side effect of the CUDA probe - which the user can switch off with
+    Force CPU, silencing the answer on the one machine that most needs it. CTranslate2 publishes
+    no win_arm64 wheel, so an ARM PC is the likely cause of a failure here.
+
+    Cached so the report is made once per process rather than on every device resolution.
+    """
+    try:
+        import ctranslate2  # noqa: F401
+
+        return True
+    except (ImportError, OSError) as exc:
+        # Split out from the catch-all below on purpose. This is the one failure here that does
+        # not mean "no GPU": the extension itself would not load, so the CPU path is dead too and
+        # the process will die loading the model. Reporting a healthy-looking "cpu" and saying
+        # nothing is what made that death unexplainable.
+        print(
+            f"[error] ctranslate2 could not be loaded (native machine {native_machine()}): {exc}",
+            flush=True,
+        )
+        return False
+    except Exception:
+        return False
+
+
 def has_cuda() -> bool:
     """Whether CTranslate2 can actually run on a GPU here.
 
@@ -68,6 +146,9 @@ def has_cuda() -> bool:
     payload we ship is missing or unloadable, and the only answer that matters is whether
     a model would load.
     """
+    if not engine_importable():
+        return False
+
     try:
         import ctranslate2
 

@@ -322,6 +322,20 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     print(f"  UI:        http://{ui_host}:{settings.http_port}")
     print(f"  WebSocket: ws://{ui_host}:{settings.ws_port}")
 
+    # Probed unconditionally, not inside the CUDA branch. Force CPU skips the GPU probe
+    # entirely, so an ARM user with that setting on would otherwise get no report at all -
+    # exactly the machine where "the engine will not load" is the whole story. Cached, so the
+    # auto path that already probed during argument parsing does not report twice.
+    from . import hardware as _hw
+
+    _hw.engine_importable()
+
+    # Recorded plainly rather than as [error], because emulation is not by itself a failure:
+    # Prism emulates AVX2 on recent Windows, so the x64 engine may load and run, just slowly.
+    # If it does not load, engine_importable() reports the real failure with the same machine name.
+    if _hw.is_emulated():
+        print("  Note:      x64 engine running under ARM64 emulation; expect it to be slow")
+
     model_ready = asyncio.Event()
     chosen_model = settings.model_size
     downloading = False

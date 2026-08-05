@@ -40,7 +40,11 @@ public static class Diagnostics
         sb.AppendLine("-- Build --");
         sb.AppendLine($"App version     {AppVersion()}");
         sb.AppendLine($"Package         {PackageIdentity()}");
-        sb.AppendLine($"Architecture    {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}");
+        // Both architectures, because they differ on Windows-on-ARM and only the pair is
+        // meaningful. An x64 build runs there under emulation and reports ProcessArchitecture
+        // X64, so every report from an ARM machine was indistinguishable from one sent by an
+        // Intel machine - which is exactly the case most likely to be generating the report.
+        sb.AppendLine($"Architecture    {ArchitectureLine()}");
         sb.AppendLine($".NET            {Environment.Version}");
         sb.AppendLine();
 
@@ -172,6 +176,15 @@ public static class Diagnostics
             // Unpackaged: no package identity, so fall back to the assembly.
             return typeof(Diagnostics).Assembly.GetName().Version?.ToString() ?? "unknown";
         }
+    }
+
+    private static string ArchitectureLine()
+    {
+        var process = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture;
+        var os = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture;
+        // Only worth spelling out when they disagree. On a matched machine the second half
+        // would be noise in a report someone is meant to read before sending.
+        return process == os ? $"{process}" : $"{process} process on {os} OS (emulated)";
     }
 
     private static string PackageIdentity()

@@ -300,6 +300,16 @@ Endpointing lives in `server/config.py`:
 
 ## Requirements
 
-NVIDIA GPU with CUDA support. Developed against a Quadro RTX 8000 (Turing, sm_75, 48 GB).
-Note that Turing supports FP16 and INT8 but **not** bfloat16 or FlashAttention-2, so
-`compute_type` must stay `float16` or `int8_float16`. Whisper large-v3 needs ~3 GB of VRAM.
+**A 64-bit Intel or AMD processor.** The engine is CTranslate2, which publishes no `win_arm64`
+wheel, so an ARM PC runs this build under Prism emulation — slowly at best, and the backend may
+not load at all. `server/hardware.py` reports the native machine via `IsWow64Process2` so that
+case is identifiable in a bug report rather than surfacing as an unexplained exit.
+
+A GPU is **optional**. An NVIDIA card with CUDA support is much faster — the measured decode lag
+for large-v3 is 650 ms on CUDA against 4,400–4,540 ms on CPU depending on thread count
+(`server/hardware.py:31-55`; Quadro RTX 8000 float16 / i9-14900K int8, greedy decode, best of
+three) — but the CPU path works and is the default fallback when no usable GPU is found.
+
+Developed against a Quadro RTX 8000 (Turing, sm_75, 48 GB). Note that Turing supports FP16 and
+INT8 but **not** bfloat16 or FlashAttention-2, so `compute_type` must stay `float16` or
+`int8_float16`. Whisper large-v3 needs ~3 GB of VRAM.

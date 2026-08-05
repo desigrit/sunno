@@ -16,6 +16,14 @@ public sealed class BackendHost : IDisposable
     private readonly List<string> _log = new();
     private readonly object _logLock = new();
 
+    /// <summary>
+    /// Whether the engine reported that it could not be loaded at all, and whether it said so
+    /// on an ARM machine. Distinct from "no GPU": the CPU path is dead too, so the process is
+    /// going to die whatever the user does next. Guarded by <see cref="_logLock"/>.
+    /// </summary>
+    private bool _engineUnloadable;
+    private bool _engineUnloadableOnArm;
+
     public event Action<string>? Output;
 
     /// <summary>
@@ -122,6 +130,13 @@ public sealed class BackendHost : IDisposable
         if (_job.IsDisposed)
             return "Sunno needs to be restarted before speech recognition can start again.";
         _stopping = false;
+        // Cleared per launch. A stale latch would let one bad start put a permanent "needs an
+        // Intel or AMD processor" on a machine where the next start worked.
+        lock (_logLock)
+        {
+            _engineUnloadable = false;
+            _engineUnloadableOnArm = false;
+        }
 
         var python = FindPython();
         var root = FindBackendRoot();
@@ -275,6 +290,18 @@ public sealed class BackendHost : IDisposable
         if (string.IsNullOrEmpty(line)) return;
         lock (_logLock)
         {
+            // Latched here rather than searched for at exit time. The engine announces this
+            // failure early in startup, and the traceback that follows when the model finally
+            // loads would push it out of the handful of lines RecentDiagnostics keeps. Only the
+            // two booleans are retained, never the line, so this cannot become a second route
+            // for backend text to reach the export.
+            if (line.Contains("ctranslate2 could not be loaded", StringComparison.Ordinal))
+            {
+                _engineUnloadable = true;
+                if (line.Contains("native machine ARM64", StringComparison.Ordinal))
+                    _engineUnloadableOnArm = true;
+            }
+
             _log.Add(line);
             if (_log.Count > 500) _log.RemoveAt(0);
             AppendToLogFile(line);
@@ -380,23 +407,57 @@ public sealed class BackendHost : IDisposable
         // worse than showing no detail at all.
         var detail = RecentDiagnostics();
 
+        bool unloadable, onArm;
+        lock (_logLock)
+        {
+            unloadable = _engineUnloadable;
+            onArm = _engineUnloadableOnArm;
+        }
+
         // Name the cause when the backend's own output identifies it. Anything not recognised
         // falls through to the generic wording rather than guessing: a wrong explanation sends
         // someone hunting for a problem they do not have.
+        //
+        // Order is deliberate, not incidental: the two "could not load" branches sit above the
+        // exit-code test and shadow it, so a latched load failure reports its cause rather than
+        // "stopped unexpectedly". A specific cause should always beat a generic one, and the OS
+        // termination code carries nothing extra once the reason is already known.
         //
         // Deliberately not mapped: PortAudio errno values. -9998 is paInvalidChannelCount and
         // appears on nearly every failed open because _candidate_formats probes several channel
         // counts, so keying off it would shadow the real cause. Microphone failures already
         // arrive as human sentences from server/audio.py, with more information than an errno
         // has, and go through ShowActionableError instead.
-        var reason = detail.Contains("10048") || detail.Contains("only one usage of each socket")
-            ? "Sunno's speech engine could not start because its connection was still in use. "
-              + "Restarting Sunno should clear it."
-            : code is < 0 or > 0x40000000
-                // A negative or very large code means the OS terminated the process rather than
-                // it exiting. The number carries nothing a user could act on, so don't show it.
-                ? "Sunno's speech engine stopped unexpectedly."
-                : "Sunno's speech engine stopped.";
+        string reason;
+        if (detail.Contains("10048") || detail.Contains("only one usage of each socket"))
+        {
+            reason = "Sunno's speech engine could not start because its connection was still in use. "
+                     + "Restarting Sunno should clear it.";
+        }
+        else if (unloadable && onArm)
+        {
+            // Separated from the generic load failure because it is the one case with no remedy
+            // available to the user. There is no ARM build of the engine to fall back to, so
+            // "reinstalling usually repairs it" would be false comfort and would send someone
+            // through a package this size for nothing.
+            reason = "Sunno's speech engine needs a 64-bit Intel or AMD processor, so it cannot "
+                     + "run on this ARM PC.";
+        }
+        else if (unloadable)
+        {
+            reason = "Sunno's speech engine could not load on this PC. Reinstalling Sunno usually "
+                     + "repairs it.";
+        }
+        else if (code is < 0 or > 0x40000000)
+        {
+            // A negative or very large code means the OS terminated the process rather than
+            // it exiting. The number carries nothing a user could act on, so don't show it.
+            reason = "Sunno's speech engine stopped unexpectedly.";
+        }
+        else
+        {
+            reason = "Sunno's speech engine stopped.";
+        }
 
         return (reason, detail);
     }
