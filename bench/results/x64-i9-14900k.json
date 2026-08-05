@@ -1,0 +1,57 @@
+{
+  "machine": {
+    "python": "3.12.10",
+    "platform_machine": "AMD64",
+    "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "native_machine": "x64",
+    "emulated": false
+  },
+  "results": {
+    "whisper-base:cpu": {
+      "provider": "cpu",
+      "load_ms": 626.6,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 205.3,
+          "wav_encode_ms": 0.07,
+          "text": "A pencil."
+        },
+        "4s": {
+          "decode_ms": 310.2,
+          "wav_encode_ms": 0.12,
+          "text": "A pencil with black lead writes best."
+        },
+        "8s": {
+          "decode_ms": 379.5,
+          "wav_encode_ms": 0.15,
+          "text": "A pencil with black lead writes best. The lamp shone with a steady green flame."
+        }
+      },
+      "mean_decode_ms": 298.3,
+      "responsive": true
+    },
+    "whisper-small:cpu": {
+      "provider": "cpu",
+      "load_ms": 950.5,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 630.1,
+          "wav_encode_ms": 0.14,
+          "text": "At 10 so"
+        },
+        "4s": {
+          "decode_ms": 800.2,
+          "wav_encode_ms": 0.12,
+          "text": "A pencil with black lead writes best."
+        },
+        "8s": {
+          "decode_ms": 1107.9,
+          "wav_encode_ms": 0.2,
+          "text": "A pencil with black lead writes best. The lamp shone with a steady green flame."
+        }
+      },
+      "mean_decode_ms": 846.1,
+      "responsive": true
+    }
+  }
+}

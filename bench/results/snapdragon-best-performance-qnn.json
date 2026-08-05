@@ -1,0 +1,120 @@
+{
+  "machine": {
+    "python": "3.12.10",
+    "platform_machine": "ARM64",
+    "processor": "ARMv8 (64-bit) Family 8 Model 1 Revision 201, Qualcomm Technologies Inc",
+    "process_machine": "ARM64",
+    "native_machine": "ARM64",
+    "emulated": false
+  },
+  "results": {
+    "whisper-tiny:cpu": {
+      "provider": "cpu",
+      "load_ms": 160.1,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 114.8,
+          "wav_encode_ms": 0.15,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 122.0,
+          "wav_encode_ms": 0.18,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 156.1,
+          "wav_encode_ms": 0.27,
+          "text": "The quick brown fox jumps over the lazy dog. She sells sea shells by the sea shore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 131.0,
+      "responsive": true
+    },
+    "whisper-tiny:qnn": {
+      "error": "load failed: QNN execution provider is not supported in this build. ",
+      "provider": "qnn"
+    },
+    "whisper-base:cpu": {
+      "provider": "cpu",
+      "load_ms": 211.6,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 267.6,
+          "wav_encode_ms": 0.09,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 281.3,
+          "wav_encode_ms": 0.35,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 338.7,
+          "wav_encode_ms": 0.23,
+          "text": "The quick brown fox jumps over the lazy dog. She sells seashells by the seashore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 295.9,
+      "responsive": true
+    },
+    "whisper-base:qnn": {
+      "error": "load failed: QNN execution provider is not supported in this build. ",
+      "provider": "qnn"
+    },
+    "whisper-small:cpu": {
+      "provider": "cpu",
+      "load_ms": 657.9,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 894.3,
+          "wav_encode_ms": 0.09,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 913.9,
+          "wav_encode_ms": 0.13,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 1109.8,
+          "wav_encode_ms": 0.61,
+          "text": "The quick brown fox jumps over the lazy dog. She sells seashells by the seashore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 972.7,
+      "responsive": true
+    },
+    "whisper-small:qnn": {
+      "error": "load failed: QNN execution provider is not supported in this build. ",
+      "provider": "qnn"
+    },
+    "whisper-medium:cpu": {
+      "provider": "cpu",
+      "load_ms": 2181.7,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 3103.6,
+          "wav_encode_ms": 0.09,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 3476.6,
+          "wav_encode_ms": 0.45,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 3983.9,
+          "wav_encode_ms": 0.58,
+          "text": "The quick brown fox jumps over the lazy dog. She sells seashells by the seashore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 3521.4,
+      "responsive": false
+    },
+    "whisper-medium:qnn": {
+      "error": "load failed: QNN execution provider is not supported in this build. ",
+      "provider": "qnn"
+    }
+  }
+}

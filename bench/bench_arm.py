@@ -162,11 +162,17 @@ PROMPT = "<|startoftranscript|><|en|><|transcribe|><|notimestamps|>"
 
 REQUIREMENTS = ["onnxruntime-genai", "huggingface_hub", "numpy"]
 
+# QNN lives in a separate distribution. The plain wheel bundles no Qualcomm provider at all -
+# verified by listing it: onnxruntime-genai.dll and nothing else - so asking for --qnn without
+# this installs a build that can only answer "QNN execution provider is not supported in this
+# build", which says nothing about the machine.
+QNN_REQUIREMENTS = ["onnxruntime-qnn"]
 
-def bootstrap(cache_root: Path) -> int:
+
+def bootstrap(cache_root: Path, want_qnn: bool) -> int:
     """Create a venv, install what the benchmark needs, and re-run inside it.
 
-    Exists so the first thing he does on the ARM laptop is run one command, not assemble an
+    Exists so the first thing to do on a test machine is run one command, not assemble an
     environment. Deliberately a separate venv rather than the repo's .venv: that one is staged
     from x64 wheels and its ctranslate2 cannot load here at all.
     """
@@ -178,9 +184,10 @@ def bootstrap(cache_root: Path) -> int:
         print(f"  creating {venv}")
         subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
 
-    print(f"  installing {', '.join(REQUIREMENTS)}")
+    wanted = REQUIREMENTS + (QNN_REQUIREMENTS if want_qnn else [])
+    print(f"  installing {', '.join(wanted)}")
     subprocess.run([str(python), "-m", "pip", "install", "--quiet", "--upgrade", "pip"], check=False)
-    result = subprocess.run([str(python), "-m", "pip", "install", "--quiet", *REQUIREMENTS])
+    result = subprocess.run([str(python), "-m", "pip", "install", "--quiet", *wanted])
     if result.returncode != 0:
         print("\n  Install failed. The most likely cause on ARM64 is that one of these has no")
         print("  win_arm64 wheel for this Python version. Try python 3.12 specifically.")
@@ -410,15 +417,19 @@ def measure(model_dir: Path, clip_path: Path, use_qnn: bool) -> dict | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--qnn", action="store_true",
+    # Single-dash spellings accepted too. PowerShell's own flags use one dash, so -qnn is a
+    # natural thing to type, and failing on it wastes a run on a machine that may be borrowed.
+    parser.add_argument("--qnn", "-qnn", action="store_true",
                         help="also try the Qualcomm NPU (encoder is expected to offload, decoder to fall back)")
-    parser.add_argument("--models", nargs="*", default=None,
+    parser.add_argument("--models", "-models", nargs="*", default=None,
                         help="subset of model ids to measure; default is all")
-    parser.add_argument("--cache", default=str(ROOT / ".onnx-models"),
+    parser.add_argument("--cache", "-cache", default=str(ROOT / ".onnx-models"),
                         help="where to keep downloaded ONNX weights")
-    parser.add_argument("--wav", default=None,
+    parser.add_argument("--wav", "-wav", default=None,
                         help="clip to decode; defaults to testdata, else one synthesised with the Windows voice")
-    parser.add_argument("--setup", action="store_true",
+    parser.add_argument("--out", "-out", default=None,
+                        help="where to write the results; defaults to arm-hardware.json beside this script")
+    parser.add_argument("--setup", "-setup", action="store_true",
                         help="create a venv, install what is needed, and run inside it")
     args = parser.parse_args()
 
@@ -426,7 +437,7 @@ def main() -> int:
     print("=" * 62)
 
     if args.setup:
-        return bootstrap(ROOT)
+        return bootstrap(ROOT, args.qnn)
 
     machine = describe_machine()
     for key, value in machine.items():
@@ -441,6 +452,13 @@ def main() -> int:
 
     print(f"  genai              {getattr(og, '__version__', '?')}")
     print(f"  qnn available      {og.is_qnn_available()}")
+
+    if args.qnn and not og.is_qnn_available():
+        print()
+        print("  NOTE: --qnn was asked for, but this build has no QNN provider, so the NPU")
+        print("        cannot be measured. That is a packaging fact, not a fact about this")
+        print("        machine. Re-run with --setup --qnn to install onnxruntime-qnn, which")
+        print("        is a separate distribution from onnxruntime-genai.")
 
     if machine.get("emulated"):
         print()
@@ -488,7 +506,15 @@ def main() -> int:
                 print(f"         {dur:>4}  {row['decode_ms']:>8.1f} ms   (+{row['wav_encode_ms']:.2f} ms wav encode)")
                 print(f"               \"{row['text']}\"")
 
-    out = Path(__file__).with_name("arm-hardware.json")
+    # Named after the machine by default, because these files come from several laptops and
+    # get compared against each other. A fixed name means the second run silently overwrites
+    # the first, and the numbers are only meaningful next to the machine that produced them.
+    if args.out:
+        out = Path(args.out)
+    else:
+        tag = (machine.get("processor") or "unknown").split()[0].strip(",")
+        safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in tag)[:24]
+        out = Path(__file__).with_name(f"arm-hardware-{machine.get('native_machine','?')}-{safe}.json")
     out.write_text(json.dumps({"machine": machine, "results": results}, indent=2), encoding="utf-8")
     print(f"\n  wrote {out}")
     print("\n  Send this file back - it decides which models the ARM build offers.")
