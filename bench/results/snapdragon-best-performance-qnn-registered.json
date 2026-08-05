@@ -1,0 +1,197 @@
+{
+  "machine": {
+    "python": "3.12.10",
+    "platform_machine": "ARM64",
+    "processor": "ARMv8 (64-bit) Family 8 Model 1 Revision 201, Qualcomm Technologies Inc",
+    "process_machine": "ARM64",
+    "native_machine": "ARM64",
+    "emulated": false,
+    "qnn": "QNNExecutionProvider"
+  },
+  "results": {
+    "whisper-tiny:cpu": {
+      "provider": "cpu",
+      "load_ms": 148.7,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 118.8,
+          "wav_encode_ms": 0.17,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 122.8,
+          "wav_encode_ms": 0.16,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 155.1,
+          "wav_encode_ms": 0.25,
+          "text": "The quick brown fox jumps over the lazy dog. She sells sea shells by the sea shore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 132.2,
+      "responsive": true
+    },
+    "whisper-tiny:qnn": {
+      "provider": "QNNExecutionProvider",
+      "load_ms": 2127.4,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 127.3,
+          "wav_encode_ms": 0.11,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 134.3,
+          "wav_encode_ms": 0.15,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 177.4,
+          "wav_encode_ms": 0.4,
+          "text": "The quick brown fox jumps over the lazy dog. She sells sea shells by the sea shore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 146.3,
+      "responsive": true
+    },
+    "whisper-base:cpu": {
+      "provider": "cpu",
+      "load_ms": 214.6,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 276.9,
+          "wav_encode_ms": 0.08,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 285.1,
+          "wav_encode_ms": 0.15,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 344.2,
+          "wav_encode_ms": 0.63,
+          "text": "The quick brown fox jumps over the lazy dog. She sells seashells by the seashore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 302.1,
+      "responsive": true
+    },
+    "whisper-base:qnn": {
+      "provider": "QNNExecutionProvider",
+      "load_ms": 1948.7,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 281.7,
+          "wav_encode_ms": 0.12,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 295.4,
+          "wav_encode_ms": 0.31,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 375.0,
+          "wav_encode_ms": 0.36,
+          "text": "The quick brown fox jumps over the lazy dog. She sells seashells by the seashore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 317.4,
+      "responsive": true
+    },
+    "whisper-small:cpu": {
+      "provider": "cpu",
+      "load_ms": 668.6,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 954.4,
+          "wav_encode_ms": 0.08,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 986.3,
+          "wav_encode_ms": 0.28,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 1170.4,
+          "wav_encode_ms": 0.77,
+          "text": "The quick brown fox jumps over the lazy dog. She sells seashells by the seashore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 1037.0,
+      "responsive": false
+    },
+    "whisper-small:qnn": {
+      "provider": "QNNExecutionProvider",
+      "load_ms": 2449.6,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 1000.5,
+          "wav_encode_ms": 0.13,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 1050.4,
+          "wav_encode_ms": 0.31,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 1242.4,
+          "wav_encode_ms": 0.54,
+          "text": "The quick brown fox jumps over the lazy dog. She sells seashells by the seashore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 1097.8,
+      "responsive": false
+    },
+    "whisper-medium:cpu": {
+      "provider": "cpu",
+      "load_ms": 2382.0,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 3315.4,
+          "wav_encode_ms": 0.14,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 3503.7,
+          "wav_encode_ms": 0.26,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 3928.3,
+          "wav_encode_ms": 0.57,
+          "text": "The quick brown fox jumps over the lazy dog. She sells seashells by the seashore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 3582.5,
+      "responsive": false
+    },
+    "whisper-medium:qnn": {
+      "provider": "QNNExecutionProvider",
+      "load_ms": 4411.9,
+      "by_duration": {
+        "2s": {
+          "decode_ms": 3233.2,
+          "wav_encode_ms": 0.12,
+          "text": "The quick brown fox jumps over the lake."
+        },
+        "4s": {
+          "decode_ms": 4058.2,
+          "wav_encode_ms": 0.22,
+          "text": "The quick brown fox jumps over the lazy dog. She sells"
+        },
+        "8s": {
+          "decode_ms": 3933.1,
+          "wav_encode_ms": 0.79,
+          "text": "The quick brown fox jumps over the lazy dog. She sells seashells by the seashore on a bright and windy afternoon."
+        }
+      },
+      "mean_decode_ms": 3741.5,
+      "responsive": false
+    }
+  }
+}
