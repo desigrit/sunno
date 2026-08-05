@@ -147,8 +147,7 @@ def describe_machine() -> dict:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             from server import hardware
-        # The authoritative answer. platform.machine() is process-relative and reports AMD64
-        # for an emulated x64 process on an ARM PC, which would silently mislabel the whole run.
+        info["process_machine"] = hardware.process_machine()
         info["native_machine"] = hardware.native_machine()
         info["emulated"] = hardware.is_emulated()
     except Exception as exc:  # noqa: BLE001
@@ -390,6 +389,15 @@ def main() -> int:
 
     print(f"  genai              {getattr(og, '__version__', '?')}")
     print(f"  qnn available      {og.is_qnn_available()}")
+
+    if machine.get("emulated"):
+        print()
+        print("  STOP: this Python is emulated, so every number below would be wrong.")
+        print(f"        You are running a {machine.get('process_machine')} Python on a "
+              f"{machine.get('native_machine')} machine.")
+        print("        Install the ARM64 build from python.org and use that instead:")
+        print("          https://www.python.org/ftp/python/3.12.10/python-3.12.10-arm64.exe")
+        return 2
 
     if machine.get("native_machine") not in ("ARM64",):
         print("\n  NOTE: this is not an ARM64 machine. The run still works and is useful as a")

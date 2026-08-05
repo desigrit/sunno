@@ -70,14 +70,17 @@ _MACHINE_NAMES: dict[int, str] = {
 }
 
 
-def native_machine() -> str:
-    """The machine Windows is really running on, not the one this process is emulating.
+def _machines() -> tuple[str, str]:
+    """(process machine, native machine) as Windows reports them.
 
-    Deliberately not ``platform.machine()``. That resolves through PROCESSOR_ARCHITECTURE
-    and PROCESSOR_ARCHITEW6432, both of which are process-relative, so an x64 build running
-    under emulation on an ARM64 PC reports "AMD64" - precisely the blind spot this exists to
-    close. IsWow64Process2 reports the process machine and the native machine separately and
-    is unambiguous about the difference.
+    Deliberately not ``platform.machine()``. That resolves through PROCESSOR_ARCHITECTURE and
+    PROCESSOR_ARCHITEW6432, both process-relative, so an x64 build running under emulation on
+    an ARM64 PC reports "AMD64" - precisely the blind spot this exists to close.
+
+    IsWow64Process2 answers both halves at once, and the pair is what carries the meaning:
+    pProcessMachine is IMAGE_FILE_MACHINE_UNKNOWN when the process is *not* emulated, so
+    native alone cannot distinguish an emulated x64 build from a native ARM64 one. Both run on
+    an ARM64 machine; only one of them is slow.
     """
     try:
         import ctypes
@@ -97,17 +100,41 @@ def native_machine() -> str:
         if not kernel32.IsWow64Process2(
             kernel32.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(native)
         ):
-            return "unknown"
-        return _MACHINE_NAMES.get(native.value, f"0x{native.value:04x}")
+            return "unknown", "unknown"
+
+        native_name = _MACHINE_NAMES.get(native.value, f"0x{native.value:04x}")
+        # UNKNOWN here means "not running under WOW64", i.e. the process is native - so the
+        # process machine is the native one.
+        if process.value == 0:
+            return native_name, native_name
+        return _MACHINE_NAMES.get(process.value, f"0x{process.value:04x}"), native_name
     except Exception:
         # Older Windows, a non-Windows host, or a blocked call. An unknown answer is fine:
         # every caller treats this as context for a log line, never as control flow.
-        return "unknown"
+        return "unknown", "unknown"
+
+
+def native_machine() -> str:
+    """The machine Windows is really running on, not the one this process is emulating."""
+    return _machines()[1]
+
+
+def process_machine() -> str:
+    """The machine this process is built for."""
+    return _machines()[0]
 
 
 def is_emulated() -> bool:
-    """True when this x64 build is running on an ARM64 PC under Prism emulation."""
-    return native_machine() == "ARM64"
+    """True when this process is being emulated, e.g. an x64 build on an ARM64 PC.
+
+    Compares the pair rather than testing for ARM64. A native ARM64 build also runs on a
+    machine whose native architecture is ARM64, and reporting that as emulation would put a
+    "this will be slow" notice on the one build that is not.
+    """
+    process, native = _machines()
+    if "unknown" in (process, native):
+        return False
+    return process != native
 
 
 @functools.lru_cache(maxsize=1)
