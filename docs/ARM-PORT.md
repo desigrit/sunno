@@ -1,0 +1,150 @@
+# Sunno on ARM64 — engineering notes
+
+Status of the native ARM64 port, for anyone picking it up. Everything below is measured or
+verified unless it says otherwise.
+
+---
+
+## The goal
+
+A native ARM64 build of Sunno for Snapdragon X laptops (Surface Laptop), same UI and controls,
+different engine and models underneath.
+
+## Decisions already taken
+
+| Decision | Rationale |
+|---|---|
+| **Latency beats accuracy on ARM** | A caption that arrives late is worse than a caption with a wrong word in it. |
+| **No Prism emulation as a strategy** | Emulation would be tuned to whichever laptop it was tested on, and most ARM machines are weaker. |
+| **Clarity % can go on ARM** | The confidence badge is worth less than the latency it would cost to compute. |
+
+So the ARM tier is **base (297 ms)** with **tiny (132 ms)** below it. `small` (987 ms)
+and the NPU path (1132 ms) are too slow to be defaults. Design for a mid-range Snapdragon on
+battery in Balanced mode, not a fast one plugged in.
+
+**Still undecided:** per-word uncertainty (`WordInlines.cs:135-144` greys words below
+`UncertainBelow = 0.55` on *all* lines — a different feature from Clarity, which shows only on your own lines, and arguably more valuable to a hard-of-hearing user). Also speaker labelling and loopback,
+if their native deps cannot be solved.
+
+---
+
+## Measured numbers (Snapdragon X Elite, ARM64 native)
+
+Mean decode, ms, against a 1000 ms responsiveness budget:
+
+| model | CPU (Balanced) | CPU (Best Perf) | i9-14900K |
+|---|---|---|---|
+| tiny | 203 | **132** | 173 |
+| base | 519 | **297** | 298 |
+| small | 1580 | 987 | 846 |
+| medium | 5032 | 3331 | — |
+
+Power mode is worth ~1.6x. On Best Performance the Snapdragon **matches an i9-14900K** at
+tiny/base. Raw data in `bench/results/`.
+
+**NPU (Hexagon), whisper-small w8a16:** encoder 713.5 ms (fixed, once per utterance) + decode
+step 17.46 ms × 24 = 1132 ms total. The decoder is excellent; the encoder dominates. Note the
+probe round-trips ~27 MB of cross-attention cache to the host, which a real implementation would
+keep on-device with IOBinding, so the encoder figure is pessimistic. Off-the-shelf *float* models
+fall back to CPU entirely (4-11% slower, load up to 14x higher, identical transcripts).
+
+---
+
+## What is done
+
+**`e2ad71e` — voice detection and the model list work without CTranslate2.**
+`vad.py` and `models.py` no longer import anything under `faster_whisper` (importing it executes
+`__init__` → `ctranslate2`). Silero weights vendored to `server/assets/`. `_REPOS` in `models.py`
+carries all 19 model ids. `tests/test_model_repos.py` guards the copy against drift.
+
+**`524f77e` — the engine seam.**
+`server/engine.py` has the `SpeechEngine` protocol (four members: `settings`, `partial`, `final`,
+`warmup`), the shared `Transcript`/`Word` types, and `create_engine()`. `server/asr.py` holds
+`CTranslate2Engine`; `server/asr_onnx.py` holds `OnnxEngine`. Consumers are `app.py:427` and
+`pipeline.py:22,84,208`.
+
+**`bench/convert_whisper_genai.py` — produces the ARM models.**
+Converts `openai/whisper-*` (MIT) into genai format. **Verified working**: base at int8 decodes
+real speech in 363 ms on x64. This removes the supply-chain problem — see below.
+
+---
+
+## What is left
+
+1. **`OnnxEngine` is written but never run.** It needs an ARM64 or a genai-equipped venv to
+   exercise. Test it on x64 first by installing `onnxruntime-genai` and forcing
+   `create_engine(settings, "onnx")`.
+2. **Model catalog is not architecture-aware.** `CATALOG` membership is unconditional
+   (`models.py`), and `_ALLOW_PATTERNS`, `is_available`, `total_size_bytes` are all CT2-shaped.
+   `hardware.py`'s `_LAG_MS_*`, `estimated_lag_ms`, `preferred_model` need ONNX entries or new
+   ARM ids fall through to `_UNKNOWN_MODEL_LAG_MS = 5000` and the picker shows "5 s, not
+   responsive" for everything.
+3. **Three native deps have no ARM path.** `soxr` → `av.AudioResampler` (already packaged,
+   already `win_arm64`, already a *stateful streaming* resampler — measure against the 81.4 dB
+   bar recorded at `loopback.py:191-196` first). `sherpa-onnx` has no importable ARM64 Python
+   artifact → speaker labelling likely off on ARM. `pyaudiowpatch` publishes **no sdist at all**
+   → loopback likely off on ARM.
+4. **`stage-backend.ps1` cannot build an ARM tree.** It resolves the interpreter from
+   `.venv/pyvenv.cfg` and overlays `.venv/Lib/site-packages` — both x64. Needs
+   `pip install --platform win_arm64 --target` plus the ARM64 embeddable Python
+   (`python-3.12.10-embed-arm64.zip`, verified present, 9.9 MB).
+5. **ARM64 MSIX.** The csproj change is mechanical and **`dotnet publish -r win-arm64` already
+   works** (verified: 155 ARM64 PE files, zero x64 natives). `build-msix.ps1:70` hardcodes
+   `-r win-x64`; `Package.appxmanifest` carries `ProcessorArchitecture="x64"` and needs
+   templating. Ship a `.msixbundle`.
+6. **Unwind the ARM refusal.** `c04e3fe` makes the app say *"Sunno's speech engine needs a
+   64-bit Intel or AMD processor"* — correct for x64-only, wrong once an ARM build exists. See
+   `hardware.py engine_importable()` and `BackendHost._engineUnloadableOnArm`.
+
+---
+
+## Landmines — these cost real time to find
+
+**`build-msix.ps1:33`'s `\x64\` filter must NOT be templated.** It selects the **host**
+`makeappx`/`signtool` on the dev box. Changing it breaks the build.
+
+**Build proof venvs *from* `requirements.txt`, never by hand.** A hand-built venv is structurally
+incapable of catching a broken requirements file — that is exactly how a deleted
+`onnxruntime>=1.17` got through a review round.
+
+**The QNN incantation is three steps and all are load-bearing:**
+```python
+ort.register_execution_provider_library(name, onnxruntime_qnn.get_library_path())
+devices = [d for d in ort.get_ep_devices() if d.ep_name == name]
+so.add_provider_for_devices(devices, {"backend_path": onnxruntime_qnn.get_qnn_htp_path()})
+session = ort.InferenceSession(path, sess_options=so)   # NOT providers=[...]
+```
+`providers=["QNNExecutionProvider"]` only reaches EPs compiled into the build and fails with
+*"not compatible with any execution provider added to the session"* even when the name appears in
+`get_available_providers()`. Selecting by device without `backend_path` fails differently:
+*"Could not determine default backend path for device"*.
+
+**genai API shape:** `set_inputs` is on `Generator`, not `GeneratorParams`. The processor takes
+`prompt=` singular. The Whisper prompt is
+`<|startoftranscript|><|en|><|transcribe|><|notimestamps|>`.
+
+**genai will not load onnx-community models** — they are Optimum/Transformers.js exports with no
+`genai_config.json`. Use `bench/convert_whisper_genai.py`.
+
+**The converter needs two undocumented workarounds** (both already handled in the script, but
+know why): transformers 5.x asks the Hub with `token=True` even for public weights, so fetch
+first with `huggingface_hub`; and the builder deletes its cache dir when empty while the Whisper
+path saves twice, so keep a file in it.
+
+**`cuda_setup.py:79`** raises a RuntimeWarning about missing NVIDIA libraries on every import in
+a non-CUDA environment. Harmless, but it will be the first thing an ARM user sees and it is
+misleading there.
+
+---
+
+## Working practices
+
+- **Every change goes through a review pass before commit.** It has caught a shipping-severity
+  bug in most rounds of this work — including one that would have failed on exactly the ARM model
+  tier. Budget for two or three rounds.
+- Commit messages are prose explaining *why*. See `git log`.
+- Tests are directly-runnable scripts in `tests/`, not pytest.
+- `packaging/stage-backend.ps1` uses an explicit include-list, deliberately, so a stray model
+  cannot inflate the package.
+
+
