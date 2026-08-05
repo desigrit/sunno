@@ -341,20 +341,51 @@ def ensure_model(repo: str, dest: Path) -> Path | None:
         return None
 
 
-def measure(model_dir: Path, clip_path: Path, use_qnn: bool) -> dict | None:
+def enable_qnn() -> tuple[bool, str]:
+    """Make the Qualcomm NPU available to genai, and say plainly whether it worked.
+
+    QNN is not built into onnxruntime-genai - its wheel contains one DLL and no Qualcomm
+    provider at all. It ships separately as onnxruntime-qnn, which is not a replacement for
+    onnxruntime but a plugin package: it installs as ``onnxruntime_qnn`` and carries
+    onnxruntime_providers_qnn.dll plus the QnnHtp libraries. genai loads it through
+    register_execution_provider_library.
+
+    Returns (ready, detail) so a failure can be reported as what it is. "QNN execution provider
+    is not supported in this build" reads like a verdict on the machine, and is not one.
+    """
+    try:
+        import onnxruntime_qnn
+    except ImportError:
+        return False, "onnxruntime-qnn is not installed (re-run with --setup --qnn)"
+
+    try:
+        import onnxruntime_genai as og
+
+        name = onnxruntime_qnn.get_ep_name()
+        library = onnxruntime_qnn.get_library_path()
+        if not Path(library).is_file():
+            return False, f"provider library missing at {library}"
+        og.register_execution_provider_library(name, library)
+        return True, name
+    except Exception as exc:  # noqa: BLE001
+        return False, f"could not register the QNN provider: {str(exc)[:160]}"
+
+
+def measure(model_dir: Path, clip_path: Path, provider: str | None) -> dict | None:
     """Decode the clips and report per-duration latency, or None if the model will not load."""
     import onnxruntime_genai as og
 
-    result: dict = {"provider": "qnn" if use_qnn else "cpu"}
+    result: dict = {"provider": provider or "cpu"}
 
     try:
         started = time.perf_counter()
-        # Config is only touched for QNN so the default path stays exactly what genai would do
-        # on its own - a bad provider override would otherwise look like a slow model.
-        if use_qnn:
+        # Config is only touched when a provider is named, so the default path stays exactly
+        # what genai would do on its own - a bad provider override would otherwise look like a
+        # slow model.
+        if provider:
             config = og.Config(str(model_dir))
             config.clear_providers()
-            config.append_provider("qnn")
+            config.append_provider(provider)
             model = og.Model(config)
         else:
             model = og.Model(str(model_dir))
@@ -451,14 +482,17 @@ def main() -> int:
         return 2
 
     print(f"  genai              {getattr(og, '__version__', '?')}")
-    print(f"  qnn available      {og.is_qnn_available()}")
 
-    if args.qnn and not og.is_qnn_available():
-        print()
-        print("  NOTE: --qnn was asked for, but this build has no QNN provider, so the NPU")
-        print("        cannot be measured. That is a packaging fact, not a fact about this")
-        print("        machine. Re-run with --setup --qnn to install onnxruntime-qnn, which")
-        print("        is a separate distribution from onnxruntime-genai.")
+    qnn_provider = None
+    if args.qnn:
+        ready, detail = enable_qnn()
+        machine["qnn"] = detail if ready else f"unavailable: {detail}"
+        if ready:
+            qnn_provider = detail
+            print(f"  qnn provider       {detail}")
+        else:
+            print(f"  qnn provider       unavailable - {detail}")
+            print("                     (this is about the install, not about this PC)")
 
     if machine.get("emulated"):
         print()
@@ -492,9 +526,9 @@ def main() -> int:
             results[entry["id"]] = {"error": "download failed"}
             continue
 
-        for use_qnn in ([False, True] if args.qnn else [False]):
-            label = "qnn" if use_qnn else "cpu"
-            measured = measure(model_dir, clip, use_qnn)
+        for provider in ([None, qnn_provider] if qnn_provider else [None]):
+            label = "qnn" if provider else "cpu"
+            measured = measure(model_dir, clip, provider)
             results[f"{entry['id']}:{label}"] = measured
             if measured is None or "error" in measured:
                 print(f"    {label:4} {measured.get('error', 'unknown failure') if measured else 'failed'}")
