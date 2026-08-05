@@ -198,6 +198,21 @@ def register_qnn() -> tuple[bool, str]:
         return False, f"could not register the QNN provider: {str(exc)[:180]}"
 
 
+def ep_devices(ep_name: str) -> list:
+    """The OrtEpDevice entries a registered plugin EP advertises.
+
+    Worth reporting separately from "is the provider registered". A registered library that
+    advertises no device means the EP loaded but found no hardware it can drive, which is a
+    different problem from the session refusing the graph.
+    """
+    try:
+        import onnxruntime as ort
+
+        return [d for d in ort.get_ep_devices() if getattr(d, "ep_name", None) == ep_name]
+    except Exception:
+        return []
+
+
 def make_session(path: Path, provider: str, ep_name: str = "QNNExecutionProvider"):
     """Open an EPContext ONNX on the requested provider.
 
@@ -207,28 +222,53 @@ def make_session(path: Path, provider: str, ep_name: str = "QNNExecutionProvider
     """
     import onnxruntime as ort
 
-    options = ort.SessionOptions()
-    options.log_severity_level = 3
-
     if provider != "qnn":
+        options = ort.SessionOptions()
+        options.log_severity_level = 3
         return _open(ort, path, options, ["CPUExecutionProvider"])
 
     import onnxruntime_qnn
 
-    # Two ways of asking, because which one is right depends on the onnxruntime version:
-    # older builds want backend_path naming the Hexagon runtime, newer plugin-EP registration
-    # resolves it alone and rejects the option. Both errors are kept, since a failure here is
-    # the interesting result and reporting only the second would hide the real cause.
-    attempts = [
-        ("with backend_path", [(ep_name, {"backend_path": onnxruntime_qnn.get_qnn_htp_path()})]),
-        ("plain", [ep_name]),
-    ]
     errors = []
-    for label, providers in attempts:
+    devices = ep_devices(ep_name)
+
+    # The sequence that actually works on onnxruntime 1.23+, established by trying every
+    # combination: register the library, look up the OrtEpDevice it advertises, then select it
+    # by device WITH an explicit backend_path. Each part is load-bearing.
+    #
+    # Selecting by name in providers= only reaches execution providers compiled into the build,
+    # so it fails with "not compatible with any execution provider added to the session" even
+    # though the name is listed in get_available_providers(). Selecting by device without a
+    # backend path fails differently - "Could not determine default backend path for device" -
+    # because the Qualcomm runtimes live inside the wheel rather than in an SDK install.
+    #
+    # HTP first: it is the Hexagon NPU and the only backend these graphs were compiled for.
+    # QnnCpu is tried after only so a failure distinguishes "no NPU here" from "nothing works".
+    if devices:
+        for label, backend in (("htp", onnxruntime_qnn.get_qnn_htp_path()),
+                               ("cpu-backend", onnxruntime_qnn.get_qnn_cpu_path())):
+            try:
+                options = ort.SessionOptions()
+                options.log_severity_level = 4
+                options.add_provider_for_devices(devices, {"backend_path": backend})
+                session = ort.InferenceSession(str(path), sess_options=options)
+                return session, session.get_providers()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{label}: {str(exc)[:140]}")
+    else:
+        errors.append(f"no OrtEpDevice advertised for {ep_name}")
+
+    # Older builds where QNN is compiled in and selected by name.
+    for label, providers in (("name+backend_path",
+                              [(ep_name, {"backend_path": onnxruntime_qnn.get_qnn_htp_path()})]),
+                             ("name", [ep_name])):
         try:
+            options = ort.SessionOptions()
+            options.log_severity_level = 4
             return _open(ort, path, options, providers)
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{label}: {str(exc)[:150]}")
+            errors.append(f"{label}: {str(exc)[:140]}")
+
     raise RuntimeError(" | ".join(errors))
 
 
@@ -369,6 +409,23 @@ def main() -> int:
         print(f"  qnn provider       unavailable - {qnn_detail}")
     machine["qnn"] = qnn_detail if qnn_ready else f"unavailable: {qnn_detail}"
     print(f"  providers          {', '.join(ort.get_available_providers())}")
+
+    # The device list is the diagnostic that separates "the EP loaded but sees no NPU" from
+    # "the EP sees the NPU but the graph was refused". Recorded either way.
+    devices = []
+    try:
+        for d in ort.get_ep_devices():
+            devices.append({
+                "ep": getattr(d, "ep_name", "?"),
+                "vendor": str(getattr(d, "ep_vendor", "?")),
+                "type": str(getattr(getattr(d, "device", None), "type", "?")),
+            })
+    except Exception as exc:  # noqa: BLE001
+        devices = [{"error": str(exc)[:120]}]
+    machine["ep_devices"] = devices
+    print("  ep devices")
+    for d in devices:
+        print(f"    {d.get('ep','?'):<28} {d.get('vendor','?'):<14} {d.get('type','?')}")
 
     if not qnn_ready:
         if not args.cpu:
