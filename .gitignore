@@ -32,3 +32,16 @@ testdata/
 local/
 *.log
 sunno-diagnostics*.txt
+
+# Benchmark working files.
+#
+# .onnx-models holds ONNX Whisper weights the ARM benchmark downloads - about 1.7 GB for the
+# small tiers alone, and rebuildable from HuggingFace at any time.
+#
+# The other two are outputs of a benchmark run, and both are machine-specific: arm-hardware.json
+# records the numbers measured on whichever laptop ran it, and bench-speech.wav is synthesised
+# locally by the Windows voice. Their numbers get transcribed into server/hardware.py by hand,
+# which is where a measurement becomes something the app ships.
+.onnx-models/
+bench/arm-hardware.json
+bench/bench-speech.wav
