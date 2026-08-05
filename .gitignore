@@ -45,3 +45,5 @@ sunno-diagnostics*.txt
 .onnx-models/
 bench/arm-hardware.json
 bench/bench-speech.wav
+bench/.qnn-models/
+bench/qnn-whisper-*.json
