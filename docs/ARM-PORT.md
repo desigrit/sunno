@@ -71,8 +71,8 @@ carries all 19 model ids. `tests/test_model_repos.py` guards the copy against dr
 Converts `openai/whisper-*` (MIT) into genai format. **Verified working**: base at int8 decodes
 real speech in 363 ms on x64. This removes the supply-chain problem — see below.
 
-**The ONNX engine, ARM catalog, native audio dependencies and backend staging have been
-exercised.**
+**The ONNX engine, ARM catalog, native audio dependencies, backend staging and dual-architecture
+package have been exercised.**
 `create_engine(settings, "onnx")` decodes real speech through the published `desigrit/Sunno`
 base model. The ARM picker offers base and tiny with measured lag and genai-shaped downloads.
 PyAV's stateful `AudioResampler` measured 81.2 dB at both 44.1 and 48 kHz on the original
@@ -82,16 +82,15 @@ CPython 3.12 `win_arm64` or pure-Python wheels. Native ARM silently omits speake
 `stage-backend.ps1 -Architecture arm64` produces a 162 MB tree with the ARM64 embeddable
 interpreter, the redistributable ARM64 C++ runtime required by ONNX, and 140 ARM64 PE files
 with zero x64 binaries. Executable inputs and every ARM wheel are version- and hash-locked.
+`build-msix.ps1` publishes and validates both complete layouts, signs standalone x64 and ARM64
+packages, and produces a signed 928 MB `Sunno.msixbundle` whose deterministic `1.0.60.0`
+manifest contains exactly those two architectures.
 
 ---
 
 ## What is left
 
-1. **ARM64 MSIX.** The csproj change is mechanical and **`dotnet publish -r win-arm64` already
-   works** (verified: 155 ARM64 PE files, zero x64 natives). `build-msix.ps1:70` hardcodes
-   `-r win-x64`; `Package.appxmanifest` carries `ProcessorArchitecture="x64"` and needs
-   templating. Ship a `.msixbundle`.
-2. **Unwind the ARM refusal.** `c04e3fe` makes the app say *"Sunno's speech engine needs a
+1. **Unwind the ARM refusal.** `c04e3fe` makes the app say *"Sunno's speech engine needs a
    64-bit Intel or AMD processor"* — correct for x64-only, wrong once an ARM build exists. See
    `hardware.py engine_importable()` and `BackendHost._engineUnloadableOnArm`.
 
@@ -101,6 +100,10 @@ with zero x64 binaries. Executable inputs and every ARM wheel are version- and h
 
 **`build-msix.ps1:33`'s `\x64\` filter must NOT be templated.** It selects the **host**
 `makeappx`/`signtool` on the dev box. Changing it breaks the build.
+
+**MakeAppx cannot bundle already-signed child packages.** Pack both unsigned MSIX files, create
+the bundle with an explicit `/bv` matching the package version, then sign the bundle and the two
+standalone packages. Without `/bv`, MakeAppx silently invents a timestamp-derived bundle version.
 
 **Cross-platform pip emits launchers for the build host.** `pip install --platform win_arm64
 --target` creates x64 console executables under `site-packages/bin`; they are build-time entry

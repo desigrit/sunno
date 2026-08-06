@@ -1,175 +1,179 @@
-# Builds a signed MSIX for Sunno.
+# Builds signed x64 and ARM64 MSIX packages plus a signed bundle containing both.
 #
-# Deliberately stops short of INSTALLING the package. Installing a self-signed MSIX requires
-# adding the certificate to LocalMachine Trusted People, which is a machine-wide trust change
-# and elevation prompt — not something to do unattended on someone's behalf. The script
-# prints the two commands to run.
+# Deliberately stops short of installing the package. Trusting a self-signed certificate is a
+# machine-wide change and needs an elevated prompt, so the script prints the commands instead.
 #
-#   .\build-msix.ps1                 # full build
-#   .\build-msix.ps1 -SkipStage      # reuse an existing staged backend
+#   .\build-msix.ps1
 
 [CmdletBinding()]
 param(
-  [switch]$SkipStage,
   [switch]$SkipPublish,
-  # Must equal Package/Identity/Publisher in app/Package.appxmanifest or signtool refuses the
-  # package with a publisher mismatch. That value is assigned by Partner Center and is not a
-  # human-readable name. This certificate is self-signed and only exists so the package can be
-  # sideloaded for testing; the Store discards it and re-signs with a Microsoft certificate.
+  # Must equal Package/Identity/Publisher in app/Package.appxmanifest.
   [string]$CertSubject = "CN=A2015C41-8111-42CA-8A27-273B3309C099"
 )
 
 $ErrorActionPreference = "Stop"
-$root     = Split-Path -Parent $PSScriptRoot
-$staging  = Join-Path $PSScriptRoot "staging\package"
-$out      = Join-Path $PSScriptRoot "out"
-$appProj  = Join-Path $root "app\Sunno.csproj"
+$root = Split-Path -Parent $PSScriptRoot
+$stagingRoot = Join-Path $PSScriptRoot "staging"
+$out = Join-Path $PSScriptRoot "out"
+$appProj = Join-Path $root "app\Sunno.csproj"
+$manifestSource = Join-Path $root "app\Package.appxmanifest"
 
 function Find-SdkTool([string]$name) {
   $pkg = Get-ChildItem "$env:USERPROFILE\.nuget\packages\microsoft.windows.sdk.buildtools" `
          -Directory -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 1
   if (-not $pkg) { throw "Microsoft.Windows.SDK.BuildTools not restored. Build app/ first." }
+  # This is the architecture of the build host, not the package target.
   $tool = Get-ChildItem $pkg.FullName -Recurse -Filter $name -ErrorAction SilentlyContinue |
           Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
   if (-not $tool) { throw "$name not found under $($pkg.FullName)" }
   return $tool.FullName
 }
 
-$makeappx = Find-SdkTool "makeappx.exe"
-$signtool = Find-SdkTool "signtool.exe"
-
-New-Item -ItemType Directory -Path $out -Force | Out-Null
-
-# Wipe the staging tree, but keep the staged backend when reusing it — it is the expensive
-# part (~1.2 GB) and re-staging it dominates the build.
-if (Test-Path $staging) {
-  if ($SkipStage) {
-    Get-ChildItem $staging -Force |
-      Where-Object { $_.Name -ne "backend" } |
-      Remove-Item -Recurse -Force
-  } else {
+function Reset-PackageStaging([string]$staging) {
+  if (Test-Path $staging) {
     Remove-Item $staging -Recurse -Force
   }
+  New-Item -ItemType Directory -Path $staging -Force | Out-Null
 }
-New-Item -ItemType Directory -Path $staging -Force | Out-Null
 
-# The staging directory is wiped above, so skipping the publish would produce a package with
-# no application binaries — a footgun worth refusing outright.
+function Copy-Assets([string]$staging) {
+  $assetsSrc = Join-Path $root "app\Assets"
+  $assetsDst = Join-Path $staging "Assets"
+  New-Item -ItemType Directory -Path $assetsDst -Force | Out-Null
+  Copy-Item "$assetsSrc\*" $assetsDst -Force
+
+  # MakeAppx does not resolve scale variants for a loose layout.
+  foreach ($pair in @(
+      @("Square150x150Logo.scale-100.png", "Square150x150Logo.png"),
+      @("Square44x44Logo.scale-100.png",   "Square44x44Logo.png"),
+      @("Square71x71Logo.scale-100.png",   "Square71x71Logo.png"),
+      @("Square310x310Logo.scale-100.png", "Square310x310Logo.png"),
+      @("Wide310x150Logo.scale-100.png",   "Wide310x150Logo.png"),
+      @("StoreLogo.scale-100.png",         "StoreLogo.png"),
+      @("SplashScreen.scale-100.png",      "SplashScreen.png"))) {
+    $src = Join-Path $assetsDst $pair[0]
+    $dst = Join-Path $assetsDst $pair[1]
+    if ((Test-Path $src) -and -not (Test-Path $dst)) { Copy-Item $src $dst -Force }
+  }
+}
+
 if ($SkipPublish) {
-  throw "-SkipPublish cannot be used: staging is rebuilt from scratch, so the app binaries " +
-        "would be missing from the package. Use -SkipStage to reuse the staged backend instead."
+  throw "-SkipPublish cannot be used: package staging is rebuilt from scratch, so application " +
+        "binaries would be missing."
 }
 
-# ---------------------------------------------------------------- app binaries
-if (-not $SkipPublish) {
-  Write-Host "Publishing the WinUI app..." -ForegroundColor Cyan
-  # Published as a self-contained Win32 app and packaged externally with MakeAppx. Package
-  # identity (which is what enables the per-app microphone toggle and AppCapability) comes
-  # from being installed as an MSIX with EntryPoint="Windows.FullTrustApplication", not
-  # from a build flag.
-  dotnet publish $appProj -c Release -r win-x64 `
+$makeappx = Find-SdkTool "makeappx.exe"
+$signtool = Find-SdkTool "signtool.exe"
+$validationPython = (Get-Command python -ErrorAction Stop).Source
+$peVerifier = Join-Path $PSScriptRoot "verify_pe_arch.py"
+$architectures = @(
+  @{ Name = "x64"; Runtime = "win-x64"; Platform = "x64" },
+  @{ Name = "arm64"; Runtime = "win-arm64"; Platform = "ARM64" }
+)
+
+New-Item -ItemType Directory -Path $out -Force | Out-Null
+$bundleInput = Join-Path $stagingRoot "bundle-input"
+if (Test-Path $bundleInput) { Remove-Item $bundleInput -Recurse -Force }
+New-Item -ItemType Directory -Path $bundleInput -Force | Out-Null
+
+$packages = @()
+foreach ($target in $architectures) {
+  $architecture = $target.Name
+  $runtime = $target.Runtime
+  $platform = $target.Platform
+  $staging = Join-Path $stagingRoot "package-$architecture"
+  Reset-PackageStaging $staging
+
+  Write-Host "Publishing the $architecture WinUI app..." -ForegroundColor Cyan
+  dotnet publish $appProj -c Release -r $runtime `
+    -p:Platform=$platform `
     -p:PackageForMsix=true `
     -p:PublishReadyToRun=false `
     -o "$staging" 2>&1 | Where-Object { $_ -match 'error|Error' }
-  if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
+  if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $architecture ($LASTEXITCODE)" }
 
-  # The Windows App SDK ships its own onnxruntime (Windows ML) at the package root. We never
-  # call any ML API from C#, but a packaged process searches the package root for DLLs, so
-  # sherpa-onnx's _sherpa_onnx.pyd bound to this copy instead of the 1.27 it ships beside
-  # itself and died with an access violation the moment speaker labelling initialised. The
-  # staged tree never hit it because only an installed package searches that directory.
+  # Windows App SDK's root ONNX Runtime can hijack the backend's own version.
   foreach ($dll in @("onnxruntime.dll", "onnxruntime_providers_shared.dll")) {
     $victim = Join-Path $staging $dll
     if (Test-Path $victim) {
       Remove-Item $victim -Force
-      Write-Host "  removed $dll (conflicts with sherpa-onnx)" -ForegroundColor DarkGray
+      Write-Host "  removed $dll (conflicts with backend runtime)" -ForegroundColor DarkGray
     }
   }
-}
 
-# ---------------------------------------------------------------- backend
-if (-not $SkipStage) {
-  Write-Host "Staging the Python backend..." -ForegroundColor Cyan
+  $backend = Join-Path $staging "backend"
+  Write-Host "Staging the $architecture Python backend..." -ForegroundColor Cyan
   & (Join-Path $PSScriptRoot "stage-backend.ps1") `
-      -Destination (Join-Path $staging "backend") -Clean
-} else {
-  $existing = Join-Path $staging "backend"
-  if (-not (Test-Path $existing)) { throw "-SkipStage given but $existing does not exist." }
+    -Destination $backend -Architecture $architecture -Clean
 
-  # A cached backend is only safe to reuse if it still matches the source. Without this check a
-  # cache that predates real bug fixes ships silently, because the package looks complete
-  # either way.
-  #
-  # Scope is deliberately narrow and does NOT cover everything that can go stale: nested server
-  # modules, stage-backend.ps1's own copy list, pinned dependency versions, or the CUDA
-  # allow-list. It catches the common case of editing server\*.py; it is not a substitute for a
-  # full build before shipping.
-  $stale = Get-ChildItem (Join-Path $root "server") -Filter *.py | Where-Object {
-    $staged = Join-Path $existing "server\$($_.Name)"
-    (-not (Test-Path $staged)) -or
-    (Get-FileHash $_.FullName -Algorithm SHA256).Hash -ne (Get-FileHash $staged -Algorithm SHA256).Hash
+  $manifest = [IO.File]::ReadAllText($manifestSource)
+  $manifest = $manifest.Replace(
+    'ProcessorArchitecture="x64"',
+    "ProcessorArchitecture=`"$architecture`""
+  )
+  if ($manifest -notmatch "ProcessorArchitecture=`"$architecture`"") {
+    throw "Could not template ProcessorArchitecture for $architecture."
   }
-  if ($stale) {
-    throw "-SkipStage refused: the cached backend is stale ($($stale.Name -join ', ')). " +
-          "Re-run without -SkipStage."
+  [IO.File]::WriteAllText(
+    (Join-Path $staging "AppxManifest.xml"),
+    $manifest,
+    [Text.UTF8Encoding]::new($false)
+  )
+  Copy-Assets $staging
+
+  $rootOnnx = Get-ChildItem $staging -Filter "onnxruntime*.dll" -File `
+                -ErrorAction SilentlyContinue
+  if ($rootOnnx) {
+    throw "ONNX Runtime DLLs at the package root would collide with the backend: " +
+          ($rootOnnx.Name -join ', ')
   }
 
-  Write-Host "Reusing staged backend (verified against server\*.py)" -ForegroundColor DarkGray
+  # Windows App SDK deliberately includes this ARM helper in its win-x64 runtime pack so an x64
+  # app can expose workload resources under ARM64EC. The same hash appears in Microsoft's x64 and
+  # arm64ec NuGet assets; it is not a target-selection leak from our publish.
+  $verifyArgs = @($peVerifier, $staging, "--expected", $architecture)
+  if ($architecture -eq "x64") {
+    $verifyArgs += @(
+      "--allow-cross-arch-file",
+      "Microsoft.Windows.Workloads.Resources_ec.dll",
+      "arm64",
+      "3DBEFA883EA9DCBB0FEE463AFDA0121E385BB678652CA2FAA19CF2ABF517091E"
+    )
+  }
+  & $validationPython @verifyArgs
+  if ($LASTEXITCODE -ne 0) {
+    throw "The complete $architecture package contains incompatible binaries."
+  }
+
+  $size = (Get-ChildItem $staging -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
+  Write-Host ("$architecture payload staged: {0:N0} MB" -f $size)
+
+  $msix = Join-Path $out "Sunno-$architecture.msix"
+  if (Test-Path $msix) { Remove-Item $msix -Force }
+  $packLog = Join-Path $out "makeappx-$architecture.log"
+  & $makeappx pack /d $staging /p $msix /o *> $packLog
+  if ($LASTEXITCODE -ne 0) {
+    Get-Content $packLog -Tail 20 | ForEach-Object { Write-Host "  $_" }
+    throw "makeappx failed for $architecture ($LASTEXITCODE) - see $packLog"
+  }
+  Copy-Item $msix (Join-Path $bundleInput (Split-Path $msix -Leaf)) -Force
+  $packages += $msix
 }
 
-# ---------------------------------------------------------------- manifest + assets
-Copy-Item (Join-Path $root "app\Package.appxmanifest") (Join-Path $staging "AppxManifest.xml") -Force
-
-$assetsSrc = Join-Path $root "app\Assets"
-$assetsDst = Join-Path $staging "Assets"
-New-Item -ItemType Directory -Path $assetsDst -Force | Out-Null
-Copy-Item "$assetsSrc\*" $assetsDst -Force
-
-# The manifest names unqualified logo files; MakeAppx does not resolve scale variants for
-# a loose (non-PRI) layout, so ensure the base names exist.
-foreach ($pair in @(
-    @("Square150x150Logo.scale-100.png", "Square150x150Logo.png"),
-    @("Square44x44Logo.scale-100.png",   "Square44x44Logo.png"),
-    @("Square71x71Logo.scale-100.png",   "Square71x71Logo.png"),
-    @("Square310x310Logo.scale-100.png", "Square310x310Logo.png"),
-    @("Wide310x150Logo.scale-100.png",   "Wide310x150Logo.png"),
-    @("StoreLogo.scale-100.png",         "StoreLogo.png"),
-    @("SplashScreen.scale-100.png",      "SplashScreen.png"))) {
-  $src = Join-Path $assetsDst $pair[0]
-  $dst = Join-Path $assetsDst $pair[1]
-  if ((Test-Path $src) -and -not (Test-Path $dst)) { Copy-Item $src $dst -Force }
-}
-
-$size = (Get-ChildItem $staging -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
-Write-Host ("Payload staged: {0:N0} MB" -f $size)
-
-# ---------------------------------------------------------------- pack
-$msix = Join-Path $out "Sunno.msix"
-if (Test-Path $msix) { Remove-Item $msix -Force }
-
-# A second onnxruntime.dll at the package root hijacks sherpa-onnx's own copy and crashes the
-# backend with an access violation only once installed — never in the staged tree. Fail the
-# build rather than ship a package whose speech engine dies on launch.
-$rootOnnx = Get-ChildItem $staging -Filter "onnxruntime*.dll" -File -ErrorAction SilentlyContinue
-if ($rootOnnx) {
-  throw "onnxruntime DLLs at the package root would collide with sherpa-onnx: " +
-        ($rootOnnx.Name -join ', ')
-}
-
-Write-Host "Packing..." -ForegroundColor Cyan
-# MakeAppx emits a line per file (9k+). Redirect to a log rather than filtering the live
-# pipeline: truncating that pipeline detaches the process mid-pack and leaves a 0-byte file.
-$packLog = Join-Path $out "makeappx.log"
-# Full manifest validation is on (no /nv): it verifies that every file the manifest
-# references actually exists in the layout, which is exactly the class of mistake that
-# would otherwise only surface at install time.
-& $makeappx pack /d $staging /p $msix /o *> $packLog
+# MakeAppx cannot bundle signed packages. Build the bundle first, then sign both the bundle and
+# the standalone architecture packages.
+$bundle = Join-Path $out "Sunno.msixbundle"
+if (Test-Path $bundle) { Remove-Item $bundle -Force }
+$bundleLog = Join-Path $out "makeappx-bundle.log"
+[xml]$sourceManifest = Get-Content $manifestSource
+$bundleVersion = $sourceManifest.Package.Identity.Version
+& $makeappx bundle /d $bundleInput /p $bundle /bv $bundleVersion /o *> $bundleLog
 if ($LASTEXITCODE -ne 0) {
-  Get-Content $packLog -Tail 20 | ForEach-Object { Write-Host "  $_" }
-  throw "makeappx failed ($LASTEXITCODE) - see $packLog"
+  Get-Content $bundleLog -Tail 20 | ForEach-Object { Write-Host "  $_" }
+  throw "makeappx bundle failed ($LASTEXITCODE) - see $bundleLog"
 }
 
-# ---------------------------------------------------------------- sign
 $cert = Get-ChildItem Cert:\CurrentUser\My |
         Where-Object { $_.Subject -eq $CertSubject } | Select-Object -First 1
 if (-not $cert) {
@@ -184,19 +188,21 @@ $pfx = Join-Path $out "SunnoDev.pfx"
 $cer = Join-Path $out "SunnoDev.cer"
 $pwd = ConvertTo-SecureString -String "Sunno-dev" -Force -AsPlainText
 Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pwd | Out-Null
-Export-Certificate  -Cert $cert -FilePath $cer | Out-Null
+Export-Certificate -Cert $cert -FilePath $cer | Out-Null
 
-& $signtool sign /fd SHA256 /a /f $pfx /p "Sunno-dev" $msix
-if ($LASTEXITCODE -ne 0) { throw "signtool failed ($LASTEXITCODE)" }
+foreach ($artifact in @($bundle) + $packages) {
+  & $signtool sign /fd SHA256 /a /f $pfx /p "Sunno-dev" $artifact
+  if ($LASTEXITCODE -ne 0) { throw "signtool failed for $artifact ($LASTEXITCODE)" }
+}
 
-$mb = (Get-Item $msix).Length / 1MB
+$mb = (Get-Item $bundle).Length / 1MB
 Write-Host ""
-Write-Host ("Signed package: {0}  ({1:N0} MB)" -f $msix, $mb) -ForegroundColor Green
+Write-Host ("Signed bundle: {0}  ({1:N0} MB)" -f $bundle, $mb) -ForegroundColor Green
 Write-Host ""
 Write-Host "To install (both steps need an elevated prompt):" -ForegroundColor Yellow
-Write-Host "  1. Trust the development certificate — a machine-wide change:"
+Write-Host "  1. Trust the development certificate:"
 Write-Host "       Import-Certificate -FilePath `"$cer`" -CertStoreLocation Cert:\LocalMachine\TrustedPeople"
-Write-Host "  2. Install the package:"
-Write-Host "       Add-AppxPackage -Path `"$msix`""
+Write-Host "  2. Install the architecture-selecting bundle:"
+Write-Host "       Add-AppxPackage -Path `"$bundle`""
 Write-Host ""
 Write-Host "  Uninstall with: Get-AppxPackage *Sunno* | Remove-AppxPackage"

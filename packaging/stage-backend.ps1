@@ -179,7 +179,16 @@ New-Item -ItemType Directory -Path $models -Force | Out-Null
 # models that must not silently inflate the package.
 $speakerModel = "speaker-embedding-campplus-en.onnx"   # matches config.py's default
 if ($Architecture -eq "x64") {
-  Copy-Item (Join-Path $repo "models\$speakerModel") (Join-Path $models $speakerModel) -Force
+  $speakerSource = Join-Path $repo "models\$speakerModel"
+  if (-not (Test-Path $speakerSource)) {
+    New-Item -ItemType Directory -Path (Split-Path $speakerSource) -Force | Out-Null
+    Write-Host "Downloading the speaker embedding model"
+    Invoke-WebRequest `
+      -Uri "https://huggingface.co/openspeech/wespeaker-models/resolve/main/voxceleb_CAM%2B%2B_LM.onnx" `
+      -OutFile $speakerSource
+  }
+  Assert-FileHash $speakerSource "1068E4AC3A76BB9C769E6816EF30BF89363F6E966F1D938210CB8ED4038F8E93"
+  Copy-Item $speakerSource (Join-Path $models $speakerModel) -Force
 }
 
 Write-Host "Validating staged PE architectures"
