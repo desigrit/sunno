@@ -1,13 +1,14 @@
-faster-whisper
+faster-whisper; platform_machine != "ARM64"
 sounddevice
-soxr
+av
+SoundCard
 numpy
 
 websockets
 onnxruntime>=1.17
 onnxruntime-genai
 huggingface_hub
-sherpa-onnx
+sherpa-onnx; platform_machine != "ARM64"
 
 # CUDA runtime for CTranslate2 (CUDA 12).
 #
@@ -16,10 +17,5 @@ sherpa-onnx
 # cublas64_12.dll (-> cublasLt64_12.dll -> nvrtc). Verified empirically too - transcripts are
 # byte-identical with the cuDNN tree removed. It stays here so packaging/cuda_decide.py can
 # re-derive the allow-list from a complete set if a future CTranslate2 starts needing it.
-nvidia-cublas-cu12
-nvidia-cudnn-cu12==9.*
-
-# WASAPI loopback capture, so system audio (calls, video) can be transcribed too.
-# sounddevice/PortAudio has no loopback flag; this PyAudio fork exposes output
-# endpoints as input devices. ~0.09 MB, used only by server/loopback.py.
-pyaudiowpatch
+nvidia-cublas-cu12; platform_machine != "ARM64"
+nvidia-cudnn-cu12==9.*; platform_machine != "ARM64"

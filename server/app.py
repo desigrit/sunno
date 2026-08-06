@@ -101,8 +101,8 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     parser.add_argument("--list-devices", action="store_true", help="list input devices and exit")
     parser.add_argument("--device", default=None, help="input device index or name substring")
     parser.add_argument(
-        "--loopback-device", type=int, default=None,
-        help="WASAPI output endpoint index to capture instead of the microphone, so system "
+        "--loopback-device", default=None,
+        help="WASAPI output endpoint id to capture instead of the microphone, so system "
              "audio (calls, video) is transcribed",
     )
     parser.add_argument("--wav", default=None, help="replay a WAV file instead of the mic")
@@ -192,7 +192,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     controller = SessionController(running=not args.start_stopped)
 
     speaker = None
-    if settings.enable_speakers and not args.no_speakers:
+    if settings.engine == "ct2" and settings.enable_speakers and not args.no_speakers:
         from .speaker import SpeakerIdentifier
 
         model_file = bundled_model(settings.speaker_model)
@@ -504,10 +504,15 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                         # the banner a user actually saw. Nearly everything that lands here is
                         # a capture device that could not be opened, and the remedy is the
                         # same, so say that and keep the diagnostics in detail.
+                        loopback = settings.loopback_device is not None
                         emit({
                             "type": "error",
-                            "code": "capture_failed",
-                            "message": "Sunno could not start listening on this microphone.",
+                            "code": "loopback_unavailable" if loopback else "capture_failed",
+                            "message": (
+                                "Sunno could not start capturing this system-audio source."
+                                if loopback
+                                else "Sunno could not start listening on this microphone."
+                            ),
                             "detail": str(exc),
                             "running": False,
                         })

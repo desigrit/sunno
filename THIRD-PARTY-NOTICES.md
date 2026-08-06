@@ -6,16 +6,17 @@ Sunno redistributes the components below. Each remains under its own licence.
 
 | Component | Version | Licence |
 |---|---|---|
-| PyAudioWPatch | 0.2.12.8 | Apache-2.0 license |
 | av | 18.0.0 | BSD-3-Clause |
+| cffi | 2.1.1 | MIT |
 | ctranslate2 | 4.8.1 | MIT |
 | faster-whisper | 1.2.1 | MIT |
 | huggingface-hub | 1.25.1 | Apache-2.0 |
 | numpy | 2.5.1 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 |
 | onnxruntime | 1.28.0 | MIT License |
+| pycparser | 3.0 | BSD-3-Clause |
 | sherpa-onnx | 1.13.4 | Apache licensed, as found in the LICENSE file |
+| SoundCard | 0.4.6 | BSD-3-Clause |
 | sounddevice | 0.5.5 | MIT |
-| soxr **(copyleft — see notes)** | 1.1.0 | LGPL-2.1-or-later |
 | tokenizers | 0.23.1 | Apache Software License |
 | tqdm **(copyleft — see notes)** | 4.70.0 | MPL-2.0 AND MIT |
 | websockets | 17.0 | BSD-3-Clause |
@@ -29,24 +30,6 @@ Sunno redistributes the components below. Each remains under its own licence.
 | Whisper model weights | MIT (OpenAI) | Downloaded at first run, not redistributed in the package. |
 | Silero VAD | MIT | Vendored at `server/assets/silero_vad_v6.onnx` and redistributed in the package. From [snakers4/silero-vad](https://github.com/snakers4/silero-vad). |
 | WeSpeaker CAM++ speaker embedding | Apache-2.0 | Downloaded at first run, not redistributed in the package. |
-
-## LGPL note: soxr
-
-`soxr` (the SoX Resampler binding) is **LGPL-2.1-or-later**, and is the only
-component here under a copyleft licence. Sunno uses it to convert audio from the
-sample rate a capture device runs at to the 16 kHz the speech model requires.
-
-The prebuilt wheel links libsoxr **statically** into `soxr_ext.pyd`, so LGPL-2.1
-section 6 applies: a recipient must be able to modify the library and relink.
-That is satisfied here because Sunno is distributed as complete source, including
-the packaging scripts, so anyone can substitute a modified soxr and rebuild.
-
-- soxr source: https://github.com/dofuuz/python-soxr
-- libsoxr source: https://sourceforge.net/projects/soxr/
-- LGPL-2.1 text: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
-
-Linking an LGPL library does not place Sunno itself under the LGPL; that is the
-difference between the LGPL and the GPL, and is what the LGPL exists for.
 
 ## MPL note: tqdm
 

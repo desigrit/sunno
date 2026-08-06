@@ -1,0 +1,11 @@
+# Native Windows ARM64 runtime. Kept separate because packaging resolves these wheels from an
+# x64 build host, where environment markers would otherwise be evaluated for the wrong machine.
+sounddevice
+av
+SoundCard
+numpy
+
+websockets
+onnxruntime>=1.17
+onnxruntime-genai
+huggingface_hub

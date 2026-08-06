@@ -17,6 +17,7 @@ words.
 
 from __future__ import annotations
 
+import argparse
 import sys
 import wave
 from pathlib import Path
@@ -27,13 +28,9 @@ from scipy import signal
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from server import cuda_setup  # noqa: E402
-
-cuda_setup.register_cuda_dlls(required=True)
-from faster_whisper import WhisperModel  # noqa: E402
-
+from server.resample import StreamingAudioResampler  # noqa: E402
 TARGET = 16_000
-CLIP = ROOT / "testdata" / "1-two-speakers-en.wav"
+DEFAULT_CLIP = ROOT / "testdata" / "1-two-speakers-en.wav"
 
 
 def load16k(path: Path) -> np.ndarray:
@@ -94,24 +91,45 @@ def run_stream(fn, audio: np.ndarray, chunk: int = 1024) -> np.ndarray:
     out = []
     for i in range(0, len(audio), chunk):
         out.append(fn(audio[i:i + chunk]))
+    flush = getattr(fn, "flush", None)
+    if flush is not None:
+        out.append(flush())
     return np.concatenate([o for o in out if len(o)])
 
 
-original = load16k(CLIP)
-print(f"source: {CLIP.name}  {len(original) / TARGET:.1f}s\n")
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--clip", type=Path, default=DEFAULT_CLIP)
+parser.add_argument(
+    "--quality-only",
+    action="store_true",
+    help="measure signal quality without loading Whisper or requiring CUDA",
+)
+args = parser.parse_args()
 
-print("loading Whisper large-v3 ...", flush=True)
-model = WhisperModel("Systran/faster-whisper-large-v3", device="cuda",
-                     compute_type="float16", local_files_only=True)
+original = load16k(args.clip)
+print(f"source: {args.clip.name}  {len(original) / TARGET:.1f}s\n")
 
+model = None
+if not args.quality_only:
+    from server import cuda_setup  # noqa: E402
 
-def transcribe(a: np.ndarray) -> str:
-    segs, _ = model.transcribe(a, beam_size=5, language="en")
-    return " ".join(s.text.strip() for s in segs)
+    cuda_setup.register_cuda_dlls(required=True)
+    from faster_whisper import WhisperModel  # noqa: E402
 
+    print("loading Whisper large-v3 ...", flush=True)
+    model = WhisperModel(
+        "Systran/faster-whisper-large-v3",
+        device="cuda",
+        compute_type="float16",
+        local_files_only=True,
+    )
 
-reference_text = transcribe(original)
-print(f"reference transcript ({len(reference_text)} chars)\n")
+    def transcribe(a: np.ndarray) -> str:
+        segs, _ = model.transcribe(a, beam_size=5, language="en")
+        return " ".join(s.text.strip() for s in segs)
+
+    reference_text = transcribe(original)
+    print(f"reference transcript ({len(reference_text)} chars)\n")
 
 results = []
 for device_rate in (44_100, 48_000):
@@ -122,6 +140,7 @@ for device_rate in (44_100, 48_000):
         "soxr HQ  (mic path today)": soxr_stream(device_rate, "HQ"),
         "soxr QQ  (loopback today)": soxr_stream(device_rate, "QQ"),
         "soxr VHQ": soxr_stream(device_rate, "VHQ"),
+        "PyAV AudioResampler": StreamingAudioResampler(device_rate, TARGET),
         "scipy polyphase (BSD)": ScipyStream(device_rate, TARGET),
     }
 
@@ -129,8 +148,11 @@ for device_rate in (44_100, 48_000):
     for name, fn in candidates.items():
         out = run_stream(fn, upsampled)
         s = snr(original, out)
-        text = transcribe(out)
-        same = "IDENTICAL" if text.strip() == reference_text.strip() else "differs"
+        if model is None:
+            same = "not measured"
+        else:
+            text = transcribe(out)
+            same = "IDENTICAL" if text.strip() == reference_text.strip() else "differs"
         results.append((device_rate, name, s, same))
         print(f"  {name:<28} SNR {s:6.1f} dB   transcript {same}")
     print()

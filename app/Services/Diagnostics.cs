@@ -69,7 +69,8 @@ public static class Diagnostics
 
         sb.AppendLine("-- Capture --");
         // Whether, never which. See the class comment.
-        var loopback = settings.LoopbackDeviceIndex is not null;
+        var loopback = !string.IsNullOrEmpty(settings.LoopbackDeviceId) ||
+                       settings.LoopbackDeviceIndex is not null;
         sb.AppendLine($"Source          {(loopback ? "system audio" : "microphone")}");
         sb.AppendLine($"Device chosen   {(HasDevice(settings) ? "yes" : "no, using system default")}");
         sb.AppendLine($"Device name set {(HasDeviceName(settings) ? "yes" : "no")}");
@@ -159,7 +160,10 @@ public static class Diagnostics
         }
     }
 
-    private static bool HasDevice(AppSettings s) =>        s.DeviceIndex is not null || s.LoopbackDeviceIndex is not null;
+    private static bool HasDevice(AppSettings s) =>
+        s.DeviceIndex is not null ||
+        s.LoopbackDeviceIndex is not null ||
+        !string.IsNullOrEmpty(s.LoopbackDeviceId);
 
     private static bool HasDeviceName(AppSettings s) =>
         !string.IsNullOrEmpty(s.DeviceName) || !string.IsNullOrEmpty(s.LoopbackDeviceName);

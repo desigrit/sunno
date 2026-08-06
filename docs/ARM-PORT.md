@@ -23,8 +23,12 @@ and the NPU path (1132 ms) are too slow to be defaults. Design for a mid-range S
 battery in Balanced mode, not a fast one plugged in.
 
 **Still undecided:** per-word uncertainty (`WordInlines.cs:135-144` greys words below
-`UncertainBelow = 0.55` on *all* lines — a different feature from Clarity, which shows only on your own lines, and arguably more valuable to a hard-of-hearing user). Also speaker labelling and loopback,
-if their native deps cannot be solved.
+`UncertainBelow = 0.55` on *all* lines — a different feature from Clarity, which shows only on
+your own lines, and arguably more valuable to a hard-of-hearing user).
+
+Speaker labelling is off in the native ARM build because sherpa-onnx has no importable Windows
+ARM64 artifact. The owner chose not to show a warning for an optional feature. System-audio
+loopback remains available through SoundCard's CFFI WASAPI implementation.
 
 ---
 
@@ -67,32 +71,27 @@ carries all 19 model ids. `tests/test_model_repos.py` guards the copy against dr
 Converts `openai/whisper-*` (MIT) into genai format. **Verified working**: base at int8 decodes
 real speech in 363 ms on x64. This removes the supply-chain problem — see below.
 
+**The ONNX engine, ARM catalog and native audio dependencies have been exercised.**
+`create_engine(settings, "onnx")` decodes real speech through the published `desigrit/Sunno`
+base model. The ARM picker offers base and tiny with measured lag and genai-shaped downloads.
+PyAV's stateful `AudioResampler` measured 81.2 dB at both 44.1 and 48 kHz on the original
+two-speaker corpus, against soxr HQ's 81.4-81.5 dB, and produced identical large-v3 transcripts.
+SoundCard replaces pyaudiowpatch for WASAPI loopback; its complete dependency chain resolves to
+CPython 3.12 `win_arm64` or pure-Python wheels. Native ARM silently omits speaker labelling.
+
 ---
 
 ## What is left
 
-1. **`OnnxEngine` is written but never run.** It needs an ARM64 or a genai-equipped venv to
-   exercise. Test it on x64 first by installing `onnxruntime-genai` and forcing
-   `create_engine(settings, "onnx")`.
-2. **Model catalog is not architecture-aware.** `CATALOG` membership is unconditional
-   (`models.py`), and `_ALLOW_PATTERNS`, `is_available`, `total_size_bytes` are all CT2-shaped.
-   `hardware.py`'s `_LAG_MS_*`, `estimated_lag_ms`, `preferred_model` need ONNX entries or new
-   ARM ids fall through to `_UNKNOWN_MODEL_LAG_MS = 5000` and the picker shows "5 s, not
-   responsive" for everything.
-3. **Three native deps have no ARM path.** `soxr` → `av.AudioResampler` (already packaged,
-   already `win_arm64`, already a *stateful streaming* resampler — measure against the 81.4 dB
-   bar recorded at `loopback.py:191-196` first). `sherpa-onnx` has no importable ARM64 Python
-   artifact → speaker labelling likely off on ARM. `pyaudiowpatch` publishes **no sdist at all**
-   → loopback likely off on ARM.
-4. **`stage-backend.ps1` cannot build an ARM tree.** It resolves the interpreter from
+1. **`stage-backend.ps1` cannot build an ARM tree.** It resolves the interpreter from
    `.venv/pyvenv.cfg` and overlays `.venv/Lib/site-packages` — both x64. Needs
    `pip install --platform win_arm64 --target` plus the ARM64 embeddable Python
    (`python-3.12.10-embed-arm64.zip`, verified present, 9.9 MB).
-5. **ARM64 MSIX.** The csproj change is mechanical and **`dotnet publish -r win-arm64` already
+2. **ARM64 MSIX.** The csproj change is mechanical and **`dotnet publish -r win-arm64` already
    works** (verified: 155 ARM64 PE files, zero x64 natives). `build-msix.ps1:70` hardcodes
    `-r win-x64`; `Package.appxmanifest` carries `ProcessorArchitecture="x64"` and needs
    templating. Ship a `.msixbundle`.
-6. **Unwind the ARM refusal.** `c04e3fe` makes the app say *"Sunno's speech engine needs a
+3. **Unwind the ARM refusal.** `c04e3fe` makes the app say *"Sunno's speech engine needs a
    64-bit Intel or AMD processor"* — correct for x64-only, wrong once an ARM build exists. See
    `hardware.py engine_importable()` and `BackendHost._engineUnloadableOnArm`.
 
@@ -135,6 +134,11 @@ path saves twice, so keep a file in it.
 a non-CUDA environment. Harmless, but it will be the first thing an ARM user sees and it is
 misleading there.
 
+**SoundCard and WASAPI are both COM-thread-affine.** Device enumeration runs on an HTTP worker
+and capture runs on the pump thread, so each thread must call `CoInitializeEx` before touching
+SoundCard. Persist the stable WASAPI endpoint id, not SoundCard's enumeration slot or the friendly
+name; duplicate monitors and docks can have identical names.
+
 ---
 
 ## Working practices
@@ -146,5 +150,4 @@ misleading there.
 - Tests are directly-runnable scripts in `tests/`, not pytest.
 - `packaging/stage-backend.ps1` uses an explicit include-list, deliberately, so a stray model
   cannot inflate the package.
-
 

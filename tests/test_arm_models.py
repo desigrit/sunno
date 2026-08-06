@@ -38,6 +38,14 @@ check(
     "GenAI runtime is declared",
     any(line.strip().startswith("onnxruntime-genai") for line in requirements),
 )
+arm_requirements = (root / "requirements-arm64.txt").read_text(encoding="utf-8").splitlines()
+check(
+    "ARM dependency set excludes unavailable native packages",
+    not any(
+        line.strip().lower().startswith(("faster-whisper", "sherpa-onnx", "nvidia-"))
+        for line in arm_requirements
+    ),
+)
 check(
     "CT2 latency keys remain compatible",
     hardware._latency_key("large-v3", "cuda", "ct2") == "cuda:large-v3",

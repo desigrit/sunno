@@ -118,7 +118,7 @@ public sealed class BackendHost : IDisposable
     }
 
     public string Start(string? device = null, string model = "large-v3", string? vocabulary = null,
-                        bool startStopped = false, int? loopbackDevice = null,
+                        bool startStopped = false, string? loopbackDevice = null,
                         string? computeDevice = null)
     {
         if (IsRunning) return "already running";
@@ -163,10 +163,10 @@ public sealed class BackendHost : IDisposable
         if (!string.IsNullOrWhiteSpace(vocabulary)) { args.Add("--vocabulary"); args.Add(vocabulary); }
         // Capturing an output endpoint rather than a microphone, so calls and video get
         // captioned. Mutually exclusive with --device on the backend side.
-        if (loopbackDevice is int loop)
+        if (!string.IsNullOrWhiteSpace(loopbackDevice))
         {
             args.Add("--loopback-device");
-            args.Add(loop.ToString());
+            args.Add(loopbackDevice);
         }
         // Load the model but leave the microphone alone. Used while consent is still being
         // resolved, so the ~33 s load overlaps the dialog instead of following it.
@@ -257,7 +257,7 @@ public sealed class BackendHost : IDisposable
     /// is suppressed across the swap so a deliberate stop isn't announced as a failure.
     /// </summary>
     public string Restart(string? device, string model, string? vocabulary,
-                          bool startStopped = false, int? loopbackDevice = null,
+                          bool startStopped = false, string? loopbackDevice = null,
                           string? computeDevice = null)
     {
         _stopping = true;

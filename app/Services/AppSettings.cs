@@ -15,6 +15,8 @@ public sealed class AppSettings
     public int? DeviceIndex { get; set; }
     /// <summary>A WASAPI output endpoint to caption instead of a microphone.</summary>
     public int? LoopbackDeviceIndex { get; set; }
+    /// <summary>Stable WASAPI endpoint id. The index above remains for settings migration.</summary>
+    public string? LoopbackDeviceId { get; set; }
 
     /// <summary>
     /// The name of the chosen capture device, and what makes the choice survive a restart.

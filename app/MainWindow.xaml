@@ -41,12 +41,12 @@
         <!-- body -->
         <Grid x:Name="BodyArea" Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="240" />
+                <ColumnDefinition x:Name="SidebarColumn" Width="240" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
             <!-- speakers pane -->
-            <Border Grid.Column="0"
+            <Border x:Name="SidebarPane" Grid.Column="0"
                     Background="{ThemeResource LayerFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="0,1,1,0">
@@ -57,7 +57,7 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="Speakers" Margin="16,0,16,8"
+                    <TextBlock x:Name="SpeakerHeading" Grid.Row="0" Text="Speakers" Margin="16,0,16,8"
                                Style="{StaticResource BodyStrongTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
@@ -698,10 +698,11 @@
                             </Grid>
                         </Border>
 
-                        <TextBlock Text="Speakers" Style="{StaticResource BodyStrongTextBlockStyle}"
-                                   AutomationProperties.HeadingLevel="Level2" />
-                        <Border Style="{StaticResource SettingsCard}" Padding="16,10">
-                            <StackPanel Spacing="4">
+                        <StackPanel x:Name="SpeakerSettingsSection" Spacing="8">
+                            <TextBlock Text="Speakers" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                       AutomationProperties.HeadingLevel="Level2" />
+                            <Border Style="{StaticResource SettingsCard}" Padding="16,10">
+                                <StackPanel Spacing="4">
                                 <TextBlock x:Name="NoSpeakersInSettings"
                                            Text="Nobody has been recognised yet."
                                            Margin="0,4,0,6"
@@ -733,8 +734,9 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                            </StackPanel>
-                        </Border>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
 
                         <TextBlock Text="Diagnostics" Style="{StaticResource BodyStrongTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />

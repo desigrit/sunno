@@ -99,7 +99,7 @@ class Settings:
     input_device: int | str | None = None
     # A WASAPI loopback endpoint index. When set it replaces the microphone, so what is
     # played through that output gets captioned instead of what is spoken.
-    loopback_device: int | None = None
+    loopback_device: int | str | None = None
 
     # Phrases Whisper commonly hallucinates over near-silence.
     hallucinations: tuple[str, ...] = field(

@@ -287,7 +287,7 @@ public sealed partial class MainWindow
             model: _settings.Model,
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
-            loopbackDevice: _settings.LoopbackDeviceIndex,
+            loopbackDevice: _settings.LoopbackDeviceId ?? _settings.LoopbackDeviceIndex?.ToString(),
             computeDevice: _settings.ForceCpu ? "cpu" : "auto");
 
         if (!string.IsNullOrEmpty(error))

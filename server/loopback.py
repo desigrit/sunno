@@ -1,89 +1,61 @@
 """WASAPI loopback capture: transcribe whatever is being played, not just the microphone.
 
-This is a separate module because it needs a different audio library. sounddevice/PortAudio
-has no loopback flag (WasapiSettings exposes only exclusive, auto_convert and
-explicit_sample_format), and "Stereo Mix" is not a substitute — it is a driver-specific input
-that taps one particular device, so it captures silence whenever the default output is
-anything else, which is exactly the case for a USB or Bluetooth headset.
-
-pyaudiowpatch is a PyAudio fork that exposes WASAPI loopback endpoints as ordinary input
-devices. It is ~0.09 MB and used only on this path; the microphone path is untouched.
-
-The device that matters here is the one the user actually listens through: capturing its
-loopback yields precisely the audio reaching their ears — a call, a video, a film — which is
-the material a hard-of-hearing user most needs captioned.
+SoundCard reaches WASAPI through CFFI rather than a CPython audio extension, so the same code
+runs natively on x64 and ARM64. sounddevice/PortAudio has no loopback flag, and "Stereo Mix" is
+not a substitute: it is driver-specific and often captures silence from USB or Bluetooth output.
 """
 
 from __future__ import annotations
 
-import queue
-import threading
-import time
+import warnings
 from typing import Callable, Iterator
 
 import numpy as np
-import soxr
 
 from .config import FRAME_SAMPLES, SAMPLE_RATE
 
-# How long to wait on the queue before deciding the endpoint is merely idle. Short enough
-# that the silence generator tracks wall clock closely, long enough not to spin a core.
-_IDLE_POLL_S = 0.1
-_FRAME_SECONDS = FRAME_SAMPLES / SAMPLE_RATE
-# One scheduling hiccup should not dump a burst of silence into the VAD in a single go.
-_MAX_CATCHUP_FRAMES = 16
-# Shared read-only buffer; the pipeline never mutates the frames it is handed.
-_SILENCE = np.zeros(FRAME_SAMPLES, dtype=np.float32)
+def _soundcard():
+    # SoundCard's WASAPI calls are COM-based, and COM apartments are per thread. Device
+    # enumeration runs on an HTTP worker while capture runs on the pump thread, so both must
+    # initialize independently before importing or calling SoundCard.
+    from .audio import _ensure_com_initialized
 
-_LOOPBACK_SUFFIX = " [Loopback]"
+    _ensure_com_initialized()
+    import soundcard
+
+    return soundcard
 
 
-def _pyaudio():
-    import pyaudiowpatch as pa
-
-    return pa
+def _loopback_devices():
+    return [device for device in _soundcard().all_microphones(include_loopback=True)
+            if device.isloopback]
 
 
 def list_loopback_devices() -> list[dict]:
     """Output endpoints that can be captured, newest-style WASAPI only."""
-    pa = _pyaudio()
-    audio = pa.PyAudio()
-    try:
-        default_name = ""
-        try:
-            wasapi = audio.get_host_api_info_by_type(pa.paWASAPI)
-            default_name = audio.get_device_info_by_index(
-                wasapi["defaultOutputDevice"]
-            )["name"]
-        except Exception:
-            pass
-
-        devices = []
-        for dev in audio.get_loopback_device_info_generator():
-            # The suffix is an implementation detail of the loopback enumeration; the user
-            # recognises the device by its own name.
-            name = dev["name"]
-            if name.endswith(_LOOPBACK_SUFFIX):
-                name = name[: -len(_LOOPBACK_SUFFIX)]
-            devices.append(
-                {
-                    "index": int(dev["index"]),
-                    "name": name,
-                    "channels": int(dev["maxInputChannels"]),
-                    "default_samplerate": float(dev["defaultSampleRate"]),
-                    "hostapi": "Windows WASAPI",
-                    "loopback": True,
-                    "is_default_output": name in default_name or default_name in name,
-                }
-            )
-        return devices
-    finally:
-        audio.terminate()
+    soundcard = _soundcard()
+    default_id = soundcard.default_speaker().id
+    return [
+        {
+            # SoundCard identifies devices by WASAPI id. The UI protocol currently carries an
+            # integer, so this is the enumeration slot; the UI persists and validates the name
+            # because audio-library indices have never been stable across device changes.
+            "index": index,
+            "id": device.id,
+            "name": device.name,
+            "channels": device.channels,
+            "default_samplerate": SAMPLE_RATE,
+            "hostapi": "Windows WASAPI",
+            "loopback": True,
+            "is_default_output": device.id == default_id,
+        }
+        for index, device in enumerate(_loopback_devices())
+    ]
 
 
 def loopback_available() -> bool:
     try:
-        _pyaudio()
+        _soundcard()
         return True
     except Exception:
         return False
@@ -97,67 +69,45 @@ class LoopbackStream:
     multi-channel, so audio is downmixed and resampled the same way microphone input is.
     """
 
-    def __init__(self, device_index: int, max_queued_blocks: int = 128):
+    def __init__(self, device_index: int | str, max_queued_blocks: int = 128):
         self.device_index = device_index
-        self._queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=max_queued_blocks)
-        self._audio = None
-        self._stream = None
+        self._recorder_context = None
+        self._recorder = None
+        self._device_id = None
         self._name = f"device {device_index}"
         self.dropped_blocks = 0
         self.capture_rate: int = SAMPLE_RATE
         self.capture_channels: int = 1
-        self._lock = threading.Lock()
 
     def __enter__(self) -> "LoopbackStream":
-        pa = _pyaudio()
-        self._audio = pa.PyAudio()
-        info = self._audio.get_device_info_by_index(self.device_index)
-
-        name = info["name"]
-        if name.endswith(_LOOPBACK_SUFFIX):
-            name = name[: -len(_LOOPBACK_SUFFIX)]
-        self._name = name
-        self.capture_rate = int(info["defaultSampleRate"])
-        self.capture_channels = int(info["maxInputChannels"])
-
-        def callback(in_data, frame_count, time_info, status):  # noqa: ANN001
-            block = np.frombuffer(in_data, dtype=np.float32)
-            try:
-                self._queue.put_nowait(block)
-            except queue.Full:
-                # Dropping is correct under back-pressure: stale audio is worse than a gap.
-                self.dropped_blocks += 1
-            return (None, pa.paContinue)
-
-        self._stream = self._audio.open(
-            format=pa.paFloat32,
+        devices = _loopback_devices()
+        if isinstance(self.device_index, str) and not self.device_index.isdigit():
+            device = next(
+                (candidate for candidate in devices if candidate.id == self.device_index),
+                None,
+            )
+        else:
+            index = int(self.device_index)
+            device = devices[index] if 0 <= index < len(devices) else None
+        if device is None:
+            raise IndexError("the selected system-audio device is no longer available")
+        self._name = device.name
+        self._device_id = device.id
+        self.capture_channels = device.channels
+        self._recorder_context = device.recorder(
+            samplerate=SAMPLE_RATE,
             channels=self.capture_channels,
-            rate=self.capture_rate,
-            input=True,
-            input_device_index=self.device_index,
-            # 0 lets WASAPI choose its own period, which is what it wants in shared mode.
-            frames_per_buffer=0,
-            stream_callback=callback,
+            blocksize=FRAME_SAMPLES,
         )
-        self._stream.start_stream()
+        self._recorder = self._recorder_context.__enter__()
         return self
 
     def __exit__(self, *exc) -> None:
-        with self._lock:
-            if self._stream is not None:
-                try:
-                    self._stream.stop_stream()
-                    self._stream.close()
-                except Exception:
-                    pass
-                self._stream = None
-            if self._audio is not None:
-                try:
-                    self._audio.terminate()
-                except Exception:
-                    pass
-                self._audio = None
-        self._queue.put(None)
+        context = self._recorder_context
+        self._recorder = None
+        self._recorder_context = None
+        if context is not None:
+            context.__exit__(*exc)
 
     @property
     def device_name(self) -> str:
@@ -172,77 +122,22 @@ class LoopbackStream:
         be active rather than by raising. Distinguishing that from an idle-but-healthy
         endpoint is the whole reason the caller can trust a silent loopback.
         """
-        with self._lock:
-            stream = self._stream
-        if stream is None:
+        if self._recorder is None or self._device_id is None:
             return False
         try:
-            return bool(stream.is_active())
+            return any(device.id == self._device_id for device in _loopback_devices())
         except Exception:
-            # A dead stream typically throws rather than returning False.
             return False
 
     def frames(self, should_continue: Callable[[], bool] | None = None) -> Iterator[np.ndarray]:
         keep_going = should_continue or (lambda: True)
-        pending = np.empty(0, dtype=np.float32)
-        last_yield = time.monotonic()
-        resampler = None
-        if self.capture_rate != SAMPLE_RATE:
-            # HQ, matching the microphone path. This was "QQ" — soxr's lowest setting — which
-            # measured 73.9 dB against HQ's 81.4 dB resampling 44.1 kHz to 16 kHz. The
-            # transcript happened to come out identical on the clip tested, but there was no
-            # reason for system audio to be fed a worse signal than the microphone, and the
-            # cost of the better filter is not measurable next to a Whisper decode.
-            resampler = soxr.ResampleStream(
-                self.capture_rate, SAMPLE_RATE, 1, dtype="float32", quality="HQ"
-            )
-
         while keep_going():
-            try:
-                block = self._queue.get(timeout=_IDLE_POLL_S)
-            except queue.Empty:
-                # WASAPI delivers no callbacks at all from an output endpoint while nothing is
-                # playing, so a quiet desktop produces an empty queue indefinitely. Yield real
-                # silence instead of spinning: silence is the truthful description of an idle
-                # output, and it keeps the pipeline's level reporting alive so the UI can tell
-                # "nothing is playing" apart from "capture has died".
-                #
-                # This is what makes the stall warning trustworthy on loopback. If the endpoint
-                # actually disappears — a Bluetooth headset walking out of range — the stream
-                # stops being active, this loop exits, levels stop, and the UI surfaces it.
-                # Without the distinction a vanished device looked exactly like a quiet one,
-                # and the app sat showing a running clock and no captions.
-                if not self.is_alive:
-                    break
-
-                # Enough frames to cover the wall-clock gap, not one per poll. The pipeline
-                # measures silence by counting frames, so under-producing would stretch
-                # end-of-utterance detection by the same factor — a 520 ms hangover would take
-                # eight seconds, and the last thing said before a pause would hang unfinalised.
-                now = time.monotonic()
-                owed = int((now - last_yield) / _FRAME_SECONDS)
-                if owed <= 0:
-                    continue
-                # Cap the catch-up so a scheduling hiccup can't dump a burst of silence into
-                # the VAD in one go.
-                for _ in range(min(owed, _MAX_CATCHUP_FRAMES)):
-                    yield _SILENCE
-                last_yield = now
-                continue
-            if block is None:
-                break
-
-            if self.capture_channels > 1:
-                block = block.reshape(-1, self.capture_channels).mean(axis=1)
-            if resampler is not None:
-                block = resampler.resample_chunk(block)
-            if block.size == 0:
-                continue
-
-            pending = np.concatenate((pending, block))
-            while pending.size >= FRAME_SAMPLES:
-                yield pending[:FRAME_SAMPLES]
-                pending = pending[FRAME_SAMPLES:]
-                # Real audio resets the clock too, so the silence generator only ever fills
-                # gaps rather than double-counting time already covered by captured frames.
-                last_yield = time.monotonic()
+            if self._recorder is None:
+                return
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", RuntimeWarning)
+                block = self._recorder.record(numframes=FRAME_SAMPLES)
+            self.dropped_blocks += sum(
+                issubclass(warning.category, RuntimeWarning) for warning in caught
+            )
+            yield block.mean(axis=1).astype(np.float32, copy=False)

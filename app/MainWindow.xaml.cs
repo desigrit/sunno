@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Sunno.Models;
@@ -21,7 +22,12 @@ using Windows.Security.Authorization.AppCapabilityAccess;
 namespace Sunno;
 
 /// <summary>A microphone the backend can capture from.</summary>
-public sealed record AudioDevice(int Index, string Name, string HostApi, bool Loopback = false);
+public sealed record AudioDevice(
+    int Index,
+    string Name,
+    string HostApi,
+    bool Loopback = false,
+    string? Id = null);
 
 /// <summary>A model shown in first-run setup.</summary>
 public sealed record ModelChoice(string Id, string Name, string Detail, int ApproxMb, bool Available,
@@ -166,6 +172,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         App.Trace("MainWindow ctor: InitializeComponent");
         InitializeComponent();
         App.Trace("MainWindow ctor: XAML loaded");
+        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+        {
+            SidebarPane.Visibility = Visibility.Collapsed;
+            SidebarColumn.Width = new GridLength(0);
+            SpeakerSettingsSection.Visibility = Visibility.Collapsed;
+        }
         _ui = DispatcherQueue.GetForCurrentThread();
 
         ConfigureWindow();
@@ -227,7 +239,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             model: _settings.Model,
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
-            loopbackDevice: _settings.LoopbackDeviceIndex,
+            loopbackDevice: _settings.LoopbackDeviceId ?? _settings.LoopbackDeviceIndex?.ToString(),
             computeDevice: _settings.ForceCpu ? "cpu" : "auto");
         // Through the banner, not SetStatus. SetStatus writes to the small elapsed-time label in
         // the corner, which is sized for "1:08" - a failure sentence put there is invisible, so
@@ -755,6 +767,15 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 MicInfoBar.Message =
                     (st.Message ?? "The microphone could not be opened.") +
                     " Try choosing a different microphone below.";
+                MicActionLink.Visibility = Visibility.Collapsed;
+                break;
+
+            case "loopback_unavailable":
+                MicInfoBar.Severity = InfoBarSeverity.Warning;
+                MicInfoBar.Title = "System audio unavailable";
+                MicInfoBar.Message =
+                    (st.Message ?? "The system-audio source could not be opened.") +
+                    " Try choosing a different system-audio source below.";
                 MicActionLink.Visibility = Visibility.Collapsed;
                 break;
 
@@ -1409,7 +1430,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             model: id,
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
-            loopbackDevice: _settings.LoopbackDeviceIndex,
+            loopbackDevice: _settings.LoopbackDeviceId ?? _settings.LoopbackDeviceIndex?.ToString(),
             computeDevice: _settings.ForceCpu ? "cpu" : "auto");
 
         if (!string.IsNullOrEmpty(error))
@@ -1912,11 +1933,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         foreach (var d in arr.EnumerateArray())
         {
             var index = d.TryGetProperty("index", out var i) ? i.GetInt32() : -1;
+            var id = d.TryGetProperty("id", out var identifier) ? identifier.GetString() : null;
             var name = d.TryGetProperty("name", out var n) ? n.GetString()?.Trim() : null;
             var api = d.TryGetProperty("hostapi", out var h) ? h.GetString() : null;
             var loopback = d.TryGetProperty("loopback", out var l) && l.ValueKind == JsonValueKind.True;
             if (index >= 0 && !string.IsNullOrEmpty(name))
-                result.Add(new AudioDevice(index, name!, api ?? string.Empty, loopback));
+                result.Add(new AudioDevice(index, name!, api ?? string.Empty, loopback, id));
         }
         return result;
     }
@@ -1946,7 +1968,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 if (IsDefaultAlias(label)) continue;
 
                 var group = d.Loopback ? speakers : mics;
-                var match = group.FirstOrDefault(e => IsSameDevice(e, key, d.Name.Length));
+                // Output endpoint names are not identities. Two monitors or USB docks can expose
+                // the same friendly name while carrying different stable WASAPI ids.
+                var match = d.Loopback
+                    ? group.FirstOrDefault(e => e.Device.Id == d.Id)
+                    : group.FirstOrDefault(e => IsSameDevice(e, key, d.Name.Length));
                 if (match is not null)
                 {
                     // Remember the index anyway: the saved device may be one of the duplicates
@@ -1989,12 +2015,14 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// </summary>
     private void ValidateRememberedDevice()
     {
-        var loopback = _settings.LoopbackDeviceIndex is not null;
+        var loopback = !string.IsNullOrEmpty(_settings.LoopbackDeviceId) ||
+                       _settings.LoopbackDeviceIndex is not null;
         var wantedIndex = _settings.LoopbackDeviceIndex ?? _settings.DeviceIndex;
+        var wantedId = loopback ? _settings.LoopbackDeviceId : null;
         var wantedName = loopback ? _settings.LoopbackDeviceName : _settings.DeviceName;
 
         // No remembered device: the system default is in use and there is nothing to check.
-        if (wantedIndex is null) return;
+        if (wantedIndex is null && string.IsNullOrEmpty(wantedId)) return;
 
         // Entries for the right kind of device only. /devices.json is a single flat array
         // holding two different index spaces — microphones are numbered by sounddevice and
@@ -2006,7 +2034,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             .ToList();
         if (candidates.Count == 0) return;
 
-        var atIndex = candidates.FirstOrDefault(x => x.Entry!.Aliases.Contains(wantedIndex.Value));
+        var atIndex = !string.IsNullOrEmpty(wantedId)
+            ? candidates.FirstOrDefault(x => x.Entry!.Device.Id == wantedId)
+            : candidates.FirstOrDefault(x =>
+                wantedIndex is int index && x.Entry!.Aliases.Contains(index));
 
         // Upgrading from a build that only stored the index. An absent name is not evidence of
         // rot, it is evidence of an older settings file, so adopt whatever is there now and
@@ -2017,6 +2048,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             if (atIndex?.Entry is null) return;
             if (loopback) _settings.LoopbackDeviceName = atIndex.Entry.Device.Name;
             else _settings.DeviceName = atIndex.Entry.Device.Name;
+            if (loopback) _settings.LoopbackDeviceId = atIndex.Entry.Device.Id;
             _settings.Save();
             // Index and outcome only. The device name is the string Diagnostics refuses to emit,
             // because "Headset (R-Phonak hearing aid)" discloses that someone wears a hearing
@@ -2040,10 +2072,25 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         //
         // The keys being compared were both built by DeviceKey from cleaned names, so equality
         // is the right test and the truncation tolerance is neither needed nor safe.
-        if (atIndex?.Entry is not null && atIndex.Entry.Key == wantedKey)
-            return;   // index still means the right device, which is the usual case
+        if (atIndex?.Entry is not null &&
+            (!string.IsNullOrEmpty(wantedId) || atIndex.Entry.Key == wantedKey))
+        {
+            // A stable endpoint id is stronger than a display name, which drivers are free to
+            // rename. This also migrates an older index+name setting as soon as it is confirmed.
+            if (loopback)
+            {
+                _settings.LoopbackDeviceId = atIndex.Entry.Device.Id;
+                _settings.LoopbackDeviceName = atIndex.Entry.Device.Name;
+                _settings.Save();
+            }
+            return;
+        }
 
-        var correct = candidates.FirstOrDefault(x => x.Entry!.Key == wantedKey);
+        // Once a stable endpoint id exists, a matching friendly name is not a safe fallback:
+        // duplicate monitors and docks routinely have identical names.
+        var correct = !string.IsNullOrEmpty(wantedId)
+            ? null
+            : candidates.FirstOrDefault(x => x.Entry!.Key == wantedKey);
 
         if (correct is null)
         {
@@ -2066,8 +2113,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 // listening to the default microphone" here would tell a deaf user captioning
                 // was running when it was not, on the one path whose entire purpose is to stop
                 // silent capture failures.
-                ShowDeviceNotice($"{wantedName} is not available. Choose a microphone below to "
-                                 + "start captioning.");
+                var source = loopback ? "system-audio source" : "microphone";
+                ShowDeviceNotice(
+                    $"{wantedName} is not available. Choose a {source} below to start captioning."
+                );
             }
             return;
         }
@@ -2125,7 +2174,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // disables regions rather than enumerating what each one contains.
         if (_deviceNotice is null || _backendFatal) return;
         MicInfoBar.Severity = InfoBarSeverity.Informational;
-        MicInfoBar.Title = "Microphone changed";
+        var loopback = !string.IsNullOrEmpty(_settings.LoopbackDeviceId) ||
+                       _settings.LoopbackDeviceIndex is not null;
+        MicInfoBar.Title = loopback ? "System audio changed" : "Microphone changed";
         MicInfoBar.Message = _deviceNotice;
         MicActionLink.Visibility = Visibility.Collapsed;
         MicInfoBar.IsOpen = true;
@@ -2176,14 +2227,23 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void SelectActiveDevice()
     {
         var wanted = _settings.LoopbackDeviceIndex ?? _settings.DeviceIndex;
-        var loopback = _settings.LoopbackDeviceIndex is not null;
-        if (wanted is null) return;
+        var wantedId = _settings.LoopbackDeviceId;
+        var loopback = !string.IsNullOrEmpty(wantedId) ||
+                       _settings.LoopbackDeviceIndex is not null;
+        if (wanted is null && string.IsNullOrEmpty(wantedId)) return;
 
         foreach (var item in DevicePicker.Items.OfType<ComboBoxItem>())
         {
             if (item.Tag is not DeviceEntry entry) continue;
             if (entry.Device.Loopback != loopback) continue;
-            if (!entry.Aliases.Contains(wanted.Value)) continue;
+            if (loopback && !string.IsNullOrEmpty(wantedId))
+            {
+                if (entry.Device.Id != wantedId) continue;
+            }
+            else if (wanted is not int index || !entry.Aliases.Contains(index))
+            {
+                continue;
+            }
             DevicePicker.SelectedItem = item;
             // The closed picker truncates; the full name is only otherwise visible with the
             // list open, and the status line no longer carries it.
@@ -2317,6 +2377,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
         _settings.DeviceIndex = device.Loopback ? null : device.Index;
         _settings.LoopbackDeviceIndex = device.Loopback ? device.Index : null;
+        _settings.LoopbackDeviceId = device.Loopback ? device.Id : null;
         // Record the name as well as the index. The index is what gets passed to the backend at
         // launch, but it is only valid for as long as the machine's device set is unchanged;
         // the name is what lets the next launch tell whether that index still means this device.
@@ -2349,7 +2410,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             model: _settings.Model,
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
-            loopbackDevice: device.Loopback ? device.Index : null,
+            loopbackDevice: device.Loopback ? device.Id : null,
             computeDevice: _settings.ForceCpu ? "cpu" : "auto");
         if (!string.IsNullOrEmpty(error)) ShowFatalBackendError(error);
     }

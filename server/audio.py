@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import sys
+import threading
 import time
 import wave
 from pathlib import Path
@@ -13,6 +14,8 @@ import numpy as np
 import sounddevice as sd
 
 from .config import FRAME_SAMPLES, SAMPLE_RATE
+
+_COM_STATE = threading.local()
 
 
 def list_input_devices() -> list[dict]:
@@ -53,6 +56,8 @@ def _ensure_com_initialized() -> None:
     """
     if sys.platform != "win32":
         return
+    if getattr(_COM_STATE, "initialized", False):
+        return
     import ctypes
 
     COINIT_APARTMENTTHREADED = 0x2
@@ -63,6 +68,8 @@ def _ensure_com_initialized() -> None:
         return
     if hr < 0 and hr != RPC_E_CHANGED_MODE:
         print(f"[audio] CoInitializeEx returned 0x{hr & 0xFFFFFFFF:08X}", file=sys.stderr)
+        return
+    _COM_STATE.initialized = True
 
 
 # Windows returns E_ACCESSDENIED (0x80070005) from IAudioClient::Initialize when the
@@ -127,7 +134,7 @@ class MicrophoneStream:
     """Yields mono float32 frames of exactly FRAME_SAMPLES at SAMPLE_RATE.
 
     Many microphones (measurement mics, most USB interfaces) will not open at 16 kHz, so
-    the device is opened at a rate it supports and resampled to 16 kHz with soxr. The audio
+    the device is opened at a rate it supports and resampled to 16 kHz with PyAV. The audio
     callback stays minimal; resampling happens on the consumer side.
     """
 
@@ -231,11 +238,9 @@ class MicrophoneStream:
     def frames(self, should_continue: Callable[[], bool] | None = None) -> Iterator[np.ndarray]:
         resampler = None
         if self.capture_rate != SAMPLE_RATE:
-            import soxr
+            from .resample import StreamingAudioResampler
 
-            resampler = soxr.ResampleStream(
-                self.capture_rate, SAMPLE_RATE, 1, dtype="float32", quality="HQ"
-            )
+            resampler = StreamingAudioResampler(self.capture_rate, SAMPLE_RATE)
 
         pending = np.zeros(0, dtype=np.float32)
         while True:
@@ -253,7 +258,7 @@ class MicrophoneStream:
                 return
 
             if resampler is not None:
-                block = resampler.resample_chunk(block)
+                block = resampler.resample(block)
                 if block.size == 0:
                     continue
                 block = block.reshape(-1)
