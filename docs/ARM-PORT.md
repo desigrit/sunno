@@ -71,27 +71,27 @@ carries all 19 model ids. `tests/test_model_repos.py` guards the copy against dr
 Converts `openai/whisper-*` (MIT) into genai format. **Verified working**: base at int8 decodes
 real speech in 363 ms on x64. This removes the supply-chain problem — see below.
 
-**The ONNX engine, ARM catalog and native audio dependencies have been exercised.**
+**The ONNX engine, ARM catalog, native audio dependencies and backend staging have been
+exercised.**
 `create_engine(settings, "onnx")` decodes real speech through the published `desigrit/Sunno`
 base model. The ARM picker offers base and tiny with measured lag and genai-shaped downloads.
 PyAV's stateful `AudioResampler` measured 81.2 dB at both 44.1 and 48 kHz on the original
 two-speaker corpus, against soxr HQ's 81.4-81.5 dB, and produced identical large-v3 transcripts.
 SoundCard replaces pyaudiowpatch for WASAPI loopback; its complete dependency chain resolves to
 CPython 3.12 `win_arm64` or pure-Python wheels. Native ARM silently omits speaker labelling.
+`stage-backend.ps1 -Architecture arm64` produces a 162 MB tree with the ARM64 embeddable
+interpreter, the redistributable ARM64 C++ runtime required by ONNX, and 140 ARM64 PE files
+with zero x64 binaries. Executable inputs and every ARM wheel are version- and hash-locked.
 
 ---
 
 ## What is left
 
-1. **`stage-backend.ps1` cannot build an ARM tree.** It resolves the interpreter from
-   `.venv/pyvenv.cfg` and overlays `.venv/Lib/site-packages` — both x64. Needs
-   `pip install --platform win_arm64 --target` plus the ARM64 embeddable Python
-   (`python-3.12.10-embed-arm64.zip`, verified present, 9.9 MB).
-2. **ARM64 MSIX.** The csproj change is mechanical and **`dotnet publish -r win-arm64` already
+1. **ARM64 MSIX.** The csproj change is mechanical and **`dotnet publish -r win-arm64` already
    works** (verified: 155 ARM64 PE files, zero x64 natives). `build-msix.ps1:70` hardcodes
    `-r win-x64`; `Package.appxmanifest` carries `ProcessorArchitecture="x64"` and needs
    templating. Ship a `.msixbundle`.
-3. **Unwind the ARM refusal.** `c04e3fe` makes the app say *"Sunno's speech engine needs a
+2. **Unwind the ARM refusal.** `c04e3fe` makes the app say *"Sunno's speech engine needs a
    64-bit Intel or AMD processor"* — correct for x64-only, wrong once an ARM build exists. See
    `hardware.py engine_importable()` and `BackendHost._engineUnloadableOnArm`.
 
@@ -101,6 +101,11 @@ CPython 3.12 `win_arm64` or pure-Python wheels. Native ARM silently omits speake
 
 **`build-msix.ps1:33`'s `\x64\` filter must NOT be templated.** It selects the **host**
 `makeappx`/`signtool` on the dev box. Changing it breaks the build.
+
+**Cross-platform pip emits launchers for the build host.** `pip install --platform win_arm64
+--target` creates x64 console executables under `site-packages/bin`; they are build-time entry
+points, not runtime dependencies, and must be removed. Python 3.12.10's official ARM64
+embeddable archive also carries an unused x64 `vcruntime140_1.dll`; no ARM64 PE imports it.
 
 **Build proof venvs *from* `requirements.txt`, never by hand.** A hand-built venv is structurally
 incapable of catching a broken requirements file — that is exactly how a deleted
@@ -150,4 +155,3 @@ name; duplicate monitors and docks can have identical names.
 - Tests are directly-runnable scripts in `tests/`, not pytest.
 - `packaging/stage-backend.ps1` uses an explicit include-list, deliberately, so a stray model
   cannot inflate the package.
-

@@ -14,6 +14,7 @@ app/bin/
 app/obj/
 packaging/staging/
 packaging/out/
+packaging/cache/
 *.msix
 *.pfx
 *.cer
