@@ -54,6 +54,14 @@ _LAG_MS_CPU_16: dict[str, int] = {
     "large-v3": 4400,
 }
 
+# Snapdragon X Elite in Balanced mode, native ARM64, ONNX Runtime GenAI int8. These are
+# deliberately the battery-mode figures rather than the faster plugged-in numbers: first-run
+# guidance should remain honest on the machine state the app is designed around.
+_LAG_MS_ONNX_ARM: dict[str, int] = {
+    "tiny": 203,
+    "base": 519,
+}
+
 # BLAS matmul score of the reference CPU, from the same benchmark. A machine that scores
 # half this is assumed to take roughly twice as long.
 _REFERENCE_CPU_SCORE = 73.0
@@ -304,7 +312,13 @@ _OBSERVE_WINDOW = 15
 _OBSERVE_MIN = 5
 
 
-def record_latency(model_id: str, device: str, ms: float) -> None:
+def _latency_key(model_id: str, device: str, engine: str) -> str:
+    # Preserve the original CT2 key exactly. Existing x64 installs have learned measurements
+    # under this shape, and changing it would silently throw useful machine-specific data away.
+    return f"{device}:{model_id}" if engine == "ct2" else f"{engine}:{device}:{model_id}"
+
+
+def record_latency(model_id: str, device: str, ms: float, engine: str = "ct2") -> None:
     """Note how long a real decode actually took on this machine.
 
     Called for finalised utterances only. Partials are decoded greedily and would report a
@@ -314,7 +328,7 @@ def record_latency(model_id: str, device: str, ms: float) -> None:
     if ms <= 0 or ms > 60_000:
         return   # a wild value means something else went wrong; don't poison the estimate
 
-    key = f"{device}:{model_id}"
+    key = _latency_key(model_id, device, engine)
     samples = _OBSERVED.setdefault(key, [])
     samples.append(float(ms))
     if len(samples) > _OBSERVE_WINDOW:
@@ -333,9 +347,9 @@ def record_latency(model_id: str, device: str, ms: float) -> None:
         _write_state(state)
 
 
-def measured_lag_ms(model_id: str, device: str) -> int | None:
+def measured_lag_ms(model_id: str, device: str, engine: str = "ct2") -> int | None:
     """What this machine has been seen doing, or None if it has never run this model."""
-    key = f"{device}:{model_id}"
+    key = _latency_key(model_id, device, engine)
     samples = _OBSERVED.get(key)
     if samples and len(samples) >= _OBSERVE_MIN:
         return int(round(sorted(samples)[len(samples) // 2]))
@@ -343,7 +357,11 @@ def measured_lag_ms(model_id: str, device: str) -> int | None:
     return int(value) if value else None
 
 
-def estimated_lag_ms(model_id: str, device: str | None = None) -> int:
+def estimated_lag_ms(
+    model_id: str,
+    device: str | None = None,
+    engine: str = "ct2",
+) -> int:
     """Roughly how long after someone stops speaking their words appear.
 
     Prefers what this machine has actually been measured doing, and falls back to the
@@ -354,9 +372,12 @@ def estimated_lag_ms(model_id: str, device: str | None = None) -> int:
     """
     device = device or resolve_device()
 
-    measured = measured_lag_ms(model_id, device)
+    measured = measured_lag_ms(model_id, device, engine)
     if measured is not None:
         return measured
+
+    if engine == "onnx":
+        return _LAG_MS_ONNX_ARM.get(model_id, _UNKNOWN_MODEL_LAG_MS)
 
     if device == "cuda":
         return _LAG_MS_CUDA.get(model_id, _UNKNOWN_MODEL_LAG_MS)
@@ -396,7 +417,11 @@ def describe_lag(lag_ms: int) -> str:
     return f"about {round(lag_ms / 1000)}s behind"
 
 
-def default_model(catalog_ids: list[str], device: str | None = None) -> str:
+def default_model(
+    catalog_ids: list[str],
+    device: str | None = None,
+    engine: str = "ct2",
+) -> str:
     """The model to start on when the user has never chosen one.
 
     The most accurate model that still keeps up with conversation, falling back to the
@@ -408,9 +433,9 @@ def default_model(catalog_ids: list[str], device: str | None = None) -> str:
     """
     device = device or resolve_device()
     for model_id in catalog_ids:
-        if estimated_lag_ms(model_id, device) <= RESPONSIVE_LAG_MS:
+        if estimated_lag_ms(model_id, device, engine) <= RESPONSIVE_LAG_MS:
             return model_id
-    return min(catalog_ids, key=lambda m: estimated_lag_ms(m, device))
+    return min(catalog_ids, key=lambda m: estimated_lag_ms(m, device, engine))
 
 
 # Above this, captions arrive too late to follow a live conversation. Chosen to match the

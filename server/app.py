@@ -153,14 +153,19 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     # PCs have no usable NVIDIA GPU, and this used to be hardcoded to CUDA — which turned
     # every such machine into an install that raised at startup and never captioned.
     from . import hardware, models as model_catalog
+    from .engine import resolve_engine
 
-    compute_device = hardware.resolve_device(args.compute_device)
+    engine_kind = resolve_engine()
+    compute_device = "cpu" if engine_kind == "onnx" else hardware.resolve_device(args.compute_device)
     compute_type = args.compute_type or hardware.compute_type_for(compute_device)
     model = args.model or hardware.default_model(
-        [entry["id"] for entry in model_catalog.CATALOG], compute_device
+        [entry["id"] for entry in model_catalog.catalog_for(engine_kind)],
+        compute_device,
+        engine_kind,
     )
 
     settings = Settings(
+        engine=engine_kind,
         model_size=model,
         device=compute_device,
         compute_type=compute_type,
@@ -240,7 +245,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                             "current": settings.model_size,
                             "device": settings.device,
                             "catalog": await asyncio.to_thread(
-                                model_catalog.catalog_with_status, settings.device
+                                model_catalog.catalog_with_status, settings.device, settings.engine
                             ),
                         })
 
@@ -322,19 +327,17 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     print(f"  UI:        http://{ui_host}:{settings.http_port}")
     print(f"  WebSocket: ws://{ui_host}:{settings.ws_port}")
 
-    # Probed unconditionally, not inside the CUDA branch. Force CPU skips the GPU probe
-    # entirely, so an ARM user with that setting on would otherwise get no report at all -
-    # exactly the machine where "the engine will not load" is the whole story. Cached, so the
-    # auto path that already probed during argument parsing does not report twice.
     from . import hardware as _hw
 
-    _hw.engine_importable()
+    if settings.engine == "ct2":
+        # Force CPU skips the GPU probe, so explicitly report a CT2 load failure there too.
+        # ONNX builds must not probe an engine they deliberately do not ship.
+        _hw.engine_importable()
 
-    # Recorded plainly rather than as [error], because emulation is not by itself a failure:
-    # Prism emulates AVX2 on recent Windows, so the x64 engine may load and run, just slowly.
-    # If it does not load, engine_importable() reports the real failure with the same machine name.
-    if _hw.is_emulated():
-        print("  Note:      x64 engine running under ARM64 emulation; expect it to be slow")
+        # Prism emulation is only relevant to the x64 CT2 build. A native ARM64 ONNX process
+        # should not warn about the architecture it was built for.
+        if _hw.is_emulated():
+            print("  Note:      x64 engine running under ARM64 emulation; expect it to be slow")
 
     model_ready = asyncio.Event()
     chosen_model = settings.model_size
@@ -350,7 +353,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         try:
             from . import models as model_catalog
 
-            if not model_catalog.is_available(model_id).available:
+            if not model_catalog.is_available(model_id, settings.engine).available:
                 emit({"type": "download_started", "model": model_id})
                 print(f"Downloading {model_id} ...", flush=True)
 
@@ -370,7 +373,9 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                         "percent": round(100 * done / total, 1) if total else 0.0,
                     })
 
-                await asyncio.to_thread(model_catalog.download, model_id, on_progress)
+                await asyncio.to_thread(
+                    model_catalog.download, model_id, on_progress, settings.engine
+                )
                 print(f"Downloaded {model_id}", flush=True)
 
             emit({"type": "download_complete", "model": model_id})
@@ -387,11 +392,11 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         # Decide up front whether we can load, or must ask the user to pick and download.
         from . import models as model_catalog
 
-        if model_catalog.is_available(settings.model_size).available:
+        if model_catalog.is_available(settings.model_size, settings.engine).available:
             model_ready.set()
         else:
             catalog = await asyncio.to_thread(
-                model_catalog.catalog_with_status, settings.device
+                model_catalog.catalog_with_status, settings.device, settings.engine
             )
             latest_status = {
                 "type": "model_required",
@@ -426,7 +431,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
 
         from .engine import create_engine
 
-        engine = await asyncio.to_thread(create_engine, settings)
+        engine = await asyncio.to_thread(create_engine, settings, settings.engine)
         warmup_ms = await asyncio.to_thread(engine.warmup)
         print(f"Model ready (warmup {warmup_ms:.0f} ms)")
 

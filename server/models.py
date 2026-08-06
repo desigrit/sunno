@@ -46,8 +46,8 @@ _REPOS: dict[str, str] = {
     "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
 }
 
-# Offered at first run. Ordered best-first; the UI marks the first as recommended.
-CATALOG: list[dict] = [
+# Offered at first run on CTranslate2. Ordered best-first; the UI marks the first as recommended.
+_CT2_CATALOG: list[dict] = [
     {
         "id": "large-v3",
         "name": "Whisper large-v3",
@@ -78,12 +78,40 @@ CATALOG: list[dict] = [
     },
 ]
 
-_ALLOW_PATTERNS = [
+_ONNX_CATALOG: list[dict] = [
+    {
+        "id": "base",
+        "name": "Whisper base",
+        "detail": "Best accuracy available on ARM. Recommended.",
+        "approx_mb": 202,
+        "languages": "multilingual",
+    },
+    {
+        "id": "tiny",
+        "name": "Whisper tiny",
+        "detail": "Faster and smaller, with lower accuracy.",
+        "approx_mb": 129,
+        "languages": "multilingual",
+    },
+]
+
+_ONNX_REPO = "desigrit/Sunno"
+_CT2_ALLOW_PATTERNS = [
     "config.json",
     "preprocessor_config.json",
     "model.bin",
     "tokenizer.json",
     "vocabulary.*",
+]
+_ONNX_FILENAMES = [
+    "audio_processor_config.json",
+    "decoder.onnx",
+    "decoder.onnx.data",
+    "encoder.onnx",
+    "encoder.onnx.data",
+    "genai_config.json",
+    "tokenizer_config.json",
+    "tokenizer.json",
 ]
 
 ProgressFn = Callable[[int, int], None]
@@ -96,7 +124,26 @@ class ModelStatus:
     path: str | None = None
 
 
-def is_available(model_id: str) -> ModelStatus:
+def _engine_kind(engine: str = "auto") -> str:
+    if engine in ("ct2", "onnx"):
+        return engine
+    from .engine import resolve_engine
+
+    return resolve_engine(engine)
+
+
+def catalog_for(engine: str = "auto") -> list[dict]:
+    """Models the selected engine can actually load."""
+    return _ONNX_CATALOG if _engine_kind(engine) == "onnx" else _CT2_CATALOG
+
+
+def _allow_patterns(model_id: str, engine: str) -> list[str]:
+    if engine == "onnx":
+        return [f"{model_id}/{name}" for name in _ONNX_FILENAMES]
+    return _CT2_ALLOW_PATTERNS
+
+
+def is_available(model_id: str, engine: str = "auto") -> ModelStatus:
     """True when the model is already in the local cache, so no download is needed.
 
     Asks huggingface_hub directly rather than faster_whisper.utils.download_model. The two
@@ -105,12 +152,18 @@ def is_available(model_id: str) -> ModelStatus:
     whole backend down on a machine where CTranslate2 will not load, before anything had a
     chance to explain why.
     """
-    from huggingface_hub import snapshot_download
+    kind = _engine_kind(engine)
+    if kind == "onnx":
+        try:
+            return ModelStatus(model_id, True, str(onnx_model_path(model_id)))
+        except FileNotFoundError:
+            return ModelStatus(model_id, False)
 
+    from huggingface_hub import snapshot_download
     try:
         path = snapshot_download(
-            _repo_id(model_id),
-            allow_patterns=_ALLOW_PATTERNS,
+            _repo_id(model_id, kind),
+            allow_patterns=_allow_patterns(model_id, kind),
             local_files_only=True,
         )
         return ModelStatus(model_id, True, path)
@@ -118,7 +171,7 @@ def is_available(model_id: str) -> ModelStatus:
         return ModelStatus(model_id, False)
 
 
-def catalog_with_status(device: str | None = None) -> list[dict]:
+def catalog_with_status(device: str | None = None, engine: str = "auto") -> list[dict]:
     """Catalog entries plus local availability and expected decode lag.
 
     The lag matters as much as the accuracy: on a CPU-only machine large-v3 runs about
@@ -128,13 +181,14 @@ def catalog_with_status(device: str | None = None) -> list[dict]:
     """
     from . import hardware
 
+    kind = _engine_kind(engine)
     device = device or hardware.resolve_device()
     entries = []
-    for entry in CATALOG:
-        lag_ms = hardware.estimated_lag_ms(entry["id"], device)
+    for entry in catalog_for(kind):
+        lag_ms = hardware.estimated_lag_ms(entry["id"], device, kind)
         entries.append(dict(
             entry,
-            available=is_available(entry["id"]).available,
+            available=is_available(entry["id"], kind).available,
             lag_ms=lag_ms,
             lag_text=hardware.describe_lag(lag_ms),
             responsive=lag_ms <= hardware.RESPONSIVE_LAG_MS,
@@ -142,13 +196,15 @@ def catalog_with_status(device: str | None = None) -> list[dict]:
     return entries
 
 
-def _repo_id(model_id: str) -> str:
+def _repo_id(model_id: str, engine: str = "ct2") -> str:
     """The Hub repo holding a model id.
 
     A path or an explicit "org/name" passes through, so a user-supplied model still works. An
     id that is neither known nor qualified is returned unchanged and will fail at the Hub -
     which is the same behaviour as before and is at least honest about not knowing it.
     """
+    if engine == "onnx":
+        return _ONNX_REPO
     if "/" in model_id:
         return model_id
     return _REPOS.get(model_id, model_id)
@@ -166,11 +222,9 @@ def onnx_model_path(model_id: str) -> Path:
     like a very slow startup.
     """
     root = _onnx_root() / model_id
-    if (root / "genai_config.json").is_file():
+    if all((root / name).is_file() for name in _ONNX_FILENAMES):
         return root
     # snapshot_download keeps the repo's own layout, so the config may sit one level down.
-    for nested in root.glob("*/genai_config.json"):
-        return nested.parent
     raise FileNotFoundError(
         f"No ONNX build of '{model_id}' at {root}. It has to be downloaded before the engine "
         "can start."
@@ -183,31 +237,41 @@ def _onnx_root() -> Path:
     return Path(base) / "Sunno" / "onnx-models"
 
 
-def total_size_bytes(model_id: str) -> int:
+def total_size_bytes(model_id: str, engine: str = "auto") -> int:
     """Exact download size from the Hub, so progress is real rather than estimated."""
     import fnmatch
 
     from huggingface_hub import HfApi
 
+    kind = _engine_kind(engine)
     try:
-        info = HfApi().model_info(_repo_id(model_id), files_metadata=True)
+        info = HfApi().model_info(_repo_id(model_id, kind), files_metadata=True)
     except Exception:
-        entry = next((e for e in CATALOG if e["id"] == model_id), None)
+        entry = next((e for e in catalog_for(kind) if e["id"] == model_id), None)
         return int(entry["approx_mb"] * 1024 * 1024) if entry else 0
 
+    patterns = _allow_patterns(model_id, kind)
     total = 0
     for sibling in info.siblings or []:
-        if any(fnmatch.fnmatch(sibling.rfilename, p) for p in _ALLOW_PATTERNS):
+        if any(fnmatch.fnmatch(sibling.rfilename, p) for p in patterns):
             total += sibling.size or 0
     return total
 
 
-def download(model_id: str, on_progress: ProgressFn | None = None) -> str:
+def download(
+    model_id: str,
+    on_progress: ProgressFn | None = None,
+    engine: str = "auto",
+) -> str:
     """Download a model, reporting cumulative bytes. Resumes an interrupted download."""
     from huggingface_hub import snapshot_download
     from tqdm.auto import tqdm
 
-    total = total_size_bytes(model_id)
+    kind = _engine_kind(engine)
+    if kind == "onnx" and model_id not in {entry["id"] for entry in _ONNX_CATALOG}:
+        raise ValueError(f"ONNX engine does not support model '{model_id}'")
+
+    total = total_size_bytes(model_id, kind)
     state = {"done": 0}
     lock = threading.Lock()
 
@@ -239,10 +303,11 @@ def download(model_id: str, on_progress: ProgressFn | None = None) -> str:
             return result
 
     path = snapshot_download(
-        _repo_id(model_id),
-        allow_patterns=_ALLOW_PATTERNS,
+        _repo_id(model_id, kind),
+        allow_patterns=_allow_patterns(model_id, kind),
+        local_dir=str(_onnx_root()) if kind == "onnx" else None,
         tqdm_class=_ReportingTqdm,
     )
     if on_progress:
         on_progress(total, total)
-    return path
+    return str(onnx_model_path(model_id)) if kind == "onnx" else path

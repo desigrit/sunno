@@ -13,6 +13,7 @@ FRAME_MS = FRAME_SAMPLES / SAMPLE_RATE * 1000.0
 @dataclass
 class Settings:
     # --- Model ---
+    engine: str = "auto"
     # large-v3 (not turbo): turbo's pruned 4-layer decoder degrades 2-4x more on
     # accented/meeting speech than on clean audio, and accents are the point here.
     model_size: str = "large-v3"

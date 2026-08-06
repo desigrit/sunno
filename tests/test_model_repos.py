@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from server.models import CATALOG, _REPOS  # noqa: E402
+from server.models import _REPOS, catalog_for  # noqa: E402
 
 failures: list[str] = []
 
@@ -52,7 +52,8 @@ check("every repo matches", not wrong, f"mismatched {wrong}")
 
 # The picker's ids are the ones a user actually reaches, so a gap there is worse than a gap
 # elsewhere in the table.
-unknown = [e["id"] for e in CATALOG if e["id"] not in _REPOS]
+catalog = catalog_for("ct2")
+unknown = [e["id"] for e in catalog if e["id"] not in _REPOS]
 check("every catalog id resolves", not unknown, f"unresolvable {unknown}")
 
 print()
@@ -63,4 +64,4 @@ if failures:
     raise SystemExit(1)
 
 print("ALL PASS")
-print(f"({len(_REPOS)} model ids, {len(CATALOG)} offered in the picker)")
+print(f"({len(_REPOS)} model ids, {len(catalog)} offered in the picker)")

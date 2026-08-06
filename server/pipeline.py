@@ -172,6 +172,7 @@ class AsrWorker:
                     self._engine.settings.model_size,
                     self._engine.settings.device,
                     result.latency_ms,
+                    self._engine.settings.engine,
                 )
 
             self._emit(

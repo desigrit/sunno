@@ -5,6 +5,7 @@ numpy
 
 websockets
 onnxruntime>=1.17
+onnxruntime-genai
 huggingface_hub
 sherpa-onnx
 
