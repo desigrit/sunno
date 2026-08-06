@@ -8,8 +8,10 @@ only adds a catalog, a local-availability check, and progress reporting.
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 # Every model id the engine can load, and where it lives on the Hub.
