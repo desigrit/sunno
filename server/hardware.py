@@ -31,7 +31,22 @@ import os
 # Measured on a Quadro RTX 8000 (float16) and an i9-14900K (int8), faster-whisper 1.x,
 # greedy decode, best of three, utterances of 2/4/8 s averaged. Rerun bench/bench_latency.py
 # to regenerate.
+#
+# base was added later, and its run does not reconcile cleanly with the four rows above. The
+# same pass measured small at 1213 ms against the 810 filed here - about 1.5x slow - while
+# cpu_score moved only 73.0 to 67.32, or 8%. So the probe caught a sixth of the drift and the
+# rest is unexplained load.
+#
+# Anchoring base to small within that run instead (both measured in the same pass, so load
+# cancels) puts it near 294 ms; an earlier run measured 350; the raw figure scaled by cpu_score
+# alone gives 440. 405 is a deliberately conservative pick from that range, because telling
+# someone a model keeps up when it does not is the failure that matters here.
+#
+# Its 4-thread figure is derived from small's 4/16 ratio rather than measured: base's 4-thread
+# pass came out faster than its 16-thread pass, which cannot be right, and the same pass has
+# visible garbage elsewhere (distil-large-v3 at 8.36 s against 3.79 and 3.71).
 _LAG_MS_CUDA: dict[str, int] = {
+    "base": 55,
     "small": 250,
     "medium": 550,
     "distil-large-v3": 500,
@@ -42,12 +57,14 @@ _LAG_MS_CUDA: dict[str, int] = {
 # sublinear — quadrupling threads takes large-v3 from 4.5 s only to 4.4 s — so these are
 # interpolated on a log scale rather than divided by core count.
 _LAG_MS_CPU_4: dict[str, int] = {
+    "base": 730,
     "small": 1450,
     "medium": 3460,
     "distil-large-v3": 4370,
     "large-v3": 4540,
 }
 _LAG_MS_CPU_16: dict[str, int] = {
+    "base": 405,
     "small": 810,
     "medium": 2260,
     "distil-large-v3": 3610,

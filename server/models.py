@@ -8,8 +8,10 @@ only adds a catalog, a local-availability check, and progress reporting.
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 # Every model id the engine can load, and where it lives on the Hub.
@@ -70,11 +72,29 @@ CATALOG: list[dict] = [
     {
         "id": "small",
         "name": "Whisper small",
-        "detail": "Fastest and smallest. Struggles with accents.",
+        "detail": "Much faster. Less reliable on accented speech.",
         "approx_mb": 490,
         "languages": "multilingual",
     },
+    {
+        "id": "base",
+        "name": "Whisper base",
+        "detail": "Fast enough for a laptop with no graphics card. Makes more mistakes.",
+        "approx_mb": 145,
+        "languages": "multilingual",
+    },
 ]
+
+# Deliberately not offered: whisper-tiny.
+#
+# It is the smallest model and it is not the fastest one here. On two-second clips it measured
+# 870 ms against base's 420 - twice as slow - because it hallucinates on short audio and then
+# spends real time decoding words nobody said. One run returned "Attention!" over speech that
+# contained no such word.
+#
+# Short utterances are this app's entire workload, and a caption that invents a word is worse
+# for someone relying on it than a caption that arrives a moment later. base is smaller than
+# anything else offered and is genuinely quick, so tiny buys nothing and costs trust.
 
 _ALLOW_PATTERNS = [
     "config.json",

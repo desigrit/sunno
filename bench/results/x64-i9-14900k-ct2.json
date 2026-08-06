@@ -1,0 +1,383 @@
+{
+  "cpu_score": 67.32,
+  "rows": [
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "tiny",
+      "audio_s": 2.0,
+      "lag_s": 0.15
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "tiny",
+      "audio_s": 4.0,
+      "lag_s": 0.02
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "tiny",
+      "audio_s": 8.0,
+      "lag_s": 0.04
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "base",
+      "audio_s": 2.0,
+      "lag_s": 0.06
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "base",
+      "audio_s": 4.0,
+      "lag_s": 0.04
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "base",
+      "audio_s": 8.0,
+      "lag_s": 0.06
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "small",
+      "audio_s": 2.0,
+      "lag_s": 0.09
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "small",
+      "audio_s": 4.0,
+      "lag_s": 0.07
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "small",
+      "audio_s": 8.0,
+      "lag_s": 0.11
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "medium",
+      "audio_s": 2.0,
+      "lag_s": 0.11
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "medium",
+      "audio_s": 4.0,
+      "lag_s": 0.14
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "medium",
+      "audio_s": 8.0,
+      "lag_s": 0.2
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "distil-large-v3",
+      "audio_s": 2.0,
+      "lag_s": 0.12
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "distil-large-v3",
+      "audio_s": 4.0,
+      "lag_s": 0.13
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "distil-large-v3",
+      "audio_s": 8.0,
+      "lag_s": 0.15
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "large-v3",
+      "audio_s": 2.0,
+      "lag_s": 0.19
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "large-v3",
+      "audio_s": 4.0,
+      "lag_s": 0.23
+    },
+    {
+      "device": "cuda",
+      "threads": null,
+      "model": "large-v3",
+      "audio_s": 8.0,
+      "lag_s": 0.34
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "tiny",
+      "audio_s": 2.0,
+      "lag_s": 0.5
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "tiny",
+      "audio_s": 4.0,
+      "lag_s": 0.22
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "tiny",
+      "audio_s": 8.0,
+      "lag_s": 0.19
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "base",
+      "audio_s": 2.0,
+      "lag_s": 0.37
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "base",
+      "audio_s": 4.0,
+      "lag_s": 0.38
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "base",
+      "audio_s": 8.0,
+      "lag_s": 0.43
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "small",
+      "audio_s": 2.0,
+      "lag_s": 1.08
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "small",
+      "audio_s": 4.0,
+      "lag_s": 1.12
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "small",
+      "audio_s": 8.0,
+      "lag_s": 1.1
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "medium",
+      "audio_s": 2.0,
+      "lag_s": 3.18
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "medium",
+      "audio_s": 4.0,
+      "lag_s": 3.31
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "medium",
+      "audio_s": 8.0,
+      "lag_s": 5.75
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "distil-large-v3",
+      "audio_s": 2.0,
+      "lag_s": 3.79
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "distil-large-v3",
+      "audio_s": 4.0,
+      "lag_s": 8.36
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "distil-large-v3",
+      "audio_s": 8.0,
+      "lag_s": 3.71
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "large-v3",
+      "audio_s": 2.0,
+      "lag_s": 4.22
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "large-v3",
+      "audio_s": 4.0,
+      "lag_s": 4.33
+    },
+    {
+      "device": "cpu",
+      "threads": 4,
+      "model": "large-v3",
+      "audio_s": 8.0,
+      "lag_s": 10.57
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "tiny",
+      "audio_s": 2.0,
+      "lag_s": 0.87
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "tiny",
+      "audio_s": 4.0,
+      "lag_s": 0.23
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "tiny",
+      "audio_s": 8.0,
+      "lag_s": 0.29
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "base",
+      "audio_s": 2.0,
+      "lag_s": 0.42
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "base",
+      "audio_s": 4.0,
+      "lag_s": 0.41
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "base",
+      "audio_s": 8.0,
+      "lag_s": 0.49
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "small",
+      "audio_s": 2.0,
+      "lag_s": 1.11
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "small",
+      "audio_s": 4.0,
+      "lag_s": 1.18
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "small",
+      "audio_s": 8.0,
+      "lag_s": 1.35
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "medium",
+      "audio_s": 2.0,
+      "lag_s": 2.99
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "medium",
+      "audio_s": 4.0,
+      "lag_s": 3.25
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "medium",
+      "audio_s": 8.0,
+      "lag_s": 3.52
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "distil-large-v3",
+      "audio_s": 2.0,
+      "lag_s": 4.31
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "distil-large-v3",
+      "audio_s": 4.0,
+      "lag_s": 4.39
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "distil-large-v3",
+      "audio_s": 8.0,
+      "lag_s": 4.44
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "large-v3",
+      "audio_s": 2.0,
+      "lag_s": 5.25
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "large-v3",
+      "audio_s": 4.0,
+      "lag_s": 5.41
+    },
+    {
+      "device": "cpu",
+      "threads": 16,
+      "model": "large-v3",
+      "audio_s": 8.0,
+      "lag_s": 5.89
+    }
+  ]
+}

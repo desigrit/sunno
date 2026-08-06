@@ -31,14 +31,12 @@ except Exception as exc:  # noqa: BLE001
     print(f"(no CUDA: {str(exc)[:80]})", flush=True)
 SRC = ROOT / "testdata" / "1-two-speakers-en.wav"
 DURATIONS = [2.0, 4.0, 8.0]
-MODELS = ["small", "medium", "distil-large-v3", "large-v3"]
+MODELS = ["tiny", "base", "small", "medium", "distil-large-v3", "large-v3"]
 
-REPO = {
-    "large-v3": "Systran/faster-whisper-large-v3",
-    "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
-    "medium": "Systran/faster-whisper-medium",
-    "small": "Systran/faster-whisper-small",
-}
+# Resolved through server.models rather than a table here. That module already carries the whole
+# id -> repo map and a test pinning it to faster-whisper's own; a second copy in a benchmark is
+# how the shipped lag figures end up describing a different model than the one that was measured.
+from server.models import _repo_id  # noqa: E402
 
 
 def cpu_score() -> float:
@@ -73,7 +71,7 @@ def bench(device: str, compute: str, threads: int | None) -> list[dict]:
         if threads:
             kwargs["cpu_threads"] = threads
         try:
-            model = WhisperModel(REPO[model_id], **kwargs)
+            model = WhisperModel(_repo_id(model_id), **kwargs)
         except Exception as exc:  # noqa: BLE001
             print(f"SKIP {model_id} {device}: {str(exc)[:80]}", flush=True)
             continue
