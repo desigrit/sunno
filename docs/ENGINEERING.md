@@ -300,10 +300,10 @@ Endpointing lives in `server/config.py`:
 
 ## Requirements
 
-**A 64-bit Intel or AMD processor.** The engine is CTranslate2, which publishes no `win_arm64`
-wheel, so an ARM PC runs this build under Prism emulation — slowly at best, and the backend may
-not load at all. `server/hardware.py` reports the native machine via `IsWow64Process2` so that
-case is identifiable in a bug report rather than surfacing as an unexplained exit.
+**A 64-bit Intel, AMD, or ARM processor.** The bundle installs the CTranslate2 backend on x64 and
+the ONNX Runtime GenAI backend on ARM64. ARM offers the base and tiny model tiers natively rather
+than running the x64 engine under Prism. `server/hardware.py` still reports process and native
+machines via `IsWow64Process2` so an accidentally emulated x64 install is identifiable.
 
 A GPU is **optional**. An NVIDIA card with CUDA support is much faster — the measured decode lag
 for large-v3 is 650 ms on CUDA against 4,400–4,540 ms on CPU depending on thread count

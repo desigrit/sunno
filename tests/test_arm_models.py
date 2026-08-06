@@ -5,11 +5,14 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from server import hardware, models  # noqa: E402
+from server import engine, hardware, models  # noqa: E402
 
 failures: list[str] = []
 root = Path(__file__).resolve().parents[1]
@@ -50,6 +53,46 @@ check(
     "CT2 latency keys remain compatible",
     hardware._latency_key("large-v3", "cuda", "ct2") == "cuda:large-v3",
 )
+
+real_import = __import__
+
+
+def fail_genai_import(name: str, *args: object, **kwargs: object) -> object:
+    if name == "onnxruntime_genai":
+        raise ImportError("test missing GenAI runtime")
+    return real_import(name, *args, **kwargs)
+
+
+hardware.engine_importable.cache_clear()
+
+no_engine_log = StringIO()
+with patch.object(
+    engine,
+    "available_engines",
+    return_value={"ct2": False, "onnx": False},
+), redirect_stdout(no_engine_log):
+    try:
+        engine.resolve_engine()
+        no_engine_raised = False
+    except RuntimeError:
+        no_engine_raised = True
+check("missing all engines aborts resolution", no_engine_raised)
+check(
+    "missing all engines emits the host failure marker",
+    "speech engine could not be loaded" in no_engine_log.getvalue(),
+    no_engine_log.getvalue(),
+)
+engine_log = StringIO()
+with patch("builtins.__import__", side_effect=fail_genai_import), redirect_stdout(engine_log):
+    onnx_importable = hardware.engine_importable("onnx")
+check("missing ONNX engine is reported", not onnx_importable)
+check(
+    "ONNX load failure uses architecture-neutral wording",
+    "onnx speech engine could not be loaded" in engine_log.getvalue()
+    and "Intel or AMD" not in engine_log.getvalue(),
+    engine_log.getvalue(),
+)
+hardware.engine_importable.cache_clear()
 
 with tempfile.TemporaryDirectory() as temp:
     previous = os.environ.get("LOCALAPPDATA")

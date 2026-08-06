@@ -329,11 +329,10 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
 
     from . import hardware as _hw
 
-    if settings.engine == "ct2":
-        # Force CPU skips the GPU probe, so explicitly report a CT2 load failure there too.
-        # ONNX builds must not probe an engine they deliberately do not ship.
-        _hw.engine_importable()
+    if not _hw.engine_importable(settings.engine):
+        raise RuntimeError(f"The {settings.engine} speech engine is not available")
 
+    if settings.engine == "ct2":
         # Prism emulation is only relevant to the x64 CT2 build. A native ARM64 ONNX process
         # should not warn about the architecture it was built for.
         if _hw.is_emulated():

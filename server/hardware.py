@@ -145,32 +145,33 @@ def is_emulated() -> bool:
     return process != native
 
 
-@functools.lru_cache(maxsize=1)
-def engine_importable() -> bool:
+@functools.lru_cache(maxsize=2)
+def engine_importable(engine: str = "ct2") -> bool:
     """Whether the inference engine's native extension loads at all.
 
     Deliberately separate from :func:`has_cuda`. Loadability is not a GPU question, but it used
     to be observable only as a side effect of the CUDA probe - which the user can switch off with
-    Force CPU, silencing the answer on the one machine that most needs it. CTranslate2 publishes
-    no win_arm64 wheel, so an ARM PC is the likely cause of a failure here.
+    Force CPU, silencing the answer on the one machine that most needs it. Both packaged engines
+    are checked here so a missing native runtime is reported before model loading on either build.
 
-    Cached so the report is made once per process rather than on every device resolution.
+    Cached per engine so the report is made once per process rather than on every device
+    resolution.
     """
     try:
-        import ctranslate2  # noqa: F401
+        if engine == "ct2":
+            import ctranslate2  # noqa: F401
+        elif engine == "onnx":
+            import onnxruntime_genai  # noqa: F401
+        else:
+            raise ValueError(f"Unknown speech engine: {engine}")
 
         return True
     except (ImportError, OSError) as exc:
-        # Split out from the catch-all below on purpose. This is the one failure here that does
-        # not mean "no GPU": the extension itself would not load, so the CPU path is dead too and
-        # the process will die loading the model. Reporting a healthy-looking "cpu" and saying
-        # nothing is what made that death unexplainable.
         print(
-            f"[error] ctranslate2 could not be loaded (native machine {native_machine()}): {exc}",
+            f"[error] {engine} speech engine could not be loaded "
+            f"(native machine {native_machine()}): {exc}",
             flush=True,
         )
-        return False
-    except Exception:
         return False
 
 

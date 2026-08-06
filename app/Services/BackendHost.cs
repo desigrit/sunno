@@ -15,14 +15,14 @@ public sealed class BackendHost : IDisposable
     private readonly ChildProcessJob _job = new();
     private readonly List<string> _log = new();
     private readonly object _logLock = new();
+    private readonly HashSet<Process> _expectedExits = [];
 
     /// <summary>
-    /// Whether the engine reported that it could not be loaded at all, and whether it said so
-    /// on an ARM machine. Distinct from "no GPU": the CPU path is dead too, so the process is
-    /// going to die whatever the user does next. Guarded by <see cref="_logLock"/>.
+    /// Whether the engine reported that it could not be loaded at all. Distinct from "no GPU":
+    /// the CPU path is dead too, so the process is going to die whatever the user does next.
+    /// Guarded by <see cref="_logLock"/>.
     /// </summary>
     private bool _engineUnloadable;
-    private bool _engineUnloadableOnArm;
 
     public event Action<string>? Output;
 
@@ -33,9 +33,6 @@ public sealed class BackendHost : IDisposable
     /// </summary>
     /// <summary>Fired when the backend exits unexpectedly: a human reason, and the detail.</summary>
     public event Action<string, string>? Crashed;
-
-    /// <summary>Set during Dispose so a deliberate shutdown isn't reported as a crash.</summary>
-    private bool _stopping;
 
     public bool IsRunning => _process is { HasExited: false };
 
@@ -123,19 +120,16 @@ public sealed class BackendHost : IDisposable
     {
         if (IsRunning) return "already running";
 
-        // Dispose latches _stopping and permanently closes the job object. Starting after a
+        // Dispose permanently closes the job object. Starting after a
         // Dispose would therefore produce a child that is neither crash-reported nor tied to
         // kill-on-close — a capture process able to outlive a killed UI with the microphone
         // still open. Refuse rather than start something unsafe; use Restart to cycle.
         if (_job.IsDisposed)
             return "Sunno needs to be restarted before speech recognition can start again.";
-        _stopping = false;
-        // Cleared per launch. A stale latch would let one bad start put a permanent "needs an
-        // Intel or AMD processor" on a machine where the next start worked.
+        // Cleared per launch so a repaired or transient load failure does not poison a restart.
         lock (_logLock)
         {
             _engineUnloadable = false;
-            _engineUnloadableOnArm = false;
         }
 
         var python = FindPython();
@@ -197,14 +191,30 @@ public sealed class BackendHost : IDisposable
             psi.Environment["MSIX_PACKAGE_ROOT"] = InstallRoot;
         }
 
-        _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        _process.OutputDataReceived += (_, e) => Record(e.Data);
-        _process.ErrorDataReceived += (_, e) => Record(e.Data);
-        _process.Exited += (_, _) =>
+        var outputClosed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var errorClosed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        _process = process;
+        process.OutputDataReceived += (_, e) =>
         {
-            if (_stopping) return;
+            if (e.Data is null) outputClosed.TrySetResult();
+            else Record(e.Data);
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is null) errorClosed.TrySetResult();
+            else Record(e.Data);
+        };
+        process.Exited += async (_, _) =>
+        {
+            // Exited can run before the final redirected line is delivered. Wait for both EOF
+            // notifications so a fast startup failure cannot outrun its actionable marker.
+            await Task.WhenAll(outputClosed.Task, errorClosed.Task).ConfigureAwait(false);
+            if (ConsumeExpectedExit(process)) return;
             var code = -1;
-            try { code = _process?.ExitCode ?? -1; } catch { /* raced with disposal */ }
+            try { code = process.ExitCode; } catch { /* raced with disposal */ }
             var (reason, detail) = DescribeExit(code);
             Crashed?.Invoke(reason, detail);
         };
@@ -220,11 +230,13 @@ public sealed class BackendHost : IDisposable
                 // job survives a killed UI still holding the microphone open. Suppress the
                 // Exited handler first, or this deliberate kill would also be announced as a
                 // crash on top of the error this returns.
-                _stopping = true;
+                ExpectExit(process);
+                // Readers have not started, so no EOF callbacks will arrive for this process.
+                outputClosed.TrySetResult();
+                errorClosed.TrySetResult();
                 try { _process.Kill(entireProcessTree: true); } catch { /* already gone */ }
                 _process.Dispose();
                 _process = null;
-                _stopping = false;
                 return "Could not supervise the speech engine; not starting it.";
             }
             _process.BeginOutputReadLine();
@@ -260,29 +272,61 @@ public sealed class BackendHost : IDisposable
                           bool startStopped = false, string? loopbackDevice = null,
                           string? computeDevice = null)
     {
-        _stopping = true;
-        try
+        if (_process is not null)
         {
-            if (_process is not null)
+            var process = _process;
+            ExpectExit(process);
+            try
             {
-                try
+                if (!process.HasExited)
                 {
-                    if (!_process.HasExited)
+                    process.Kill(entireProcessTree: true);
+                    if (!process.WaitForExit(10000))
                     {
-                        _process.Kill(entireProcessTree: true);
-                        _process.WaitForExit(10000);
+                        App.Trace("engine restart aborted: old process did not exit after kill");
+                        return "Sunno could not stop the previous speech engine. Restart the app "
+                               + "before changing models.";
                     }
                 }
-                catch { /* already gone */ }
-                _process.Dispose();
-                _process = null;
+                // The timed overload only confirms process termination. The parameterless call
+                // additionally waits for both asynchronous output readers to finish, preventing
+                // old diagnostics from racing the replacement launch's state reset.
+                process.WaitForExit();
             }
-        }
-        finally
-        {
-            _stopping = false;
+            catch (InvalidOperationException)
+            {
+                // It exited between HasExited and Kill; redirected output still has to drain.
+                try
+                {
+                    process.WaitForExit();
+                }
+                catch (Exception ex)
+                {
+                    App.Trace($"engine restart drain failed: {ex.GetType().Name}: {ex.Message}");
+                    return "Sunno could not stop the previous speech engine. Restart the app "
+                           + "before changing models.";
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Trace($"engine restart aborted: {ex.GetType().Name}: {ex.Message}");
+                return "Sunno could not stop the previous speech engine. Restart the app before "
+                       + "changing models.";
+            }
+            process.Dispose();
+            _process = null;
         }
         return Start(device, model, vocabulary, startStopped, loopbackDevice, computeDevice);
+    }
+
+    private void ExpectExit(Process process)
+    {
+        lock (_logLock) _expectedExits.Add(process);
+    }
+
+    private bool ConsumeExpectedExit(Process process)
+    {
+        lock (_logLock) return _expectedExits.Remove(process);
     }
 
     private void Record(string? line)
@@ -293,14 +337,10 @@ public sealed class BackendHost : IDisposable
             // Latched here rather than searched for at exit time. The engine announces this
             // failure early in startup, and the traceback that follows when the model finally
             // loads would push it out of the handful of lines RecentDiagnostics keeps. Only the
-            // two booleans are retained, never the line, so this cannot become a second route
+            // boolean is retained, never the line, so this cannot become a second route
             // for backend text to reach the export.
-            if (line.Contains("ctranslate2 could not be loaded", StringComparison.Ordinal))
-            {
+            if (line.Contains("speech engine could not be loaded", StringComparison.Ordinal))
                 _engineUnloadable = true;
-                if (line.Contains("native machine ARM64", StringComparison.Ordinal))
-                    _engineUnloadableOnArm = true;
-            }
 
             _log.Add(line);
             if (_log.Count > 500) _log.RemoveAt(0);
@@ -407,11 +447,10 @@ public sealed class BackendHost : IDisposable
         // worse than showing no detail at all.
         var detail = RecentDiagnostics();
 
-        bool unloadable, onArm;
+        bool unloadable;
         lock (_logLock)
         {
             unloadable = _engineUnloadable;
-            onArm = _engineUnloadableOnArm;
         }
 
         // Name the cause when the backend's own output identifies it. Anything not recognised
@@ -433,15 +472,6 @@ public sealed class BackendHost : IDisposable
         {
             reason = "Sunno's speech engine could not start because its connection was still in use. "
                      + "Restarting Sunno should clear it.";
-        }
-        else if (unloadable && onArm)
-        {
-            // Separated from the generic load failure because it is the one case with no remedy
-            // available to the user. There is no ARM build of the engine to fall back to, so
-            // "reinstalling usually repairs it" would be false comfort and would send someone
-            // through a package this size for nothing.
-            reason = "Sunno's speech engine needs a 64-bit Intel or AMD processor, so it cannot "
-                     + "run on this ARM PC.";
         }
         else if (unloadable)
         {
@@ -501,9 +531,9 @@ public sealed class BackendHost : IDisposable
 
     public void Dispose()
     {
-        _stopping = true;
         if (_process is not null)
         {
+            ExpectExit(_process);
             try
             {
                 if (!_process.HasExited)

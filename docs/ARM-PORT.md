@@ -85,14 +85,16 @@ with zero x64 binaries. Executable inputs and every ARM wheel are version- and h
 `build-msix.ps1` publishes and validates both complete layouts, signs standalone x64 and ARM64
 packages, and produces a signed 928 MB `Sunno.msixbundle` whose deterministic `1.0.60.0`
 manifest contains exactly those two architectures.
+Startup now probes whichever engine the package carries. A failed ONNX import on ARM is reported
+as a damaged engine installation with the same repair guidance as x64, not as an unsupported CPU.
 
 ---
 
 ## What is left
 
-1. **Unwind the ARM refusal.** `c04e3fe` makes the app say *"Sunno's speech engine needs a
-   64-bit Intel or AMD processor"* — correct for x64-only, wrong once an ARM build exists. See
-   `hardware.py engine_importable()` and `BackendHost._engineUnloadableOnArm`.
+1. **Owner decision: per-word uncertainty.** ONNX Runtime GenAI exposes neither word confidence
+   nor the log probabilities needed to derive it. Decide whether the native ARM build should
+   render every word normally; this is separate from the already-dropped Clarity badge.
 
 ---
 

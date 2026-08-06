@@ -86,12 +86,14 @@ def resolve_engine(preference: str = "auto") -> str:
         return "ct2"
     if have["onnx"]:
         return "onnx"
-    # Neither. Say so here rather than letting an ImportError surface from three frames deep
-    # in a decode call, where it reads as a missing model rather than a missing engine.
-    raise RuntimeError(
+    # Neither. Emit the same marker as a native import failure before raising: this path runs
+    # during argument resolution, before app.run() can call hardware.engine_importable().
+    message = (
         "No speech engine is available. Expected either ctranslate2 (Intel and AMD builds) "
         "or onnxruntime-genai (ARM builds); neither could be imported."
     )
+    print(f"[error] auto speech engine could not be loaded: {message}", flush=True)
+    raise RuntimeError(message)
 
 
 def create_engine(settings: "Settings", preference: str = "auto") -> SpeechEngine:
