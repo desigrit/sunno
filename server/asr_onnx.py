@@ -13,7 +13,7 @@ Two things the CTranslate2 path provides and this one does not:
 * Clarity, the per-utterance confidence badge. It comes from segment log-probabilities, which
   genai does not expose. Transcript.clarity is already optional and the UI has a toggle for it.
 * Per-word uncertainty, which greys words the model was unsure of. That needs per-token
-  probabilities, also unavailable here.
+  probabilities, also unavailable here, so the UI renders every word normally.
 
 Both are reported as absent rather than invented. A confidence figure that is really a guess is
 worse than no figure at all for someone relying on this to follow a conversation.

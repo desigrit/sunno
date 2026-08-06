@@ -98,7 +98,7 @@ public static class WordInlines
             var words = line.Words;
             if (words is null || words.Count == 0)
             {
-                // Provisional text, or a model that returned no word data.
+                // Provisional text, or the ARM engine's intentional no-confidence result.
                 paragraph.Inlines.Add(new Run { Text = line.Text });
                 block.SetValue(RangesProperty, null);
                 AttachTooltip(block);

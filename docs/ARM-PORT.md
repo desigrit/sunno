@@ -17,14 +17,11 @@ different engine and models underneath.
 | **Latency beats accuracy on ARM** | A caption that arrives late is worse than a caption with a wrong word in it. |
 | **No Prism emulation as a strategy** | Emulation would be tuned to whichever laptop it was tested on, and most ARM machines are weaker. |
 | **Clarity % can go on ARM** | The confidence badge is worth less than the latency it would cost to compute. |
+| **No invented word confidence** | GenAI exposes no token probabilities, so ARM renders every word normally rather than guessing which ones are uncertain. |
 
 So the ARM tier is **base (297 ms)** with **tiny (132 ms)** below it. `small` (987 ms)
 and the NPU path (1132 ms) are too slow to be defaults. Design for a mid-range Snapdragon on
 battery in Balanced mode, not a fast one plugged in.
-
-**Still undecided:** per-word uncertainty (`WordInlines.cs:135-144` greys words below
-`UncertainBelow = 0.55` on *all* lines — a different feature from Clarity, which shows only on
-your own lines, and arguably more valuable to a hard-of-hearing user).
 
 Speaker labelling is off in the native ARM build because sherpa-onnx has no importable Windows
 ARM64 artifact. The owner chose not to show a warning for an optional feature. System-audio
@@ -92,9 +89,9 @@ as a damaged engine installation with the same repair guidance as x64, not as an
 
 ## What is left
 
-1. **Owner decision: per-word uncertainty.** ONNX Runtime GenAI exposes neither word confidence
-   nor the log probabilities needed to derive it. Decide whether the native ARM build should
-   render every word normally; this is separate from the already-dropped Clarity badge.
+1. **Test on the owner's Snapdragon X laptop.** The native package, engine imports and model
+   decode have been exercised independently, but installation, capture and sustained captions
+   still need a physical ARM64 Windows run.
 
 ---
 
