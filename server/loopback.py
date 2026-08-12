@@ -38,6 +38,19 @@ _SILENCE = np.zeros(FRAME_SAMPLES, dtype=np.float32)
 _LOOPBACK_SUFFIX = " [Loopback]"
 
 
+def _strip_loopback_suffix(name: str) -> str:
+    """The endpoint's own name, without the tag the loopback enumeration appends.
+
+    Shared rather than inlined because the default-output comparison depends on both sides
+    having been through exactly the same treatment. The render endpoint that Windows names
+    as the default carries no suffix, and the capture-side twin of the same device does, so
+    comparing them raw never matches.
+    """
+    if name.endswith(_LOOPBACK_SUFFIX):
+        return name[: -len(_LOOPBACK_SUFFIX)]
+    return name
+
+
 def _pyaudio():
     import pyaudiowpatch as pa
 
@@ -49,7 +62,11 @@ def list_loopback_devices() -> list[dict]:
     pa = _pyaudio()
     audio = pa.PyAudio()
     try:
-        default_name = ""
+        # None, not "", so "we could not find out" stays distinguishable from "it is called
+        # nothing". An empty string here used to be compared with `in`, and every name
+        # contains the empty string, so a machine that failed this lookup marked its entire
+        # output list as the default.
+        default_name: str | None = None
         try:
             wasapi = audio.get_host_api_info_by_type(pa.paWASAPI)
             default_name = audio.get_device_info_by_index(
@@ -57,14 +74,14 @@ def list_loopback_devices() -> list[dict]:
             )["name"]
         except Exception:
             pass
+        if default_name is not None:
+            default_name = _strip_loopback_suffix(default_name).strip()
 
         devices = []
         for dev in audio.get_loopback_device_info_generator():
             # The suffix is an implementation detail of the loopback enumeration; the user
             # recognises the device by its own name.
-            name = dev["name"]
-            if name.endswith(_LOOPBACK_SUFFIX):
-                name = name[: -len(_LOOPBACK_SUFFIX)]
+            name = _strip_loopback_suffix(dev["name"])
             devices.append(
                 {
                     "index": int(dev["index"]),
@@ -73,7 +90,18 @@ def list_loopback_devices() -> list[dict]:
                     "default_samplerate": float(dev["defaultSampleRate"]),
                     "hostapi": "Windows WASAPI",
                     "loopback": True,
-                    "is_default_output": name in default_name or default_name in name,
+                    # Exact match, on names both put through the same stripping.
+                    #
+                    # This was a two-way substring test, which is wrong in both directions:
+                    # every string contains "", so a failed default lookup marked the whole
+                    # list as default, and any pair sharing a fragment matched each other —
+                    # "Realtek" against "Speakers (Realtek Audio)" is a true that means
+                    # nothing. Marking the wrong endpoint as the default is not cosmetic
+                    # once the UI starts selecting by it: it captures a device the user is
+                    # not listening to, and silently captioning the wrong thing is the
+                    # failure this app can least afford.
+                    "is_default_output": default_name is not None
+                    and name.strip() == default_name,
                 }
             )
         return devices
