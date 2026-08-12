@@ -58,6 +58,7 @@ def list_input_devices() -> list[dict]:
 
     live = [d for d in devices if d["hostapi"] == _LIVE_HOST_API]
     if not live:
+        _mark_default(devices)
         return devices
 
     hidden = len(devices) - len(live)
@@ -72,7 +73,23 @@ def list_input_devices() -> list[dict]:
             f"{hidden} hidden as not currently connected",
             flush=True,
         )
+    _mark_default(live)
     return live
+
+
+def _mark_default(devices: list[dict]) -> None:
+    """Flag the one device that is in use when nobody has chosen.
+
+    Computed here rather than in the /devices.json handler so that the refresh path gets it
+    too — refresh runs `list_input_devices` in a child process, and a flag added downstream
+    of that would be present at startup and missing after a refresh.
+
+    Exactly one entry is marked, or none. The picker uses this to say which microphone is
+    being captured on a first run, and two candidates would be worse than none.
+    """
+    default = _default_input_index(devices)
+    for d in devices:
+        d["is_default_input"] = d["index"] == default
 
 
 def _default_input_index(devices: list[dict]) -> int:
@@ -196,6 +213,31 @@ class MicrophoneOpenError(RuntimeError):
         return "\n  ".join(self.failures)
 
 
+def _default_device() -> int | None:
+    """Which microphone to open when nobody has chosen one.
+
+    Resolved once, in the constructor, rather than at each place that wants it. There are
+    three: the stream open itself, the format probe, and the name used for logging. Letting
+    them each ask separately is how you end up describing one device while capturing
+    another — and the answer here differs from PortAudio's own, so that divergence would be
+    real rather than theoretical.
+
+    PortAudio's global default is an MME index on Windows. It works, and it is roughly as
+    fast, but the picker only offers WASAPI devices, so a user who never chooses gets a
+    device the list cannot show them, cannot explain, and cannot return them to. That is the
+    reason to prefer the WASAPI default here, not speed.
+
+    None when nothing resolves, which hands the decision back to PortAudio exactly as
+    before. A machine with no capture hardware at all should fail where it always failed.
+    """
+    try:
+        devices = list_input_devices()
+    except Exception:
+        return None
+    idx = _default_input_index(devices)
+    return idx if idx >= 0 else None
+
+
 class MicrophoneStream:
     """Yields mono float32 frames of exactly FRAME_SAMPLES at SAMPLE_RATE.
 
@@ -205,7 +247,7 @@ class MicrophoneStream:
     """
 
     def __init__(self, device: int | str | None = None, max_queued_blocks: int = 128):
-        self.device = device
+        self.device = device if device is not None else _default_device()
         self._queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=max_queued_blocks)
         self._stream: sd.InputStream | None = None
         self.dropped_blocks = 0

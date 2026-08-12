@@ -21,7 +21,8 @@ using Windows.Security.Authorization.AppCapabilityAccess;
 namespace Sunno;
 
 /// <summary>A microphone the backend can capture from.</summary>
-public sealed record AudioDevice(int Index, string Name, string HostApi, bool Loopback = false);
+public sealed record AudioDevice(int Index, string Name, string HostApi, bool Loopback = false,
+                                 bool IsDefault = false);
 
 /// <summary>A model shown in first-run setup.</summary>
 public sealed record ModelChoice(string Id, string Name, string Detail, int ApproxMb, bool Available,
@@ -1138,7 +1139,16 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// </summary>
     private void TryStartCapture()
     {
-        if (!_micGranted || _micDeclined || !_startedPaused || _captureRequested || !_connected) return;
+        // Microphone consent gates the microphone, not captioning.
+        //
+        // System audio is captured from an output endpoint, which Windows does not put behind
+        // the microphone permission and which records nobody in the room. Gating it here meant
+        // that someone who declined the microphone — a reasonable thing to do, and the exact
+        // person most likely to be careful about it — could not caption a video call either,
+        // and got no explanation, because the refusal happens before anything draws a banner.
+        var loopback = _settings.LoopbackDeviceIndex is not null;
+        if (!loopback && (!_micGranted || _micDeclined)) return;
+        if (!_startedPaused || _captureRequested || !_connected) return;
         _captureRequested = true;
         _ = _client.StartCaptureAsync();
     }
@@ -2035,8 +2045,14 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             var name = d.TryGetProperty("name", out var n) ? n.GetString()?.Trim() : null;
             var api = d.TryGetProperty("hostapi", out var h) ? h.GetString() : null;
             var loopback = d.TryGetProperty("loopback", out var l) && l.ValueKind == JsonValueKind.True;
+            // One flag, two names, because a microphone and an output endpoint are different
+            // enough that the backend computes them separately — but the UI only ever asks
+            // "is this the one Windows would have chosen", so they collapse here.
+            var isDefault =
+                (d.TryGetProperty("is_default_input", out var di) && di.ValueKind == JsonValueKind.True)
+                || (d.TryGetProperty("is_default_output", out var dof) && dof.ValueKind == JsonValueKind.True);
             if (index >= 0 && !string.IsNullOrEmpty(name))
-                result.Add(new AudioDevice(index, name!, api ?? string.Empty, loopback));
+                result.Add(new AudioDevice(index, name!, api ?? string.Empty, loopback, isDefault));
         }
         return result;
     }
@@ -2383,7 +2399,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         var wanted = _settings.LoopbackDeviceIndex ?? _settings.DeviceIndex;
         var loopback = _settings.LoopbackDeviceIndex is not null;
-        if (wanted is null) return;
+        if (wanted is null)
+        {
+            SelectSystemDefaultDevice();
+            return;
+        }
 
         foreach (var item in DevicePicker.Items.OfType<ComboBoxItem>())
         {
@@ -2396,6 +2416,35 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             ToolTipService.SetToolTip(DevicePicker, entry.Device.Loopback
                 ? $"Captioning system audio from {entry.Device.Name}"
                 : $"Captioning the microphone {entry.Device.Name}");
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Name the microphone nobody chose.
+    ///
+    /// On a first run there is no saved device, so the picker used to sit on its placeholder
+    /// while the backend quietly captured whatever Windows had set as the default. The app
+    /// was working and unable to say so — for someone who cannot hear the room, "which
+    /// microphone is this actually listening to" is not a curiosity, it is the difference
+    /// between trusting a blank transcript and not.
+    ///
+    /// Selected under the existing event suppression, since this describes the device the
+    /// backend already opened. Assigning it unsuppressed would hand it to OnDeviceChanged,
+    /// which persists a choice the user never made and restarts a backend that is mid-launch.
+    /// </summary>
+    private void SelectSystemDefaultDevice()
+    {
+        foreach (var item in DevicePicker.Items.OfType<ComboBoxItem>())
+        {
+            if (item.Tag is not DeviceEntry entry) continue;
+            // Microphones only. An output endpoint can be flagged as the default place sound
+            // is played to, which is a different question from what to capture, and starting
+            // a new user on their speakers would caption the room's silence.
+            if (entry.Device.Loopback || !entry.Device.IsDefault) continue;
+            DevicePicker.SelectedItem = item;
+            ToolTipService.SetToolTip(DevicePicker,
+                $"Captioning the microphone {entry.Device.Name}, your Windows default");
             return;
         }
     }
@@ -2417,7 +2466,14 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         foreach (var entry in group)
         {
             var d = entry.Device;
-            var item = new ComboBoxItem { Content = d.Name, Tag = entry };
+            // Marked in the label rather than only in the tooltip. This is the entry someone
+            // lands on without choosing anything, and the one to come back to after trying
+            // others, so it has to be findable with the list open and no pointer hovering.
+            var item = new ComboBoxItem
+            {
+                Content = d.IsDefault ? $"{d.Name}  ·  Windows default" : d.Name,
+                Tag = entry,
+            };
             DevicePicker.Items.Add(item);
             ToolTipService.SetToolTip(item, d.Loopback
                 ? $"Caption whatever is played through {d.Name} — calls, video, music"

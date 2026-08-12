@@ -206,6 +206,60 @@ for label, fixture, host_apis in [
         f"marked {marked}, offered {[d['index'] for d in shown]}",
     )
 
+# ---------------------------------------------------------------- the first-run default
+#
+# Nobody has chosen a device yet, so something has to. PortAudio's own answer is an MME
+# index, and the picker only offers WASAPI, so taking it would capture through a device the
+# list cannot show, explain, or return the user to.
+
+with portaudio(MIXED), contextlib.redirect_stdout(io.StringIO()):
+    resolved = audio._default_device()
+check("the first-run default is the WASAPI one", resolved == 7, f"got {resolved}")
+
+with portaudio([dev("Built-in Mic", MME)]), contextlib.redirect_stdout(io.StringIO()):
+    resolved = audio._default_device()
+check(
+    "without WASAPI the decision goes back to PortAudio",
+    resolved is None,
+    f"got {resolved}, which would be passed to sd.InputStream as if it were a real index",
+)
+
+with portaudio([]), contextlib.redirect_stdout(io.StringIO()):
+    resolved = audio._default_device()
+check("a machine with no microphone resolves to nothing", resolved is None, f"got {resolved}")
+
+# Resolved once, in the constructor. Three places want this device — the stream open, the
+# format probe, and the name used in logs — and if they each ask separately they can
+# disagree, which means describing one microphone while capturing another.
+with portaudio(MIXED), contextlib.redirect_stdout(io.StringIO()):
+    stream = audio.MicrophoneStream()
+check("an unchosen stream resolves its device up front", stream.device == 7, f"got {stream.device}")
+
+for explicit in (8, 9, "Umik"):
+    with portaudio(MIXED), contextlib.redirect_stdout(io.StringIO()):
+        stream = audio.MicrophoneStream(device=explicit)
+    check(
+        f"an explicit device is left alone ({explicit!r})",
+        stream.device == explicit,
+        f"got {stream.device!r}",
+    )
+
+# The picker needs to name the device it did not choose, so exactly one entry carries the
+# flag — two candidates would be worse than none.
+for label, fixture in [("mixed", MIXED), ("no WASAPI", [dev("Built-in Mic", MME)]), ("empty", [])]:
+    marked = [d for d in listed(fixture) if d.get("is_default_input")]
+    check(
+        f"at most one device is flagged as the default ({label})",
+        len(marked) <= 1,
+        f"got {[d['name'] for d in marked]}",
+    )
+
+check(
+    "every entry carries the flag, so the UI never reads a missing key",
+    all("is_default_input" in d for d in listed(MIXED)),
+    "an entry would break x:Bind",
+)
+
 print()
 if failures:
     print(f"{len(failures)} FAILED")
