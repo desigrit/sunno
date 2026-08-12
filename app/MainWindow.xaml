@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Sunno.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -25,7 +25,10 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <!-- The whole bar is the drag region again now that no button sits in it. -->
+            <!-- The whole bar is the drag region again now that no button sits in it.
+                 Compact mode's controls were tried here and moved back out: beside the caption
+                 buttons they never quite lined up with them, and a level meter in a title bar
+                 reads as something gone wrong rather than as sound arriving. -->
             <!-- The real app icon rather than a generic glyph, so the title bar matches the
                  taskbar and Start tile. Source is set from disk in code: ms-appx:/// goes
                  through the package resource system, which does not index files the packaging
@@ -41,12 +44,12 @@
         <!-- body -->
         <Grid x:Name="BodyArea" Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="240" />
+                <ColumnDefinition x:Name="SidebarColumn" Width="240" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
             <!-- speakers pane -->
-            <Border Grid.Column="0"
+            <Border x:Name="SpeakerPane" Grid.Column="0"
                     Background="{ThemeResource LayerFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="0,1,1,0">
@@ -305,7 +308,7 @@
                                 <StackPanel Margin="0,0,0,14">
                                     <StackPanel Orientation="Horizontal" Spacing="8"
                                                 Margin="0,0,0,3"
-                                                Visibility="{x:Bind local:MainWindow.BoolToVisible(HasSpeaker), Mode=OneWay}">
+                                                Visibility="{x:Bind local:MainWindow.BoolToVisible(ShowMeta), Mode=OneWay}">
                                         <Ellipse Width="8" Height="8" VerticalAlignment="Center"
                                                  Fill="{x:Bind local:MainWindow.SpeakerBrush(ColourIndex), Mode=OneWay}" />
                                         <TextBlock Text="{x:Bind DisplayLabel, Mode=OneWay}"
@@ -473,13 +476,24 @@
             </Grid>
         </Border>
 
-        <!-- Overflow menu, in the content area just under the caption buttons rather than
+        <!-- Window commands, in the content area just under the caption buttons rather than
              in the title bar itself. That is where Sound Recorder and its siblings put
              window-level commands, and it keeps the drag region intact: SetTitleBar hands
              the whole bar to the window manager, so a button placed inside it silently
              stops receiving clicks. Declared after the body so it draws above it. -->
-        <Button x:Name="MoreButton" Grid.Row="1" Width="32" Height="32" Padding="0"
-                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,4,12,0"
+        <StackPanel x:Name="WindowCommands" Grid.Row="1" Orientation="Horizontal" Spacing="2"
+                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,4,12,0">
+            <!-- The way in sits beside the way out, and matches where the way back lives in
+                 compact. Ahead of the overflow menu because it is a window command, not a
+                 setting, and it is the one someone reaches for repeatedly. -->
+            <Button x:Name="CompactEnterButton" Click="OnToggleCompact"
+                    Width="32" Height="32" Padding="0"
+                    Background="Transparent" BorderThickness="0"
+                    AutomationProperties.Name="Compact mode"
+                    ToolTipService.ToolTip="Shrink to just the captions (Ctrl+Shift+C)">
+                <FontIcon Glyph="&#xE73F;" FontSize="14" />
+            </Button>
+            <Button x:Name="MoreButton" Width="32" Height="32" Padding="0"
                 Background="Transparent" BorderThickness="0"
                 AutomationProperties.Name="More options"
                 ToolTipService.ToolTip="More options">
@@ -510,6 +524,12 @@
                          the check into the right-hand slot fought the control's
                          visual states and left two ticks on hover; that slot is
                          for accelerators and submenu chevrons, not state. -->
+                    <ToggleMenuFlyoutItem x:Name="CompactModeItem" Text="Compact mode (Ctrl+Shift+C)"
+                                          Click="OnToggleCompact">
+                        <ToggleMenuFlyoutItem.Icon>
+                            <FontIcon Glyph="&#xE73F;" />
+                        </ToggleMenuFlyoutItem.Icon>
+                    </ToggleMenuFlyoutItem>
                     <ToggleMenuFlyoutItem x:Name="AlwaysOnTopItem" Text="Always on top"
                                           IsChecked="True" Click="OnToggleAlwaysOnTop">
                         <ToggleMenuFlyoutItem.Icon>
@@ -526,13 +546,47 @@
                     </MenuFlyoutItem>
                 </MenuFlyout>
             </Button.Flyout>
-        </Button>
+            </Button>
+        </StackPanel>
+
+        <!-- Compact mode's whole chrome: a way out, and a dot when something is wrong.
+             In the content area rather than the title bar, because SetTitleBar hands whatever
+             it is given to the window manager and clicks on it stop arriving. The overflow
+             button sits in this same corner for the same reason, and this replaces it while
+             compact is on, so the two never appear together.
+
+             Floated over the first line rather than given a row of its own. In a window whose
+             only content is captions, a reserved strip costs a line of the thing you opened it
+             for, and a caption long enough to reach this corner is rare.
+
+             No level meter. It was tried and read as decoration in a window that is meant to
+             be nothing but words. -->
+        <StackPanel x:Name="CompactActions" Grid.Row="1" Orientation="Horizontal" Spacing="2"
+                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="0,4,12,0" Visibility="Collapsed">
+            <Button x:Name="CompactProblemButton" Click="OnToggleCompact"
+                    Width="32" Height="32" Padding="0" Visibility="Collapsed"
+                    Background="Transparent" BorderThickness="0"
+                    AutomationProperties.Name="Something needs attention. Show the full window."
+                    ToolTipService.ToolTip="Something needs attention. Show the full window.">
+                <Ellipse Width="9" Height="9"
+                         Fill="{ThemeResource SystemFillColorCriticalBrush}" />
+            </Button>
+
+            <Button x:Name="CompactExpandButton" Click="OnToggleCompact"
+                    Width="32" Height="32" Padding="0"
+                    Background="Transparent" BorderThickness="0"
+                    AutomationProperties.Name="Show the full window"
+                    ToolTipService.ToolTip="Show the full window (Ctrl+Shift+C)">
+                <FontIcon Glyph="&#xE740;" FontSize="13" />
+            </Button>
+        </StackPanel>
 
         <!-- Actionable errors, chiefly the microphone-blocked case. The whole reason this
              app is packaged is the per-app microphone toggle, so the state that toggle
              creates must be explained rather than dumped as PortAudio diagnostics. -->
         <InfoBar x:Name="MicInfoBar" Grid.Row="1" Severity="Warning" IsOpen="False"
-                 IsClosable="True" VerticalAlignment="Top" Margin="16,8,56,0"
+                 IsClosable="True" VerticalAlignment="Top" Margin="16,8,88,0"
                  CloseButtonClick="OnMicInfoClosed">
             <InfoBar.ActionButton>
                 <HyperlinkButton x:Name="MicActionLink" Content="Open Settings"

@@ -52,6 +52,37 @@ public sealed class AppSettings
     /// </summary>
     public bool ForceCpu { get; set; }
 
+    /// <summary>
+    /// The window is showing captions and nothing else.
+    ///
+    /// Persisted, because a caption strip you have to summon again at every launch is not the
+    /// thing it is for. The risk that carries is being restored into a small window whose only
+    /// exits are broken, so MainWindow applies this last, after the keyboard shortcut that
+    /// leaves it has been registered.
+    /// </summary>
+    public bool CompactMode { get; set; }
+
+    /// <summary>
+    /// Where the window sat in each mode, kept separately.
+    ///
+    /// The two are genuinely different windows to a user: one is a workspace they size to
+    /// their screen, the other is a strip they park at the top of a monitor over whatever
+    /// they are watching. Sharing one size would drag each mode back to the other's shape
+    /// every time they switched.
+    ///
+    /// Nullable so that "never set" stays distinguishable from a real zero, which a
+    /// minimised or off-screen window can genuinely report.
+    /// </summary>
+    public int? CompactWidth { get; set; }
+    public int? CompactHeight { get; set; }
+    public int? CompactLeft { get; set; }
+    public int? CompactTop { get; set; }
+
+    public int? ExpandedWidth { get; set; }
+    public int? ExpandedHeight { get; set; }
+    public int? ExpandedLeft { get; set; }
+    public int? ExpandedTop { get; set; }
+
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Sunno", "settings.json");

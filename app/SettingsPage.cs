@@ -81,6 +81,7 @@ public sealed partial class MainWindow
                  {
                      SpeakerList, ModelToggle, ModelPanel, CaptionScroller,
                      DevicePicker, ToggleButton, MoreButton, MicInfoBar,
+                     CompactEnterButton, RefreshDevicesButton,
                  })
         {
             control.IsEnabled = !open;

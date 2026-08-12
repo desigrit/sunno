@@ -209,9 +209,16 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             _ui.TryEnqueue(() => OnModelCatalog(current, device, list));
         _backend.Crashed += (reason, detail) => _ui.TryEnqueue(() => OnBackendCrashed(reason, detail));
 
+        Activated += (_, _) => _windowActivated = true;
+
         Closed += (_, _) =>
         {
             App.Trace("MainWindow Closed -> exiting");
+            // Where this mode's window was, so the next launch opens where it was left. Saved
+            // here rather than on every drag: the file is rewritten whole each time, and a
+            // resize produces a great many of those.
+            SaveWindowGeometry();
+            _settings.Save();
             MicrophoneAccess.Changed -= OnMicAccessChanged;
             _elapsedTimer.Stop();
             _ = _client.DisposeAsync();
@@ -272,7 +279,51 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 _ = EnsureMicrophoneAccessAsync();
             };
         }
+
+        // One hook instead of a call at each of the dozen places that open or close the banner.
+        // IsOpen is a dependency property, so this also catches the user dismissing the bar
+        // with its own close button, which no set-site would ever have told us about.
+        MicInfoBar.RegisterPropertyChangedCallback(InfoBar.IsOpenProperty,
+            (_, _) => RefreshCompactProblem());
+        MicInfoBar.RegisterPropertyChangedCallback(InfoBar.SeverityProperty,
+            (_, _) => RefreshCompactProblem());
+
+        // Deliberately last, and deliberately after RegisterShortcuts.
+        //
+        // Compact hides the menu that leaves it, so the keyboard shortcut is one of the few
+        // ways out and it has to exist before the mode is ever entered. Anything above that
+        // throws leaves the window expanded, which is recoverable; the reverse would restore
+        // someone into a strip whose exits had never been wired up.
+        //
+        // Refused outright when the engine is already dead or the setup page is up: both own
+        // the whole window, and entering compact on top of either would hide the thing the
+        // user has to deal with before anything can be captioned.
+        if (_settings.CompactMode && CanEnterCompact())
+        {
+            SetCompact(true, initialRestore: true);
+        }
+        else
+        {
+            // The preference itself is left as it was. A crashed backend or an unfinished setup
+            // is a condition of this one launch, and clearing the flag here would quietly
+            // demote it to a permanent choice the user never made.
+            CompactModeItem.IsChecked = false;
+            ApplyWindowMode();
+        }
     }
+
+    /// <summary>
+    /// Whether compact is allowed to be entered right now.
+    ///
+    /// A fatal backend error, the setup page and the settings page each own the whole window,
+    /// and each says something that has to be dealt with before there is anything to caption.
+    /// Compact would hide all of it behind a dot. Startup, the menu item, the button and the
+    /// keyboard shortcut all ask here, so there is no way in that the others refuse.
+    /// </summary>
+    private bool CanEnterCompact() =>
+        !_backendFatal
+        && SetupOverlay.Visibility != Visibility.Visible
+        && SettingsPage.Visibility != Visibility.Visible;
 
     /// <summary>
     /// Load the title-bar icon straight off disk.
@@ -896,6 +947,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // promise a microphone that is never going to arrive, next to a banner saying the
         // opposite.
         SetDeviceBusy(false);
+        // And the explanation needs somewhere to be read. This banner carries a "Copy details"
+        // link that a strip has no room for, and captions have stopped for good until it is
+        // dealt with, so compact has nothing left to show anyway.
+        ExitCompact();
         ClearStatus();
         _micProblem = false;
         _infoSticky = false;
@@ -1842,6 +1897,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         SetupError.IsOpen = false;
         DownloadPanel.Visibility = Visibility.Collapsed;
         DownloadButton.IsEnabled = true;
+        // Before the page is shown. It fills the window, so inside a compact strip it would be
+        // an unreadable, unusable "Choose a speech model" with its button off the edge, and
+        // until a model is chosen there is nothing to caption anyway.
+        ExitCompact();
         SetupOverlay.Visibility = Visibility.Visible;
         // The setup overlay fills the window; nothing needs restating underneath it.
         ClearStatus();
@@ -2739,7 +2798,260 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (!string.IsNullOrEmpty(error)) ShowFatalBackendError(error);
     }
 
-    // ---------- commands ----------
+    // ---------- compact mode ----------
+
+    private bool _compact;
+    private bool _windowActivated;
+
+    /// <summary>
+    /// Captions and nothing else, in a window small enough to leave open beside whatever you
+    /// are actually doing.
+    ///
+    /// The sidebar, the command bar, the overflow button and the notice bar all go, and speaker
+    /// names, timestamps and clarity badges come off every line. What is left is the transcript,
+    /// an expand button floating in the top-right corner, and a dot beside it that stays hidden
+    /// until something needs attention.
+    ///
+    /// The two modes keep separate window geometry. They are different windows to the person
+    /// using them: one is sized to work in, the other is parked over a video. Sharing a size
+    /// would drag each back to the other's shape at every switch.
+    /// </summary>
+    private void OnToggleCompact(object sender, RoutedEventArgs e) => ToggleCompact();
+
+    /// <summary>
+    /// The single way in and out, shared by the menu item, both buttons and the shortcut.
+    /// </summary>
+    private void ToggleCompact()
+    {
+        if (!_compact && !CanEnterCompact())
+        {
+            // The menu item is a ToggleMenuFlyoutItem, so it has already flipped its own
+            // checkmark by the time this runs. Refusing without putting it back would leave the
+            // menu claiming compact is on while the window plainly is not.
+            CompactModeItem.IsChecked = _compact;
+            return;
+        }
+        SetCompact(!_compact);
+    }
+
+    /// <param name="initialRestore">
+    /// Restoring the persisted mode during construction, before the window has been activated.
+    /// </param>
+    /// <param name="remember">
+    /// Whether this reflects a choice, and so should be persisted. False when the app forces
+    /// its way out of compact to show something that needs the whole window: that is Sunno's
+    /// decision, not the user's, and it must not cost them the mode they picked.
+    /// </param>
+    private void SetCompact(bool compact, bool initialRestore = false, bool remember = true)
+    {
+        if (_compact == compact)
+        {
+            CompactModeItem.IsChecked = compact;
+            return;
+        }
+
+        // Remember where this mode was before leaving it. Safe to call unconditionally: it
+        // declines to read bounds that describe nothing, which covers the construction path.
+        SaveWindowGeometry();
+
+        _compact = compact;
+        if (remember) _settings.CompactMode = compact;
+        CompactModeItem.IsChecked = compact;
+
+        SidebarColumn.Width = compact ? new GridLength(0) : new GridLength(240);
+        SpeakerPane.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        CommandArea.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        WindowCommands.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        CompactActions.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
+
+        // The notice bar is an overlay across the top of the caption area, so left alone it
+        // would paint over the only thing compact exists to show, in a window with no room to
+        // read it. It stays open underneath and its warnings surface as the dot instead, which
+        // is what the dot is for. Expanding brings the bar back with the notice still on it.
+        MicInfoBar.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+
+        // Expanded reserves a strip above the first caption so nothing slides under the
+        // overflow button. Compact deliberately does not: reserving a line in a window whose
+        // only content is captions costs the thing you opened it for, and a caption long
+        // enough to reach that corner is rare. The button floats on the same row as the text.
+        CaptionScroller.Padding = compact
+            ? new Thickness(14, 10, 14, 10)
+            : new Thickness(24, 40, 24, 16);
+
+        // Speaker, time and clarity come off every line, including the ones already on screen.
+        CaptionLine.CompactMode = compact;
+        foreach (var line in Lines) line.RefreshMeta();
+
+        ApplyWindowMode();
+
+        // Always on top for as long as compact lasts. A caption strip that sinks behind the
+        // video it is captioning is the opposite of the point.
+        //
+        // Presenter only. Writing this through to settings would quietly overwrite the
+        // preference of someone who had turned it off, the first time they tried compact, and
+        // they would never be told.
+        if (AppWindow.Presenter is OverlappedPresenter p)
+            p.IsAlwaysOnTop = compact || _settings.AlwaysOnTop;
+
+        _settings.Save();
+
+        // Focus lands on the way out. Entering from the menu leaves focus on a flyout item
+        // belonging to a button that has just been collapsed, and the keyboard shortcut is one
+        // of only three ways back; it should not depend on where focus happened to fall.
+        //
+        // Not on the startup path, where focus before activation is as undefined as position
+        // is. Windows places initial focus itself once the window comes up, and the ways out
+        // do not depend on this: the accelerator is registered on the content root rather than
+        // on any one control, and the expand button is visible and clickable regardless.
+        if (!initialRestore)
+        {
+            if (compact) CompactExpandButton.Focus(FocusState.Programmatic);
+            else MoreButton.Focus(FocusState.Programmatic);
+        }
+
+        App.Trace($"compact mode {(compact ? "on" : "off")}");
+    }
+
+    /// <summary>
+    /// Leave compact because something is about to need the whole window.
+    ///
+    /// Used by the paths that raise a full-window surface. The setup page and the fatal
+    /// banner are not notifications that can wait behind a dot; until they are dealt with
+    /// there is nothing to caption, and inside a 300px strip neither is usable or even
+    /// readable.
+    ///
+    /// The preference is left alone on the way out. Sunno is overriding the user here, not
+    /// being told something by them, and a backend crash should not also mean that every
+    /// launch from then on opens full size until they go and find the menu item again.
+    /// </summary>
+    private void ExitCompact()
+    {
+        if (_compact) SetCompact(false, remember: false);
+    }
+
+    /// <summary>
+    /// Size limits and remembered position for the mode now showing.
+    ///
+    /// The minimum is the load-bearing part. The expanded floor of 720x420 is wider than the
+    /// whole compact window, so entering compact without lowering it would silently refuse
+    /// the resize, and leaving compact without raising it again would let someone drag the
+    /// full window down to a size its layout cannot survive.
+    /// </summary>
+    private void ApplyWindowMode()
+    {
+        if (AppWindow.Presenter is not OverlappedPresenter presenter) return;
+
+        presenter.PreferredMinimumWidth = _compact ? CompactMinWidth : 720;
+        presenter.PreferredMinimumHeight = _compact ? CompactMinHeight : 420;
+
+        // A maximized window keeps its maximized state through a Resize, so the strip would
+        // come up carrying a Restore button instead of Maximize, and one press of it would
+        // inflate the compact window back to the expanded size while still in compact. Geometry
+        // also stops being saved for as long as that state lasts. Drop to a normal window first.
+        // Minimized is deliberately left alone: un-minimizing an app nobody asked to see would
+        // be worse than the button being briefly wrong.
+        if (presenter.State == OverlappedPresenterState.Maximized) presenter.Restore();
+
+        var w = _compact ? _settings.CompactWidth : _settings.ExpandedWidth;
+        var h = _compact ? _settings.CompactHeight : _settings.ExpandedHeight;
+        var l = _compact ? _settings.CompactLeft : _settings.ExpandedLeft;
+        var t = _compact ? _settings.CompactTop : _settings.ExpandedTop;
+
+        var size = ClampSize(w ?? (_compact ? 420 : 1040), h ?? (_compact ? 220 : 660));
+        AppWindow.Resize(size);
+
+        if (l is int left && t is int top)
+        {
+            var pos = ClampToVisibleArea(left, top, size);
+            AppWindow.Move(pos);
+        }
+
+        // Written back after clamping, so the file agrees with what is on screen rather than
+        // holding a size the window refused.
+        SaveWindowGeometry();
+    }
+
+    /// <summary>Smallest compact window that still leaves every control in the strip
+    /// clickable. The expand button is one of only three ways out of this mode, so this is a
+    /// floor on being able to leave, not on looking tidy.</summary>
+    private const int CompactMinWidth = 260;
+    private const int CompactMinHeight = 120;
+
+    private SizeInt32 ClampSize(int width, int height) => new(
+        Math.Max(width, _compact ? CompactMinWidth : 720),
+        Math.Max(height, _compact ? CompactMinHeight : 420));
+
+    /// <summary>
+    /// Keep a remembered position on a monitor that still exists.
+    ///
+    /// Someone who was compact on a second screen, then unplugged it, would otherwise be
+    /// restored to coordinates with no display behind them: a window that is running,
+    /// captioning, and impossible to reach.
+    /// </summary>
+    private PointInt32 ClampToVisibleArea(int left, int top, SizeInt32 size)
+    {
+        var area = Microsoft.UI.Windowing.DisplayArea.GetFromPoint(
+            new PointInt32(left, top), Microsoft.UI.Windowing.DisplayAreaFallback.Nearest);
+        var work = area.WorkArea;
+        // A strip of title bar has to remain grabbable, so the window is allowed to hang off
+        // the right and bottom but never past its own top-left corner.
+        var x = Math.Clamp(left, work.X, Math.Max(work.X, work.X + work.Width - size.Width));
+        var y = Math.Clamp(top, work.Y, Math.Max(work.Y, work.Y + work.Height - size.Height));
+        return new PointInt32(x, y);
+    }
+
+    private void SaveWindowGeometry()
+    {
+        if (AppWindow is null) return;
+
+        // Only a window the user is actually looking at reports where the user put it.
+        //
+        // Before the first activation, Position and Size describe nothing yet. Minimised, Win32
+        // reports -32000,-32000 at 160x28, which is a real positive size and so sails straight
+        // past a width/height check. Maximised, it reports the whole work area, which would turn
+        // a deliberately tiny caption strip into a full-screen one on the next launch.
+        //
+        // All three write bounds nobody chose. Guarded here rather than at the call sites so
+        // that closing, toggling mode and clamping all inherit it, and the last good geometry
+        // already in _settings survives untouched.
+        if (!_windowActivated) return;
+        if (AppWindow.Presenter is OverlappedPresenter op
+            && op.State != OverlappedPresenterState.Restored) return;
+
+        var s = AppWindow.Size;
+        var p = AppWindow.Position;
+        if (s.Width <= 0 || s.Height <= 0) return;
+
+        if (_compact)
+        {
+            _settings.CompactWidth = s.Width;
+            _settings.CompactHeight = s.Height;
+            _settings.CompactLeft = p.X;
+            _settings.CompactTop = p.Y;
+        }
+        else
+        {
+            _settings.ExpandedWidth = s.Width;
+            _settings.ExpandedHeight = s.Height;
+            _settings.ExpandedLeft = p.X;
+            _settings.ExpandedTop = p.Y;
+        }
+    }
+
+    /// <summary>
+    /// Show or hide the dot that says something needs attention.
+    ///
+    /// Only warnings and errors. The device-changed notice is informational and does not
+    /// deserve a red mark in a window with four controls in it.
+    /// </summary>
+    private void RefreshCompactProblem()
+    {
+        var problem = MicInfoBar.IsOpen
+                      && MicInfoBar.Severity is InfoBarSeverity.Warning or InfoBarSeverity.Error;
+        CompactProblemButton.Visibility = problem ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+
 
     /// <summary>
     /// Starting capture by hand is consent in its own right. Without this, a user who chose
@@ -2811,6 +3123,26 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             args.Handled = true;
         };
         root.KeyboardAccelerators.Add(escape);
+
+        // Ctrl+Shift+C toggles compact. Registered on the content root, so it works with the
+        // sidebar, the command bar and the overflow menu all collapsed, which is the state
+        // this shortcut exists to get someone out of.
+        //
+        // Refuses to enter while a full-window page is up or the engine is dead, matching what
+        // the startup restore refuses. Leaving compact is always allowed: that is the direction
+        // this shortcut exists for.
+        var compact = new KeyboardAccelerator
+        {
+            Key = Windows.System.VirtualKey.C,
+            Modifiers = Windows.System.VirtualKeyModifiers.Control
+                        | Windows.System.VirtualKeyModifiers.Shift,
+        };
+        compact.Invoked += (_, args) =>
+        {
+            args.Handled = true;
+            ToggleCompact();
+        };
+        root.KeyboardAccelerators.Add(compact);
 
         void Add(Windows.System.VirtualKey key, Action action)
         {

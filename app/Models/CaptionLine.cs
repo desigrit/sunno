@@ -52,6 +52,7 @@ public sealed class CaptionLine : INotifyPropertyChanged
             {
                 Notify(nameof(DisplayLabel));
                 Notify(nameof(HasSpeaker));
+                Notify(nameof(ShowMeta));
             }
         }
     }
@@ -72,6 +73,10 @@ public sealed class CaptionLine : INotifyPropertyChanged
             {
                 Notify(nameof(DisplayLabel));
                 Notify(nameof(ShowClarity));
+                // DisplayLabel drives HasSpeaker, which drives ShowMeta. A line that becomes
+                // "You" gains a label it did not have.
+                Notify(nameof(HasSpeaker));
+                Notify(nameof(ShowMeta));
             }
         }
     }
@@ -104,6 +109,30 @@ public sealed class CaptionLine : INotifyPropertyChanged
     /// <summary>Re-evaluate after the shared preference changes; a static has no notification
     /// of its own, so the window tells each line to look again.</summary>
     public void RefreshClarity() => Notify(nameof(ShowClarity));
+
+    /// <summary>
+    /// Compact mode is on, so lines carry no speaker, time or clarity.
+    ///
+    /// Shared across lines for the same reason ClarityEnabled is: a line that arrives after
+    /// the toggle has to agree with the ones already on screen.
+    /// </summary>
+    public static bool CompactMode { get; set; }
+
+    /// <summary>
+    /// Whether the row above the words is drawn at all.
+    ///
+    /// In a strip a few hundred pixels wide, the speaker, the timestamp and the clarity badge
+    /// take more room than the sentence they describe. Compact drops all three, which is what
+    /// "no labels, no frills" means, and the words are what someone is reading anyway.
+    ///
+    /// Display only. ToPlainText still keys on HasSpeaker, so copying out of a compact window
+    /// yields the same "[time] Speaker: text" as copying out of a full one. Someone pasting a
+    /// conversation into a note wants to know who said what, whatever size the window was.
+    /// </summary>
+    public bool ShowMeta => HasSpeaker && !CompactMode;
+
+    /// <summary>Companion to RefreshClarity, for the same reason.</summary>
+    public void RefreshMeta() => Notify(nameof(ShowMeta));
 
     /// <summary>
     /// Per-word confidence, used to mark uncertain words. Empty on provisional lines, which
