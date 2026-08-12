@@ -1858,7 +1858,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     private bool _loadingDevices;
 
-    private async Task LoadDevicesAsync()
+    private async Task LoadDevicesAsync(bool fresh = false)
     {
         // One at a time. The constructor starts a fetch and the reconnect path starts another
         // when the picker is still empty, which on a normal cold start is simply because the
@@ -1868,15 +1868,27 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _loadingDevices = true;
         try
         {
-            App.Trace("LoadDevicesAsync start");
+            App.Trace($"LoadDevicesAsync start (fresh: {fresh})");
             // The backend needs a moment to bind its HTTP port on a cold start.
             for (var attempt = 0; attempt < 40; attempt++)
             {
                 List<AudioDevice>? devices = null;
                 try
                 {
-                    var json = await _http.GetStringAsync("http://127.0.0.1:8765/devices.json");
+                    // fresh=1 makes the backend re-read the hardware in a child process
+                    // rather than serving what PortAudio cached when it started. It costs
+                    // about half a second, which is why it is only ever asked for by the
+                    // refresh button and never on the startup path.
+                    var url = "http://127.0.0.1:8765/devices.json" + (fresh ? "?fresh=1" : "");
+                    var json = await _http.GetStringAsync(url);
                     devices = ParseDevices(json);
+                    if (fresh && StaleFlagSet(json))
+                    {
+                        // The backend could not re-read and served its cached list instead.
+                        // Not surfaced: a slightly out-of-date picker is not worth a warning
+                        // bar, and the user can press the button again.
+                        App.Trace("device refresh fell back to the cached list");
+                    }
                 }
                 catch
                 {
@@ -1884,7 +1896,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                     continue;
                 }
 
-                if (devices is { Count: > 0 }) _ui.TryEnqueue(() => PopulateDevices(devices));
+                // isRefresh carries one rule into PopulateDevices: a refresh may change what
+                // the picker shows and what settings record, but must never change what is
+                // being captured. Only the startup path is allowed to correct the selection,
+                // because only there does correcting it mean anything but a restart.
+                if (devices is { Count: > 0 })
+                    _ui.TryEnqueue(() => PopulateDevices(devices, isRefresh: fresh));
                 return;
             }
         }
@@ -1893,6 +1910,44 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // Cleared even on the give-up path, so a later reconnect can try again — that is
             // the whole point of the retry from OnConnection.
             _loadingDevices = false;
+        }
+    }
+
+    private static bool StaleFlagSet(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("stale", out var s)
+                   && s.ValueKind == JsonValueKind.True;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Ask the backend to look at the hardware again.
+    ///
+    /// Windows hands the backend its device list once, when it starts, so a microphone
+    /// plugged in afterwards does not exist as far as this app is concerned until something
+    /// asks. That "something" is deliberately a button rather than a watcher: refreshing has
+    /// to rebuild the picker, and a picker that rebuilds itself unprompted in the middle of a
+    /// conversation is worse than one that waits to be asked.
+    /// </summary>
+    private async void OnRefreshDevices(object sender, RoutedEventArgs e)
+    {
+        if (_loadingDevices) return;
+
+        RefreshDevicesButton.IsEnabled = false;
+        try
+        {
+            await LoadDevicesAsync(fresh: true);
+        }
+        finally
+        {
+            RefreshDevicesButton.IsEnabled = true;
         }
     }
 
@@ -1921,20 +1976,25 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         return result;
     }
 
-    private void PopulateDevices(List<AudioDevice> devices)
+    private void PopulateDevices(List<AudioDevice> devices, bool isRefresh = false)
     {
-        App.Trace($"PopulateDevices: {devices.Count}");
+        App.Trace($"PopulateDevices: {devices.Count} (refresh: {isRefresh})");
         _suppressDeviceEvent = true;
         try
         {
             DevicePicker.Items.Clear();
 
-            // The same physical device is exposed once per host API (WASAPI, MME, DirectSound,
-            // WDM-KS), and each API mangles the name differently — MME truncates at 31
-            // characters, so one microphone arrives as "Microphone (Umik-1  Gain: 18dB",
-            // "…18dB  )" and "…18dB)". Comparing letters and digits only, and treating a
-            // truncated name as the same device, collapses them. The server sorts WASAPI first,
-            // so the entry kept is the modern endpoint with the full name.
+            // Defensive now, not load-bearing. The server narrows to the WASAPI enumeration on
+            // Windows, so one entry per device normally arrives and there is nothing to collapse.
+            // This still runs for the fallback list the server sends when WASAPI enumerates
+            // nothing, where the same physical device does appear once per host API (MME,
+            // DirectSound, WDM-KS) with the name mangled differently each time — MME truncates at
+            // 31 characters, so one microphone arrives as "Microphone (Umik-1  Gain: 18dB",
+            // "…18dB  )" and "…18dB)". Comparing letters and digits only, and treating a truncated
+            // name as the same device, collapses them.
+            //
+            // It also carries an upgrading user across: a DeviceIndex saved when legacy entries
+            // were still offered is matched back to its WASAPI twin by name, not by index.
             var mics = new List<DeviceEntry>();
             var speakers = new List<DeviceEntry>();
 
@@ -1968,8 +2028,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         }
 
         // Only now, with the event no longer suppressed, so that correcting the picker below
-        // runs through the ordinary selection handler.
-        ValidateRememberedDevice();
+        // runs through the ordinary selection handler — on the startup path. A refresh passes
+        // isRefresh so that correction stays suppressed, because there it would restart a
+        // backend that is already captioning.
+        ValidateRememberedDevice(isRefresh);
     }
 
     /// <summary>
@@ -1986,8 +2048,15 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// the list is served by the very process being started, so the index stays the fast path
     /// and this runs once the list arrives. When it matches, which is the overwhelmingly common
     /// case, nothing happens at all.
+    ///
+    /// <paramref name="isRefresh"/> carries the one rule a refresh must obey: it may change what
+    /// the picker shows and what settings record, but never what is being captured. At startup
+    /// correcting a rotted index means restarting a backend that has not begun captioning, which
+    /// is right. On a refresh the backend is already holding an open stream on a real device —
+    /// its capture cannot have moved just because an index did — so the same correction would
+    /// buy nothing and cost a model reload, which is captions stopping mid-conversation.
     /// </summary>
-    private void ValidateRememberedDevice()
+    private void ValidateRememberedDevice(bool isRefresh = false)
     {
         var loopback = _settings.LoopbackDeviceIndex is not null;
         var wantedIndex = _settings.LoopbackDeviceIndex ?? _settings.DeviceIndex;
@@ -2041,7 +2110,16 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // The keys being compared were both built by DeviceKey from cleaned names, so equality
         // is the right test and the truncation tolerance is neither needed nor safe.
         if (atIndex?.Entry is not null && atIndex.Entry.Key == wantedKey)
+        {
+            // The device is present and the index still means it. On a refresh that may be
+            // news: the notice on screen could be a startup one saying this very device was
+            // missing, and the button they just pressed is what fixed it. Leaving it up would
+            // have the app insisting a device is unavailable while showing it selected — and
+            // the "choose a microphone below" wording is unfollowable in that state, because
+            // the device is already the selected item and re-selecting it raises no event.
+            if (isRefresh) ClearDeviceNotice();
             return;   // index still means the right device, which is the usual case
+        }
 
         var correct = candidates.FirstOrDefault(x => x.Entry!.Key == wantedKey);
 
@@ -2052,7 +2130,18 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // being fixed here.
             App.Trace($"remembered device (index {wantedIndex}) not present in this enumeration");
 
-            if (atIndex?.Entry is not null)
+            if (isRefresh)
+            {
+                // Both messages below describe what capture is doing, and both are written from
+                // the startup path where the backend has just opened on the index it was given.
+                // On a refresh the backend has been running for a while and this code cannot see
+                // what it managed to open, so either sentence would be a guess. Telling a deaf
+                // user captions are running when they are not is the single worst thing this
+                // notice can do, so on this path it states only the part that is known.
+                ShowDeviceNotice($"{wantedName} is not available. Choose a device below if you "
+                                 + "want to switch.");
+            }
+            else if (atIndex?.Entry is not null)
             {
                 // The index still resolves to a real device, so capture is running on that one.
                 ShowDeviceNotice($"{wantedName} is not available, so Sunno is using "
@@ -2073,6 +2162,58 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         }
 
         App.Trace($"device index {wantedIndex} rotted; correcting to index {correct.Entry!.Device.Index}");
+
+        if (isRefresh)
+        {
+            // Same correction, without the restart.
+            //
+            // The backend is already captioning from an open stream, which an index moving
+            // underneath it cannot change — so there is nothing to restart it for, and doing so
+            // would reload the model and stop captions mid-conversation for the crime of
+            // plugging in an unrelated device.
+            //
+            // Both index/name pairs are updated, not just the microphone one. Someone captioning
+            // system audio has their device recorded in LoopbackDeviceIndex, and leaving that to
+            // rot while fixing only DeviceIndex would protect the path they are not using.
+            //
+            // Known gap, left deliberately: if the captured device is unplugged and a device with
+            // an identical cleaned name appears in the same refresh, this rewrites the index to
+            // the new one while the backend still holds the dead one, and says nothing because
+            // the name matched. It needs two identically named devices and a swap between two
+            // presses of the button. The honest fix is recovering capture when the active device
+            // disappears, which is a larger change than a picker refresh.
+            var newIndex = correct.Entry!.Device.Index;
+            if (loopback)
+            {
+                _settings.LoopbackDeviceIndex = newIndex;
+                _settings.LoopbackDeviceName = correct.Entry.Device.Name;
+            }
+            else
+            {
+                _settings.DeviceIndex = newIndex;
+                _settings.DeviceName = correct.Entry.Device.Name;
+            }
+            // Without this the rewrite is decoration: the next launch would read the stale index
+            // out of settings.json and hand it to the backend, which is the divergence this is
+            // supposed to prevent, just deferred by one restart.
+            _settings.Save();
+
+            _suppressDeviceEvent = true;
+            try
+            {
+                DevicePicker.SelectedItem = correct.Item;
+            }
+            finally
+            {
+                _suppressDeviceEvent = false;
+            }
+
+            // The device was found, so retire any notice claiming it was missing — including
+            // the one this same method may have raised at startup, which is the case the
+            // refresh button exists to resolve.
+            ClearDeviceNotice();
+            return;
+        }
 
         // Hand this to the ordinary selection handler rather than restarting the backend here.
         // OnDeviceChanged does six things before it restarts — clears status, pauses the capture

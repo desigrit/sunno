@@ -15,7 +15,34 @@ import sounddevice as sd
 from .config import FRAME_SAMPLES, SAMPLE_RATE
 
 
+# The one host API whose device list tracks whether the hardware is actually there.
+#
+# PortAudio's WASAPI backend enumerates with
+#     IMMDeviceEnumerator::EnumAudioEndpoints(eAll, DEVICE_STATE_ACTIVE, ...)
+# so its list is, by construction, the set Windows marks ACTIVE. The legacy backends
+# (MME, DirectSound, WDM-KS) report every endpoint a driver declares, connected or not.
+#
+# Measured on one desktop: 22 input entries across the four APIs, of which WASAPI saw 4.
+# The other 18 included two unplugged Realtek jacks, four cameras last connected months
+# ago, and several virtual mixers. Cross-checked against DeviceState in
+# HKLM\...\MMDevices\Audio\Capture, the WASAPI 4 were exactly the 4 marked ACTIVE. Hours
+# later, with one device unplugged, both lists moved to the same 3 together.
+_LIVE_HOST_API = "Windows WASAPI"
+
+
 def list_input_devices() -> list[dict]:
+    """Input devices worth showing, which is not the same as every device PortAudio sees.
+
+    Narrows to the WASAPI enumeration when it returns anything, because that is the only
+    host API that distinguishes a microphone which is plugged in from one the driver
+    merely remembers. Falls back to the unfiltered list when WASAPI reports nothing, which
+    covers non-Windows machines and any box where that backend failed to start: a picker
+    holding stale entries is a poor experience, but an empty one is a broken app.
+
+    Indices are PortAudio's own and are deliberately not renumbered. The app persists the
+    chosen index and the backend opens the stream by it, so renumbering here would move
+    every saved microphone by a silent, variable offset.
+    """
     devices = []
     for idx, dev in enumerate(sd.query_devices()):
         if dev["max_input_channels"] > 0:
@@ -28,13 +55,59 @@ def list_input_devices() -> list[dict]:
                     "hostapi": sd.query_hostapis(dev["hostapi"])["name"],
                 }
             )
-    return devices
+
+    live = [d for d in devices if d["hostapi"] == _LIVE_HOST_API]
+    if not live:
+        return devices
+
+    hidden = len(devices) - len(live)
+    if hidden:
+        # Counts only, never names. This reaches backend.log, which users are asked to
+        # send when something breaks, and a capture device name like
+        # "Headset (R-Phonak hearing aid)" is health information. The numbers are here
+        # because a device visible only through a legacy API would vanish from the picker
+        # with no other trace, and that is the one way this filter can hurt someone.
+        print(
+            f"[audio] input devices: {len(live)} connected, "
+            f"{hidden} hidden as not currently connected",
+            flush=True,
+        )
+    return live
+
+
+def _default_input_index(devices: list[dict]) -> int:
+    """Which of `devices` is the system default, or -1 when none of them is.
+
+    The return is always either an index present in `devices` or -1. That matters more than
+    it looks: the obvious implementation returns sd.default.device[0], which on Windows is
+    an MME index — literally 1 on the machine this was written on — and so is never in a
+    WASAPI-filtered list. A caller that pre-selects by this value would silently select
+    nothing, and a listing would print with no default marked at all. Each host API also
+    publishes its own default, so prefer that when the list has been narrowed to one API.
+
+    Windows can legitimately have no default capture device. -1 says so rather than
+    promoting an arbitrary device to "default", which would be a lie in a picker.
+    """
+    present = {d["index"] for d in devices}
+
+    # A list that still holds legacy entries was never filtered, so PortAudio's own global
+    # default is the right answer and is one of them.
+    if any(d["hostapi"] != _LIVE_HOST_API for d in devices):
+        idx = sd.default.device[0]
+        return idx if idx in present else -1
+
+    for api in sd.query_hostapis():
+        if api["name"] == _LIVE_HOST_API:
+            idx = api.get("default_input_device", -1)
+            return idx if idx is not None and idx in present else -1
+    return -1
 
 
 def print_input_devices() -> None:
-    default_in = sd.default.device[0]
+    devices = list_input_devices()
+    default_in = _default_input_index(devices)
     print("Available input devices:\n")
-    for dev in list_input_devices():
+    for dev in devices:
         marker = "*" if dev["index"] == default_in else " "
         print(
             f" {marker} [{dev['index']:>2}] {dev['name']}  "

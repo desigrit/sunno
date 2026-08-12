@@ -33,6 +33,66 @@ def _local_ip() -> str:
         sock.close()
 
 
+def _fresh_devices() -> list[dict] | None:
+    """Re-read the device list in a child process, or None if that could not be done.
+
+    PortAudio fixes its device list at Pa_Initialize, so this process cannot see anything
+    plugged in since it started, and it cannot simply look again: re-initialising while a
+    capture stream is open invalidates that stream and the next read fails. A child process
+    starts its own PortAudio, reads the current hardware, and exits without ever touching
+    this one's capture.
+
+    Returning None rather than raising, because the caller's answer to "the refresh did not
+    work" is to serve the cached list, which is still usable.
+    """
+    import os
+    import subprocess
+    import sys
+
+    root = str(Path(__file__).resolve().parents[1])
+    # cwd alone would work here, because Python puts the working directory on sys.path for
+    # -m. It is not worth depending on: an embeddable interpreter with a ._pth file does not,
+    # and the failure is a ModuleNotFoundError inside a child whose only visible symptom is a
+    # refresh button that quietly does nothing. PYTHONPATH says it outright. Prepended rather
+    # than assigned so an interpreter that needs its own entries keeps them.
+    env = dict(os.environ)
+    env["PYTHONPATH"] = root + os.pathsep + env.get("PYTHONPATH", "")
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "server.enum_devices"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            cwd=root,
+            env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as exc:  # noqa: BLE001  (spawn failure, timeout, missing interpreter)
+        print(f"[devices] refresh could not run ({type(exc).__name__}), serving cached list",
+              flush=True)
+        return None
+
+    if proc.returncode != 0:
+        # stderr carries the child's traceback, and also its own diagnostics, so only the
+        # last line goes to the log. Device names are never in either.
+        tail = (proc.stderr or "").strip().splitlines()[-1:] or ["no detail"]
+        print(f"[devices] refresh failed (exit {proc.returncode}): {tail[0]}", flush=True)
+        return None
+
+    try:
+        payload = json.loads(proc.stdout)
+        devices = payload["devices"]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[devices] refresh returned unreadable output ({type(exc).__name__})", flush=True)
+        return None
+
+    if not isinstance(devices, list):
+        print("[devices] refresh returned the wrong shape", flush=True)
+        return None
+    return devices
+
+
 class _UiRequestHandler(http.server.SimpleHTTPRequestHandler):
     ws_port: int = 8766
 
@@ -51,6 +111,19 @@ class _UiRequestHandler(http.server.SimpleHTTPRequestHandler):
             # Lets the UI populate a microphone picker without shelling out to the CLI.
             from .audio import list_input_devices
 
+            # ?fresh=1 is the refresh button. Without it this serves what PortAudio cached at
+            # startup, which is right for the startup call and wrong for every later one.
+            fresh = "fresh=1" in self.path.partition("?")[2].split("&")
+            if fresh:
+                devices = _fresh_devices()
+                if devices is not None:
+                    self._json({"devices": devices})
+                    return
+                # Falling through to the cached list rather than erroring: a slightly stale
+                # picker still lets someone choose a microphone, and an empty one does not.
+                # Flagged so the UI can say so in its log instead of quietly believing this
+                # was a real refresh.
+
             try:
                 devices = list_input_devices()
                 for d in devices:
@@ -58,9 +131,12 @@ class _UiRequestHandler(http.server.SimpleHTTPRequestHandler):
             except Exception as exc:
                 self._json({"error": str(exc), "devices": []})
                 return
-            # WASAPI is the modern Windows path; surface it first and hide duplicates
-            # of the same device exposed through legacy host APIs.
-            devices.sort(key=lambda d: (d["hostapi"] != "Windows WASAPI", d["name"]))
+            # One entry per connected device by the time it gets here: list_input_devices
+            # narrows to the WASAPI enumeration, which is where the legacy host APIs' stale
+            # and duplicate entries were coming from. Plain alphabetical order is all that
+            # is left to do. Sorting WASAPI first, as this did, is now either a no-op or,
+            # on the fallback path, a sort by an API that returned nothing.
+            devices.sort(key=lambda d: d["name"])
 
             # Output endpoints, so what is being played can be captioned too. Appended after
             # the microphones and flagged, so the UI can group them rather than mixing two
@@ -73,7 +149,10 @@ class _UiRequestHandler(http.server.SimpleHTTPRequestHandler):
                 # Loopback is an enhancement; its absence must not break the picker.
                 pass
 
-            self._json({"devices": devices})
+            payload = {"devices": devices}
+            if fresh:
+                payload["stale"] = True
+            self._json(payload)
             return
         super().do_GET()
 

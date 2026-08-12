@@ -418,6 +418,21 @@
                               PlaceholderText="Default microphone"
                               SelectionChanged="OnDeviceChanged"
                               AutomationProperties.Name="Input device" />
+                    <!-- Windows tells this app what devices exist once, when the backend
+                         starts, so anything plugged in later is invisible until asked for.
+                         A button rather than an automatic watcher: the moment a refresh is
+                         wanted is the moment someone is already reaching for this picker,
+                         and a list that reorders itself unprompted during a conversation is
+                         worse than one that waits to be asked. Subtle styling because it is
+                         a repair tool, not a thing to reach for every session. -->
+                    <Button x:Name="RefreshDevicesButton" Click="OnRefreshDevices"
+                            Width="32" Height="32" Padding="0"
+                            Background="Transparent" BorderThickness="0"
+                            ToolTipService.ToolTip="Look for devices plugged in since Sunno started"
+                            AutomationProperties.Name="Refresh device list">
+                        <FontIcon x:Name="RefreshDevicesIcon" Glyph="&#xE72C;" FontSize="14"
+                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </Button>
                 </StackPanel>
 
                 <Button x:Name="ToggleButton" Grid.Column="1" Click="OnToggleCapture"
