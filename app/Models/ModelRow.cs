@@ -143,7 +143,7 @@ public sealed class ModelRow : INotifyPropertyChanged
             {
                 text += $"\nCaptions appear about {LagMs / 1000.0:0.0}s after each sentence";
                 if (!Responsive)
-                    text += " — fine for video, too slow to follow a conversation";
+                    text += ", which is too slow to follow a live conversation";
             }
             return _available ? text : $"{text}\n{SizeLabel} download";
         }

@@ -543,10 +543,20 @@
         <!-- first run: choose and download a speech model -->
         <Grid x:Name="SetupOverlay" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed"
               Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel MaxWidth="560" Spacing="6" Padding="32,44,32,32"
-                            HorizontalAlignment="Center">
+            <!-- Three bands, not one long scroll.
+                 The list is the only part that grows with the size of the catalogue, so it
+                 is the only part that should scroll. As a single StackPanel inside a single
+                 ScrollViewer, five models pushed "Download and continue" past the bottom of
+                 the window: the screen asked for a decision and hid the way to make it, and
+                 nothing on screen suggested there was anything below. -->
+            <Grid MaxWidth="560" HorizontalAlignment="Center" Margin="32,44,32,32">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
+                <StackPanel Grid.Row="0" Spacing="6">
                     <FontIcon Glyph="&#xE896;" FontSize="26" HorizontalAlignment="Left"
                               Margin="0,0,0,10"
                               Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
@@ -555,10 +565,11 @@
                     <TextBlock TextWrapping="Wrap" Margin="0,0,0,18"
                                Style="{StaticResource BodyTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               Text="Sunno runs entirely on your PC — nothing is sent to the internet once this is downloaded. The model is downloaded once and reused." />
+                               Text="Sunno runs entirely on your PC. Nothing is sent to the internet once this is downloaded, and the model is downloaded once and reused." />
+                </StackPanel>
 
-                    <ListView x:Name="ModelList" SelectionMode="Single"
-                              AutomationProperties.Name="Available speech models">
+                <ListView x:Name="ModelList" Grid.Row="1" SelectionMode="Single"
+                          AutomationProperties.Name="Available speech models">
                         <ListView.ItemContainerStyle>
                             <Style TargetType="ListViewItem">
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -597,8 +608,10 @@
                                 </Grid>
                             </DataTemplate>
                         </ListView.ItemTemplate>
-                    </ListView>
+                </ListView>
 
+                <!-- Pinned. Whatever the list does, the way forward stays on screen. -->
+                <StackPanel Grid.Row="2" Spacing="6">
                     <StackPanel x:Name="DownloadPanel" Visibility="Collapsed" Spacing="6"
                                 Margin="0,18,0,0">
                         <muxc:ProgressBar x:Name="DownloadBar" Minimum="0" Maximum="100"
@@ -612,16 +625,16 @@
                              IsClosable="False" Margin="0,14,0,0" />
 
                     <Button x:Name="DownloadButton" Content="Download and continue"
-                            Click="OnDownloadModel" Margin="0,20,0,0"
+                            Click="OnDownloadModel" Margin="0,16,0,0"
                             HorizontalAlignment="Left"
                             Style="{StaticResource AccentButtonStyle}" />
 
-                    <TextBlock Margin="0,14,0,0" TextWrapping="Wrap"
+                    <TextBlock Margin="0,12,0,0" TextWrapping="Wrap"
                                Style="{StaticResource CaptionTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                Text="You can change the model later. Larger models are more accurate on accented speech and at a distance from the microphone." />
                 </StackPanel>
-            </ScrollViewer>
+            </Grid>
         </Grid>
 
         <!-- Settings. A full-window page rather than a dialog, matching the inbox apps.

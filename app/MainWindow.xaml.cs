@@ -33,10 +33,13 @@ public sealed record ModelChoice(string Id, string Name, string Detail, int Appr
         : $"{ApproxMb} MB";
 
     /// <summary>
-    /// Description prefixed with the expected delay. The first-run screen has room to wrap,
-    /// so unlike the compact picker it also spells out when a delay is too long to follow a
-    /// conversation — this is the one screen where the choice costs a multi-gigabyte
-    /// download, and on a CPU-only machine the most accurate model runs seconds behind.
+    /// Description prefixed with the expected delay.
+    ///
+    /// The slow ones no longer explain themselves inline. They used to read "(~5s delay,
+    /// fine for video, too slow for conversation)", which repeats on every row what the
+    /// group heading above them already says once, and asks a first-time user to work out
+    /// which of two use cases they are. The number is the honest part; the heading carries
+    /// the judgement.
     /// </summary>
     public string DetailWithSpeed
     {
@@ -44,10 +47,24 @@ public sealed record ModelChoice(string Id, string Name, string Detail, int Appr
         {
             if (LagMs <= 0) return Detail;
             var delay = LagMs < 1000 ? $"~{LagMs / 1000.0:0.0}s" : $"~{LagMs / 1000.0:0}s";
-            return Responsive
-                ? $"({delay} delay) {Detail}"
-                : $"({delay} delay — fine for video, too slow for conversation) {Detail}";
+            return $"({delay} delay) {Detail}";
         }
+    }
+
+    /// <summary>
+    /// What a screen reader announces for this row.
+    ///
+    /// Records generate a ToString that dumps every property, and a ListView item with no
+    /// AutomationProperties.Name falls back to it, so each option announced itself as
+    /// "ModelChoice { Id = small, Name = Whisper small, Detail = ..., ApproxMb = 490,
+    /// Available = True, LagMs = 777, Responsive = True, ... }". On the one screen where
+    /// someone commits to a multi-gigabyte download, in an app built for people who rely on
+    /// assistive technology, that is the difference between a choice and a wall of noise.
+    /// </summary>
+    public override string ToString()
+    {
+        var size = Available ? "already downloaded" : SizeLabel;
+        return $"{Name}, {size}. {DetailWithSpeed}";
     }
 }
 
@@ -184,7 +201,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _client.SpeakersMerged += (from, into) => _ui.TryEnqueue(() => OnSpeakersMerged(from, into));
         _client.SpeakerDeleted += (id, label) => _ui.TryEnqueue(() => OnSpeakerDeleted(id, label));
         _client.ConnectionChanged += ok => _ui.TryEnqueue(() => OnConnection(ok));
-        _client.ModelRequired += m => _ui.TryEnqueue(() => OnModelRequired(m));
+        _client.ModelRequired += (device, m) => _ui.TryEnqueue(() => OnModelRequired(device, m));
         _client.DownloadProgress += p => _ui.TryEnqueue(() => OnDownloadProgress(p));
         _client.DownloadComplete += _ => _ui.TryEnqueue(OnDownloadComplete);
         _client.DownloadFailed += msg => _ui.TryEnqueue(() => OnDownloadFailed(msg));
@@ -1781,23 +1798,41 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     // ---------- first-run setup ----------
 
-    private void OnModelRequired(IReadOnlyList<ModelOption> options)
+    private void OnModelRequired(string? computeDevice, IReadOnlyList<ModelOption> options)
     {
-        ModelList.Items.Clear();
-        foreach (var o in options)
-            ModelList.Items.Add(new ModelChoice(o.Id, o.Name, o.Detail, o.ApproxMb, o.Available,
-                                                o.LagMs, o.Responsive));
+        // Recorded for the diagnostics report, which on a first run had no other source for
+        // it: this is the only frame a machine with no model downloaded ever sees, and it was
+        // dropping the field. The wording on this screen deliberately does not use it, because
+        // naming the part of the PC that does the work does not help anyone choose.
+        if (!string.IsNullOrEmpty(computeDevice)) _computeDevice = computeDevice;
+
+        var choices = options
+            .Select(o => new ModelChoice(o.Id, o.Name, o.Detail, o.ApproxMb, o.Available,
+                                         o.LagMs, o.Responsive))
+            .ToList();
+
+        BuildModelGroups(choices);
 
         // Preselect the model this hardware can actually keep up with, preferring one
         // already on disk. Picking purely by "already downloaded" would start a CPU-only
         // machine on whatever happened to be cached, which may be the slowest option.
-        var preferred = ModelList.Items
-            .OfType<ModelChoice>()
+        //
+        // The middle step deliberately differs from the backend, which does not look at disk
+        // state at all (server/hardware.py default_model). When nothing keeps up but
+        // something is already downloaded, this offers the downloaded one and the backend
+        // would not. That is a kindness about a multi-gigabyte download, not an oversight.
+        var preferred = choices
             .Where(m => m.Responsive)
             .OrderByDescending(m => m.Available)
             .FirstOrDefault()
-            ?? ModelList.Items.OfType<ModelChoice>().FirstOrDefault(m => m.Available);
-        ModelList.SelectedItem = preferred ?? ModelList.Items.FirstOrDefault();
+            ?? choices.FirstOrDefault(m => m.Available)
+            // Last resort: the fastest, matching server/hardware.py's
+            // `min(catalog_ids, key=estimated_lag_ms)`. This used to be the first entry in
+            // the catalogue, which is ordered most-accurate-first — so on a machine too slow
+            // for anything, the two sides disagreed and the screen preselected the largest
+            // download and the longest delay, which is the worst answer available.
+            ?? choices.OrderBy(m => m.LagMs <= 0 ? int.MaxValue : m.LagMs).FirstOrDefault();
+        ModelList.SelectedItem = preferred;
 
         SetupError.IsOpen = false;
         DownloadPanel.Visibility = Visibility.Collapsed;
@@ -1805,6 +1840,79 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         SetupOverlay.Visibility = Visibility.Visible;
         // The setup overlay fills the window; nothing needs restating underneath it.
         ClearStatus();
+    }
+
+    /// <summary>
+    /// Sort the options into what this machine can keep up with and what it cannot.
+    ///
+    /// The delay was already written into each row, but a number in a description is easy to
+    /// skim past when the thing next to it says "most accurate". Someone choosing a model has
+    /// no way to know that 5 seconds is disqualifying for a conversation and fine for a film,
+    /// so the split says it for them, and says it about *their* PC rather than in the abstract.
+    ///
+    /// Two headers rather than a filter: everything stays choosable. A machine that struggles
+    /// today may be plugged into power tomorrow, and hiding options from someone who has
+    /// already read the delay would be deciding for them.
+    /// </summary>
+    private void BuildModelGroups(List<ModelChoice> choices)
+    {
+        ModelList.Items.Clear();
+
+        var keepsUp = choices.Where(m => m.Responsive).ToList();
+        var lags = choices.Where(m => !m.Responsive).ToList();
+
+        // Deliberately no mention of processors or graphics cards. An earlier version said
+        // "Recommended for your processor", which asks someone who has just installed a
+        // captioning app to know which part of their PC does the work, and to know that the
+        // answer changes the advice. "This PC" is the only part they need.
+        //
+        // The slower group also used to explain itself as "too slow for conversation, but
+        // fine for video", which asks a first-time user to hold two use cases in their head
+        // and decide which one they are. The consequence is the useful part: the words turn
+        // up late. Say that, and let them judge.
+
+        // Every option is too slow. A "not recommended" heading over the entire list would be
+        // true and useless: it reads as "do not use this app". Say it once, plainly, and let
+        // fastest-first carry the advice.
+        if (keepsUp.Count == 0)
+        {
+            AddModelNote("None of these can keep up with a live conversation on this PC. "
+                         + "The fastest one is first.");
+            foreach (var m in choices.OrderBy(m => m.LagMs <= 0 ? int.MaxValue : m.LagMs))
+                ModelList.Items.Add(m);
+            return;
+        }
+
+        // Everything keeps up, which is the ordinary case with a graphics card. A single
+        // "recommended" heading over a list with no alternative is noise.
+        if (lags.Count == 0)
+        {
+            foreach (var m in choices) ModelList.Items.Add(m);
+            return;
+        }
+
+        AddModelNote("Recommended for this PC");
+        foreach (var m in keepsUp) ModelList.Items.Add(m);
+        AddModelNote("Slower on this PC. Captions arrive several seconds after the words are spoken.");
+        foreach (var m in lags) ModelList.Items.Add(m);
+    }
+
+    /// <summary>
+    /// A heading inside the list. Disabled so it is skipped by pointer and keyboard alike,
+    /// which is the same trick the device picker's group headers use.
+    /// </summary>
+    private void AddModelNote(string text)
+    {
+        ModelList.Items.Add(new ListViewItem
+        {
+            Content = text,
+            IsEnabled = false,
+            FontSize = 12,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Padding = new Thickness(4, 10, 4, 4),
+            Margin = new Thickness(0),
+            IsHitTestVisible = false,
+        });
     }
 
     private async void OnDownloadModel(object sender, RoutedEventArgs e)
@@ -2476,8 +2584,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             };
             DevicePicker.Items.Add(item);
             ToolTipService.SetToolTip(item, d.Loopback
-                ? $"Caption whatever is played through {d.Name} — calls, video, music"
-                : $"{d.Name} — {d.HostApi}");
+                ? $"Caption whatever is played through {d.Name}: calls, video, music"
+                : $"{d.Name} ({d.HostApi})");
         }
     }
 

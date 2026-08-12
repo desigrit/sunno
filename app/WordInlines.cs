@@ -266,7 +266,7 @@ public static class WordInlines
     }
 
     private static string Describe(WordRange word) =>
-        $"\u201c{word.Text}\u201d — {word.Confidence:0}% confident";
+        $"\u201c{word.Text}\u201d, {word.Confidence:0}% confident";
 
     private static Brush? _uncertainBrush;
 

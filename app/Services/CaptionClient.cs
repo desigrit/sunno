@@ -51,7 +51,16 @@ public sealed class CaptionClient : IAsyncDisposable
     /// supplied generic label. Raised immediately before the roster that reflects the removal.</summary>
     public event Action<int, string>? SpeakerDeleted;
     public event Action<bool>? ConnectionChanged;
-    public event Action<IReadOnlyList<ModelOption>>? ModelRequired;
+    /// <summary>
+    /// No model is on disk yet, so first-run setup has to ask for one.
+    ///
+    /// Carries the compute device for the same reason model_catalog does: the setup screen
+    /// sorts and describes the options by whether this machine can keep up with them, and
+    /// "on your graphics card" or "on your processor" is the part that makes the advice mean
+    /// something. The backend sends settings.device on this frame too; it was simply being
+    /// dropped here, which left the one screen that most needs the distinction unable to name it.
+    /// </summary>
+    public event Action<string?, IReadOnlyList<ModelOption>>? ModelRequired;
     /// <summary>
     /// The catalogue, the model currently selected, and the compute device the engine resolved.
     ///
@@ -195,7 +204,7 @@ public sealed class CaptionClient : IAsyncDisposable
                 break;
             }
             case "model_required":
-                ModelRequired?.Invoke(ParseCatalog(root));
+                ModelRequired?.Invoke(GetString(root, "device"), ParseCatalog(root));
                 break;
             case "model_catalog":
                 ModelCatalog?.Invoke(GetString(root, "current") ?? "",
