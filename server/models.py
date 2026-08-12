@@ -46,12 +46,19 @@ _REPOS: dict[str, str] = {
     "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
 }
 
-# Offered at first run. Ordered best-first; the UI marks the first as recommended.
+# Offered at first run. Ordered best-accuracy-first.
+#
+# Descriptions say what a model is, never whether to pick it. Which one to pick depends on
+# the machine, and the app measures that: hardware.estimated_lag_ms decides what keeps up
+# here, and the UI groups and preselects on the answer. A fixed word cannot know. large-v3
+# carried "Recommended." in its description, which was true on a GPU and wrong on every
+# laptop, where the same screen had already measured it at five seconds behind speech and
+# filed it under the models that cannot keep up.
 CATALOG: list[dict] = [
     {
         "id": "large-v3",
         "name": "Whisper large-v3",
-        "detail": "Best accuracy across accents. Recommended.",
+        "detail": "Best accuracy across accents.",
         "approx_mb": 3090,
         "languages": "multilingual",
     },
