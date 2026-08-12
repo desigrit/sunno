@@ -528,6 +528,18 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (st.State == "error")
         {
             ShowActionableError(st);
+            // The device failed to open, so the switch is over — it just ended badly. The
+            // backend does send "stopped" a frame later, which would clear this anyway, but
+            // one frame of "microphone unavailable" beside a spinner saying the microphone is
+            // coming up is the exact mixed message this indicator exists to remove.
+            SetDeviceBusy(false);
+            // And stop the centre promising the same thing. ShowActionableError sets
+            // _micProblem, which makes the "stopped" frame arriving next return early to keep
+            // the real reason on screen — so nothing downstream ever retires the loading panel,
+            // and a failed switch would leave "Switching to <device>" spinning indefinitely.
+            // That is the failure ShowFailedState was written for; its text defers to the
+            // InfoBar this branch just raised.
+            ShowFailedState();
             // Both cases have a full explanation elsewhere: the InfoBar names the problem and
         // offers the fix, and the centre state describes what the app is doing. Repeating a
         // two-word summary in the corner adds nothing.
@@ -545,6 +557,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (st.State is "listening" or "stopped")
         {
             _engineReadyThisSession = true;
+            // The same signal that commits a model switch ends a device switch: the engine has
+            // finished loading and the pipeline is up. "stopped" counts — a switch onto a device
+            // while capture is paused still completed, and waiting for "listening" would leave
+            // the ring turning until the user pressed play.
+            SetDeviceBusy(false);
             CompleteSwitchIfPending();
         }
 
@@ -791,6 +808,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         App.Trace($"backend crashed: {reason}");
         _backendLoading = false;
+        // Dropped here rather than beside the fatal banner below, because two branches of this
+        // method start a fallback model and return without ever reaching it. A crash during a
+        // device switch takes one of them — the device path clears _engineReadyThisSession,
+        // which is what the fallback branch keys off — so the ring would otherwise keep turning
+        // through a thirty second engine rebuild, still claiming to be changing microphone.
+        SetDeviceBusy(false);
 
         // A crash while switching means the new model never came up. Fall back to something
         // that actually loads instead of leaving the app dead — and never persist the choice
@@ -851,6 +874,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         _backendFatal = true;
         _backendLoading = false;
+        // The engine is dead, so nothing is coming up. A device ring still turning here would
+        // promise a microphone that is never going to arrive, next to a banner saying the
+        // opposite.
+        SetDeviceBusy(false);
         ClearStatus();
         _micProblem = false;
         _infoSticky = false;
@@ -1086,6 +1113,20 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // and will not re-prompt for, so there is nothing this app can ask.
         MicActionLink.Content = "Open Settings";
         MicInfoBar.IsOpen = true;
+
+        // Retire the centre panel too, or it goes on promising captions that cannot arrive.
+        //
+        // Windows has already refused, so the backend is launched with startStopped and reports
+        // "stopped" rather than an error — and _micProblem, set above, makes OnStatus swallow
+        // that frame to keep this banner on screen. Nothing downstream then retires the loading
+        // panel, so a first run with the microphone blocked sat on "Starting the speech engine,
+        // this takes about half a minute the first time" indefinitely, beside a banner saying
+        // access was off. The one state a deaf user cannot afford to misread is whether the app
+        // is still coming up or has given up.
+        //
+        // Deliberately not paired with SetEmptyStateVisible: this rewrites the panel's contents
+        // without forcing it over a transcript that is already on screen.
+        ShowFailedState();
     }
 
     /// <summary>
@@ -1928,6 +1969,30 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     }
 
     /// <summary>
+    /// Show that the input device is being changed, in the slot the refresh button occupies.
+    ///
+    /// Changing device restarts the backend and reloads the model, which is seconds of no
+    /// captions. The centre panel cannot carry this: it is suppressed whenever a transcript is
+    /// on screen, which is precisely when someone changes microphone mid-conversation, and
+    /// showing it would cover the captions they already have. So the indicator lives beside the
+    /// picker that started the wait.
+    ///
+    /// This matters more here than the same wait would elsewhere. A user relying on captions to
+    /// follow a conversation cannot hear that the room is still talking; a transcript that has
+    /// simply stopped is exactly what this app looks like when it has crashed. Every path that
+    /// ends a restart has to come back through here — see OnBackendCrashed, which drops it
+    /// before deciding anything, because two of its branches never reach the fatal banner.
+    /// </summary>
+    private void SetDeviceBusy(bool busy)
+    {
+        DeviceBusyRing.IsActive = busy;
+        DeviceBusyRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        // Hidden rather than disabled: the two share a slot, so a greyed button behind a
+        // spinner would show through it.
+        RefreshDevicesButton.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>
     /// Ask the backend to look at the hardware again.
     ///
     /// Windows hands the backend its device list once, when it starts, so a microphone
@@ -2474,10 +2539,16 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // latches _stopping, so a Start afterwards leaves the new capture process untied to
         // kill-on-close (it would outlive a killed UI still holding the microphone) and with
         // crash reporting silently dead for the rest of the session.
-        // The centre shows the reload with a spinner; the picker already shows which device
-        // was chosen.
+        //
+        // Two indicators, because neither covers both cases. The centre panel carries the
+        // wait when there is no transcript yet, and is deliberately suppressed once there is
+        // one, so it cannot cover captions the user already has. The ring by the picker
+        // covers the case the centre panel will not: a device changed in the middle of a
+        // conversation, where the only other feedback is the transcript stopping.
         ClearStatus();
         PauseCaptureClock();
+        ShowLoadingState($"Switching to {device.Name}");
+        SetDeviceBusy(true);
 
         _captureRequested = false;
         _connected = false;

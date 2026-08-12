@@ -424,15 +424,26 @@
                          wanted is the moment someone is already reaching for this picker,
                          and a list that reorders itself unprompted during a conversation is
                          worse than one that waits to be asked. Subtle styling because it is
-                         a repair tool, not a thing to reach for every session. -->
-                    <Button x:Name="RefreshDevicesButton" Click="OnRefreshDevices"
-                            Width="32" Height="32" Padding="0"
-                            Background="Transparent" BorderThickness="0"
-                            ToolTipService.ToolTip="Look for devices plugged in since Sunno started"
-                            AutomationProperties.Name="Refresh device list">
-                        <FontIcon x:Name="RefreshDevicesIcon" Glyph="&#xE72C;" FontSize="14"
-                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    </Button>
+                         a repair tool, not a thing to reach for every session.
+
+                         The ring shares the slot rather than sitting beside it, so switching
+                         device does not shuffle the row it lives in. -->
+                    <Grid Width="32" Height="32">
+                        <Button x:Name="RefreshDevicesButton" Click="OnRefreshDevices"
+                                Width="32" Height="32" Padding="0"
+                                Background="Transparent" BorderThickness="0"
+                                ToolTipService.ToolTip="Look for devices plugged in since Sunno started"
+                                AutomationProperties.Name="Refresh device list">
+                            <FontIcon x:Name="RefreshDevicesIcon" Glyph="&#xE72C;" FontSize="14"
+                                      Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </Button>
+                        <!-- Changing device restarts the engine, which takes seconds. Without
+                             something here the transcript simply stops, and a frozen transcript
+                             is what this app looks like when it is broken. -->
+                        <ProgressRing x:Name="DeviceBusyRing" Width="18" Height="18"
+                                      IsActive="False" Visibility="Collapsed"
+                                      AutomationProperties.Name="Switching input device" />
+                    </Grid>
                 </StackPanel>
 
                 <Button x:Name="ToggleButton" Grid.Column="1" Click="OnToggleCapture"
