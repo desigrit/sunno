@@ -1160,9 +1160,14 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         //
         // System audio is captured from an output endpoint, which Windows does not put behind
         // the microphone permission and which records nobody in the room. Gating it here meant
-        // that someone who declined the microphone — a reasonable thing to do, and the exact
-        // person most likely to be careful about it — could not caption a video call either,
-        // and got no explanation, because the refusal happens before anything draws a banner.
+        // that someone whose microphone Windows has refused could not caption a video call
+        // either, and was told nothing, because the refusal happens before anything draws a
+        // banner. That is a reasonable state to be in, and the person most careful about a
+        // microphone is exactly the one who ends up there.
+        //
+        // The real gate is _micGranted, which is false for every status Windows records as a
+        // refusal. _micDeclined is carried along for symmetry with the two other places that
+        // test the pair, but nothing assigns it true any more, so it contributes nothing here.
         var loopback = _settings.LoopbackDeviceIndex is not null;
         if (!loopback && (!_micGranted || _micDeclined)) return;
         if (!_startedPaused || _captureRequested || !_connected) return;
@@ -1857,6 +1862,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void BuildModelGroups(List<ModelChoice> choices)
     {
         ModelList.Items.Clear();
+        // No catalogue at all. Not reachable from today's backend, but the branch below would
+        // otherwise print "None of these can keep up" over an empty list, which reads as a
+        // verdict on models that were never offered.
+        if (choices.Count == 0) return;
 
         var keepsUp = choices.Where(m => m.Responsive).ToList();
         var lags = choices.Where(m => !m.Responsive).ToList();
