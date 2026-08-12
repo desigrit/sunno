@@ -15,9 +15,9 @@ Sunno redistributes the components below. Each remains under its own licence.
 | onnxruntime | 1.28.0 | MIT License |
 | sherpa-onnx | 1.13.4 | Apache licensed, as found in the LICENSE file |
 | sounddevice | 0.5.5 | MIT |
-| soxr **(copyleft — see notes)** | 1.1.0 | LGPL-2.1-or-later |
+| soxr **(copyleft: see notes)** | 1.1.0 | LGPL-2.1-or-later |
 | tokenizers | 0.23.1 | Apache Software License |
-| tqdm **(copyleft — see notes)** | 4.70.0 | MPL-2.0 AND MIT |
+| tqdm **(copyleft: see notes)** | 4.70.0 | MPL-2.0 AND MIT |
 | websockets | 17.0 | BSD-3-Clause |
 
 ## Native and model components
@@ -53,7 +53,7 @@ difference between the LGPL and the GPL, and is what the LGPL exists for.
 `tqdm` is dual-licensed **MPL-2.0 AND MIT**. MPL-2.0 is file-level copyleft: it
 requires that modifications to MPL-covered files be published, and that the licence
 travel with them. Sunno uses tqdm unmodified, and ships as source, so nothing further
-is required — but it is listed here rather than lumped in with the permissive
+is required, but it is listed here rather than lumped in with the permissive
 dependencies, because it is not one.
 
 - tqdm source: https://github.com/tqdm/tqdm

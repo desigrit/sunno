@@ -1,4 +1,4 @@
-# Sunno on ARM64 — engineering notes
+# Sunno on ARM64: engineering notes
 
 Status of the native ARM64 port, for anyone picking it up. Everything below is measured or
 verified unless it says otherwise.
@@ -23,7 +23,7 @@ and the NPU path (1132 ms) are too slow to be defaults. Design for a mid-range S
 battery in Balanced mode, not a fast one plugged in.
 
 **Still undecided:** per-word uncertainty (`WordInlines.cs:135-144` greys words below
-`UncertainBelow = 0.55` on *all* lines — a different feature from Clarity, which shows only on your own lines, and arguably more valuable to a hard-of-hearing user). Also speaker labelling and loopback,
+`UncertainBelow = 0.55` on *all* lines, a different feature from Clarity, which shows only on your own lines, and arguably more valuable to a hard-of-hearing user). Also speaker labelling and loopback,
 if their native deps cannot be solved.
 
 ---
@@ -37,7 +37,7 @@ Mean decode, ms, against a 1000 ms responsiveness budget:
 | tiny | 203 | **132** | 173 |
 | base | 519 | **297** | 298 |
 | small | 1580 | 987 | 846 |
-| medium | 5032 | 3331 | — |
+| medium | 5032 | 3331 | n/a |
 
 Power mode is worth ~1.6x. On Best Performance the Snapdragon **matches an i9-14900K** at
 tiny/base. Raw data in `bench/results/`.
@@ -52,20 +52,20 @@ fall back to CPU entirely (4-11% slower, load up to 14x higher, identical transc
 
 ## What is done
 
-**`e2ad71e` — voice detection and the model list work without CTranslate2.**
+**`e2ad71e`: voice detection and the model list work without CTranslate2.**
 `vad.py` and `models.py` no longer import anything under `faster_whisper` (importing it executes
 `__init__` → `ctranslate2`). Silero weights vendored to `server/assets/`. `_REPOS` in `models.py`
 carries all 19 model ids. `tests/test_model_repos.py` guards the copy against drift.
 
-**`524f77e` — the engine seam.**
+**`524f77e`: the engine seam.**
 `server/engine.py` has the `SpeechEngine` protocol (four members: `settings`, `partial`, `final`,
 `warmup`), the shared `Transcript`/`Word` types, and `create_engine()`. `server/asr.py` holds
 `CTranslate2Engine`; `server/asr_onnx.py` holds `OnnxEngine`. Consumers are `app.py:427` and
 `pipeline.py:22,84,208`.
 
-**`bench/convert_whisper_genai.py` — produces the ARM models.**
+**`bench/convert_whisper_genai.py`: produces the ARM models.**
 Converts `openai/whisper-*` (MIT) into genai format. **Verified working**: base at int8 decodes
-real speech in 363 ms on x64. This removes the supply-chain problem — see below.
+real speech in 363 ms on x64. This removes the supply-chain problem. See below.
 
 ---
 
@@ -80,12 +80,12 @@ real speech in 363 ms on x64. This removes the supply-chain problem — see belo
    ARM ids fall through to `_UNKNOWN_MODEL_LAG_MS = 5000` and the picker shows "5 s, not
    responsive" for everything.
 3. **Three native deps have no ARM path.** `soxr` → `av.AudioResampler` (already packaged,
-   already `win_arm64`, already a *stateful streaming* resampler — measure against the 81.4 dB
+   already `win_arm64`, already a *stateful streaming* resampler, measure against the 81.4 dB
    bar recorded at `loopback.py:191-196` first). `sherpa-onnx` has no importable ARM64 Python
    artifact → speaker labelling likely off on ARM. `pyaudiowpatch` publishes **no sdist at all**
    → loopback likely off on ARM.
 4. **`stage-backend.ps1` cannot build an ARM tree.** It resolves the interpreter from
-   `.venv/pyvenv.cfg` and overlays `.venv/Lib/site-packages` — both x64. Needs
+   `.venv/pyvenv.cfg` and overlays `.venv/Lib/site-packages`, both x64. Needs
    `pip install --platform win_arm64 --target` plus the ARM64 embeddable Python
    (`python-3.12.10-embed-arm64.zip`, verified present, 9.9 MB).
 5. **ARM64 MSIX.** The csproj change is mechanical and **`dotnet publish -r win-arm64` already
@@ -93,18 +93,18 @@ real speech in 363 ms on x64. This removes the supply-chain problem — see belo
    `-r win-x64`; `Package.appxmanifest` carries `ProcessorArchitecture="x64"` and needs
    templating. Ship a `.msixbundle`.
 6. **Unwind the ARM refusal.** `c04e3fe` makes the app say *"Sunno's speech engine needs a
-   64-bit Intel or AMD processor"* — correct for x64-only, wrong once an ARM build exists. See
+   64-bit Intel or AMD processor"*, correct for x64-only, wrong once an ARM build exists. See
    `hardware.py engine_importable()` and `BackendHost._engineUnloadableOnArm`.
 
 ---
 
-## Landmines — these cost real time to find
+## Landmines: these cost real time to find
 
 **`build-msix.ps1:33`'s `\x64\` filter must NOT be templated.** It selects the **host**
 `makeappx`/`signtool` on the dev box. Changing it breaks the build.
 
 **Build proof venvs *from* `requirements.txt`, never by hand.** A hand-built venv is structurally
-incapable of catching a broken requirements file — that is exactly how a deleted
+incapable of catching a broken requirements file, and that is exactly how a deleted
 `onnxruntime>=1.17` got through a review round.
 
 **The QNN incantation is three steps and all are load-bearing:**
@@ -123,7 +123,7 @@ session = ort.InferenceSession(path, sess_options=so)   # NOT providers=[...]
 `prompt=` singular. The Whisper prompt is
 `<|startoftranscript|><|en|><|transcribe|><|notimestamps|>`.
 
-**genai will not load onnx-community models** — they are Optimum/Transformers.js exports with no
+**genai will not load onnx-community models**: they are Optimum/Transformers.js exports with no
 `genai_config.json`. Use `bench/convert_whisper_genai.py`.
 
 **The converter needs two undocumented workarounds** (both already handled in the script, but
@@ -140,7 +140,7 @@ misleading there.
 ## Working practices
 
 - **Every change goes through a review pass before commit.** It has caught a shipping-severity
-  bug in most rounds of this work — including one that would have failed on exactly the ARM model
+  bug in most rounds of this work, including one that would have failed on exactly the ARM model
   tier. Budget for two or three rounds.
 - Commit messages are prose explaining *why*. See `git log`.
 - Tests are directly-runnable scripts in `tests/`, not pytest.

@@ -9,7 +9,7 @@ by hand.
 | file | machine | notes |
 |---|---|---|
 | `x64-i9-14900k.json` | i9-14900K, x64 | desktop baseline, ONNX via genai |
-| `x64-i9-14900k-ct2.json` | same machine | CTranslate2, all six models, 2/4/8 s. **The 4-thread pass is contended** — `distil-large-v3` reads 8.36 s against 3.79/3.71, and `base` comes out faster at 4 threads than at 16, which cannot be right. The 16-thread and CUDA passes are sound. This is the provenance for `base` in `server/hardware.py`. |
+| `x64-i9-14900k-ct2.json` | same machine | CTranslate2, all six models, 2/4/8 s. **The 4-thread pass is contended**: `distil-large-v3` reads 8.36 s against 3.79/3.71, and `base` comes out faster at 4 threads than at 16, which cannot be right. The 16-thread and CUDA passes are sound. This is the provenance for `base` in `server/hardware.py`. |
 | `snapdragon-balanced.json` | Snapdragon X, ARM64 native | Windows power mode **Balanced** |
 | `snapdragon-best-performance.json` | same machine | Windows power mode **Best Performance** |
 | `snapdragon-best-performance-qnn.json` | same machine | `--qnn` asked for, **provider never registered** - see below |
@@ -27,7 +27,7 @@ From `x64-i9-14900k-ct2.json`, 16 threads:
 | 8 s | 290 ms | 490 ms |
 | mean | **463 ms** | 440 ms |
 
-The smallest model is the slower one, and the 2 s row is why: tiny hallucinates on short audio and then spends real time decoding words nobody said. One run returned *"Attention!"* over speech containing no such word. Since short utterances are the whole workload here, tiny is not offered — see the note in `server/models.py`.
+The smallest model is the slower one, and the 2 s row is why: tiny hallucinates on short audio and then spends real time decoding words nobody said. One run returned *"Attention!"* over speech containing no such word. Since short utterances are the whole workload here, tiny is not offered. See the note in `server/models.py`.
 
 Reproduced across three separate runs. All three used the same clip, so treat the *magnitude* as one data point; the direction is consistent.
 
@@ -38,7 +38,7 @@ Reproduced across three separate runs. All three used the same clip, so treat th
 | tiny | 173 | 203 | **132** |
 | base | 298 | 519 | **297** |
 | small | 846 | 1580 | **987** |
-| medium | — | 5032 | 3331 |
+| medium | n/a | 5032 | 3331 |
 
 ## The NPU does not take the work
 
