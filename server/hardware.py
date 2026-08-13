@@ -3,7 +3,7 @@
 Two jobs:
 
 1. Pick a device. Most Windows PCs have no NVIDIA GPU, and this app previously hardcoded
-   CUDA and raised at startup without one — an install that could never caption anything.
+   CUDA and raised at startup without one, an install that could never caption anything.
 
 2. Predict decode lag per model, so the picker can say what each choice costs *before* the
    user spends several gigabytes finding out. On this hardware the spread is large: about
@@ -11,16 +11,38 @@ Two jobs:
    lag is fine for captioning a recorded video and useless for following a conversation,
    and only the user knows which they are doing.
 
-What the number means, precisely: the time to decode one utterance on the *provisional*
-pass, which is greedy (beam 1) and is what puts words on screen first. It is not the whole
-end-to-end delay — endpointing waits ``end_silence_ms`` before finalising, and the final
-pass re-decodes with beam search — but those add roughly the same amount for every model on
-every machine, so they would shift all the figures without changing any comparison. Decode
-time is the part that actually differs between a choice and its alternatives.
+What the number means, precisely: the time to decode one utterance. It is not the whole
+end-to-end delay, since endpointing waits ``end_silence_ms`` before finalising.
 
-The numbers below are measured, not estimated. Notably the lag barely varies with how long
-someone spoke (2 s and 8 s utterances land within noise of each other) because Whisper pads
-every window to 30 s, so one figure per model per device is an honest summary.
+Which decode, though, is where this gets slippery, so be exact. The tables below come from
+``bench/bench_latency.py``, which asks for beam 1 and a language and takes everything else
+at faster-whisper's defaults. That is closer to the provisional pass than to the final one,
+but it is neither pass as shipped: the library default ``temperature`` already carries the
+full fallback ladder that the provisional pass explicitly switches off, the provisional
+pass carries an initial prompt once any vocabulary or context exists where the bench never
+does, and the bench conditions on previous text where the app never does.
+
+Two cautions, both measured, both currently unhandled.
+
+Lag is **not** flat with utterance length. An earlier version of this comment claimed 2 s
+and 8 s utterances land within noise of each other because Whisper pads every window to
+30 s. Only the encoder behaves that way. The decoder is autoregressive, so it scales with
+how many tokens come out, and on a Quadro RTX 8000 the base model measures 44, 43, 67, 99
+and 155 ms for 1, 2, 5, 10 and 20 s of speech. That is 3.6x across the measured range, and
+``config.py`` permits utterances shorter still, down to ``min_utterance_ms``. So one figure
+per model per device summarises a spread rather than reporting a constant.
+
+The tables and ``record_latency`` also describe different work. The tables are beam 1
+without word timestamps. ``record_latency`` is called for finals only, and the final pass
+raises the beam to 5 and turns word timestamps on. Those two changes on their own, timed
+against the same clip with both arms otherwise at faster-whisper's defaults, so that
+temperature, prompt and previous-text conditioning were identical in each, measured 1.4x to
+3.4x more expensive on the same card, the multiplier growing with utterance length.
+
+The consequence is visible without re-running anything. On the dev box ``hardware.json``
+holds a measured ``cuda:base`` of 249 ms against a table entry of 55 ms, a 4.5x gap on one
+model on one machine. A measured figure and a table figure are not on one scale, and
+``estimated_lag_ms`` can hand back one of each inside a single list.
 """
 
 from __future__ import annotations
@@ -324,9 +346,13 @@ _OBSERVE_MIN = 5
 def record_latency(model_id: str, device: str, ms: float) -> None:
     """Note how long a real decode actually took on this machine.
 
-    Called for finalised utterances only. Partials are decoded greedily and would report a
-    faster figure than the one the user waits for at the end of a sentence, which is what
-    the picker's number claims to describe.
+    Called for finalised utterances only, on the reasoning that a partial decodes greedily
+    and would understate the wait at the end of a sentence.
+
+    Be aware that this leaves the recorded figures on a different scale from the shipped
+    tables, which are beam 1 without word timestamps. See the module docstring. Recording
+    partials instead would match the tables but would describe a different wait, so neither
+    choice is right until the two sources are deliberately reconciled.
     """
     if ms <= 0 or ms > 60_000:
         return   # a wild value means something else went wrong; don't poison the estimate
