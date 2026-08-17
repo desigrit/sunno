@@ -29,6 +29,7 @@ Sunno redistributes the components below. Each remains under its own licence.
 | Whisper model weights | MIT (OpenAI) | Downloaded at first run, not redistributed in the package. |
 | Silero VAD | MIT | Vendored at `server/assets/silero_vad_v6.onnx` and redistributed in the package. From [snakers4/silero-vad](https://github.com/snakers4/silero-vad). |
 | WeSpeaker CAM++ speaker embedding | Apache-2.0 | Downloaded at first run, not redistributed in the package. |
+| Streaming Zipformer English transducer | Apache-2.0 | Downloaded at first run, not redistributed in the package. From [csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26), trained with [k2-fsa/icefall](https://github.com/k2-fsa/icefall) on LibriSpeech. |
 
 ## LGPL note: soxr
 

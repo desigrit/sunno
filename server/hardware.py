@@ -73,12 +73,37 @@ _LAG_MS_CUDA: dict[str, int] = {
     "medium": 550,
     "distil-large-v3": 500,
     "large-v3": 650,
+    # Same figure as the processor rows, because it is the same work: this model runs on
+    # the processor whatever else the machine has (asr_stream.py pins provider="cpu"), so
+    # a graphics card does not change it. Without a row here it fell through to the
+    # unknown-model default and the picker told everyone with a GPU that a model which
+    # decodes in 180 ms was five seconds behind.
+    "stream-en": 180,
 }
 
 # CPU lag at two thread counts on the reference machine. Scaling with cores is strongly
 # sublinear — quadrupling threads takes large-v3 from 4.5 s only to 4.4 s — so these are
 # interpolated on a log scale rather than divided by core count.
+#
+# stream-en is a streaming transducer rather than a Whisper checkpoint, measured by
+# bench/bench_stream_latency.py, which times a whole-utterance decode over the same 2, 4
+# and 8 second clips so the figure means the same thing as the rows around it. It is the
+# same at both thread counts because it measured 179 ms at four and 178 at sixteen: the
+# work per chunk is too small to spread further.
+#
+# Note the shape as well as the number. This model has almost no fixed cost and scales
+# close to linearly, about 44 ms per second of speech, so the 180 ms mean covers 2 to 8
+# second utterances and a 20 second one, which config.py still permits, costs nearer 880
+# ms. Whisper is the other way round, mostly fixed cost, so the same single figure hides
+# a different spread for each.
+#
+# Deliberately NOT the streaming figure. Fed audio continuously this model puts words on
+# screen while someone is still speaking, which measured near zero lag, but the pipeline
+# waits for an endpoint before it decodes anything, so nobody would see that today. Filing
+# it here would make this model win on every machine, including ones with a graphics card,
+# on the strength of a number the app cannot yet deliver.
 _LAG_MS_CPU_4: dict[str, int] = {
+    "stream-en": 180,
     "base": 730,
     "small": 1450,
     "medium": 3460,
@@ -86,6 +111,7 @@ _LAG_MS_CPU_4: dict[str, int] = {
     "large-v3": 4540,
 }
 _LAG_MS_CPU_16: dict[str, int] = {
+    "stream-en": 180,
     "base": 405,
     "small": 810,
     "medium": 2260,

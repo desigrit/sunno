@@ -499,8 +499,16 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                 settings.compute_type = hardware.compute_type_for("cpu")
                 print(f"[error] GPU unavailable ({exc}); falling back to CPU", flush=True)
 
-        print(f"\nLoading Whisper {settings.model_size} ({settings.compute_type}) on "
-              f"{settings.device} ...")
+        # Not every model is a Whisper checkpoint any more, and this line ends up in the
+        # backend log a user attaches to a bug report, where "Loading Whisper stream-en"
+        # would send whoever reads it looking for a Whisper model that does not exist.
+        from .models import is_stream_model
+
+        if is_stream_model(settings.model_size):
+            print(f"\nLoading {settings.model_size} on cpu ...")
+        else:
+            print(f"\nLoading Whisper {settings.model_size} ({settings.compute_type}) on "
+                  f"{settings.device} ...")
         emit({"type": "status", "state": "loading", "model": settings.model_size})
 
         from .engine import create_engine

@@ -90,7 +90,84 @@ CATALOG: list[dict] = [
         "approx_mb": 145,
         "languages": "multilingual",
     },
+    {
+        "id": "stream-en",
+        "name": "Live English",
+        "detail": "Built for PCs with no graphics card. English only, lower case with no "
+                  "punctuation. It does not mark words it was unsure of, and it ignores "
+                  "your vocabulary list.",
+        "approx_mb": 69,
+        "languages": "English",
+    },
 ]
+
+# Streaming transducer models, which are a different shape from a Whisper checkpoint: an
+# encoder, a decoder and a joiner rather than one file. Kept apart from _REPOS so that a
+# Whisper id can never resolve to half of one of these.
+#
+# Apache-2.0, which is why this one. Two better-sounding options were declined on licence
+# grounds rather than on merit. Kroko's community weights measured 2.8 percent word error
+# against this model's 7.0 and arrive already punctuated, but they are CC-BY-SA, and what
+# ShareAlike asks of an app that ships a model is not a question to settle on someone
+# else's product. NVIDIA's Nemotron is permissively licensed and more accurate again, but
+# at 631 MB it decoded a whole utterance in about 2.2 seconds against this one's 0.18,
+# which is the wrong end of the trade for the machines this exists to serve.
+#
+# No punctuation model, for the same reason. sherpa-onnx publishes a 7 MB streaming
+# punctuation and casing model that works well here, measured at 4.6 ms and verified to
+# turn "the quick brown fox" into "The quick brown fox.", but every copy of it found so
+# far is either an unlicensed personal mirror or a release asset with no licence of its
+# own, and an unlicensed model is a stricter position than the ShareAlike one already
+# declined. Captions are lower case until that is resolved, which is a readability cost
+# taken deliberately over a licensing risk taken accidentally. The candidate is
+# `sherpa-onnx-online-punct-en-2024-08-06`, in the k2-fsa/sherpa-onnx `punctuation-models`
+# release.
+_STREAM_REPOS: dict[str, dict] = {
+    "stream-en": {
+        "repo": "csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26",
+        "files": {
+            "encoder": "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+            "decoder": "decoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+            "joiner": "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+            "tokens": "tokens.txt",
+        },
+    },
+}
+
+
+def is_stream_model(model_id: str) -> bool:
+    return model_id in _STREAM_REPOS
+
+
+def _stream_root() -> Path:
+    """Where streaming models are kept, beside the other caches."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return Path(base) / "Sunno" / "stream-models"
+
+
+def stream_model_paths(model_id: str) -> dict:
+    """Local paths for a streaming model, raising if it has not been downloaded.
+
+    Raises rather than fetching, for the same reason ``onnx_model_path`` does: downloading
+    is the download path's job, which reports progress, and doing it from inside engine
+    construction would look like a very slow start.
+    """
+    spec = _STREAM_REPOS.get(model_id)
+    if spec is None:
+        raise KeyError(f"'{model_id}' is not a streaming model")
+
+    root = _stream_root() / model_id
+    paths: dict = {}
+    for role, filename in spec["files"].items():
+        path = root / filename
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"No streaming model at {root}. It has to be downloaded before the engine "
+                "can start."
+            )
+        paths[role] = path
+
+    return paths
 
 # Deliberately not offered: whisper-tiny.
 #
@@ -131,6 +208,14 @@ def is_available(model_id: str) -> ModelStatus:
     chance to explain why.
     """
     from huggingface_hub import snapshot_download
+
+    if is_stream_model(model_id):
+        try:
+            paths = stream_model_paths(model_id)
+            return ModelStatus(model_id=model_id, available=True,
+                               path=str(paths["encoder"].parent))
+        except (FileNotFoundError, KeyError):
+            return ModelStatus(model_id=model_id, available=False)
 
     try:
         path = snapshot_download(
@@ -214,6 +299,9 @@ def total_size_bytes(model_id: str) -> int:
 
     from huggingface_hub import HfApi
 
+    if is_stream_model(model_id):
+        return _stream_total_size_bytes(model_id)
+
     try:
         info = HfApi().model_info(_repo_id(model_id), files_metadata=True)
     except Exception:
@@ -227,10 +315,84 @@ def total_size_bytes(model_id: str) -> int:
     return total
 
 
+def _stream_total_size_bytes(model_id: str) -> int:
+    """Size of just the files a streaming model needs.
+
+    A whole-repo figure would be wrong here: these repos carry several quantisations and
+    chunk configurations side by side, and only one set is fetched, so quoting the repo
+    would tell someone to expect several times what actually downloads.
+    """
+    from huggingface_hub import HfApi
+
+    spec = _STREAM_REPOS[model_id]
+    api = HfApi()
+    wanted = set(spec["files"].values())
+
+    try:
+        info = api.model_info(spec["repo"], files_metadata=True)
+    except Exception:
+        entry = next((e for e in CATALOG if e["id"] == model_id), None)
+        return int(entry["approx_mb"] * 1024 * 1024) if entry else 0
+
+    total = 0
+    for sibling in info.siblings or []:
+        if sibling.rfilename in wanted:
+            total += sibling.size or 0
+
+    return total
+
+
+def _download_stream(model_id: str, on_progress: ProgressFn | None = None) -> str:
+    """Fetch the handful of files a streaming model needs.
+
+    Named files rather than a snapshot, because these repos hold several quantisations and
+    chunk configurations together and a snapshot would pull hundreds of megabytes that are
+    never loaded.
+    """
+    from huggingface_hub import hf_hub_download
+
+    spec = _STREAM_REPOS[model_id]
+    root = _stream_root() / model_id
+    root.mkdir(parents=True, exist_ok=True)
+
+    total = total_size_bytes(model_id)
+    done = 0
+
+    jobs = [(spec["repo"], name, root) for name in spec["files"].values()]
+
+    for repo, filename, target_dir in jobs:
+        cached = hf_hub_download(repo_id=repo, filename=filename)
+        target = target_dir / filename
+        if not target.is_file():
+            import shutil
+
+            # Copied out of the hub cache rather than linked, because the cache is prunable
+            # and a model the engine cannot open is a worse failure than a duplicated file.
+            #
+            # Written beside the target and renamed, because a copy interrupted partway
+            # leaves a truncated file that nothing repairs: stream_model_paths only asks
+            # whether the file exists, so the next launch would report the model ready and
+            # then fail inside ONNX with an error about the file format. A rename either
+            # happened or did not.
+            temporary = target.with_suffix(target.suffix + ".part")
+            shutil.copyfile(cached, temporary)
+            temporary.replace(target)
+        done += target.stat().st_size
+        if on_progress:
+            on_progress(min(done, total), total)
+
+    if on_progress:
+        on_progress(total, total)
+    return str(root)
+
+
 def download(model_id: str, on_progress: ProgressFn | None = None) -> str:
     """Download a model, reporting cumulative bytes. Resumes an interrupted download."""
     from huggingface_hub import snapshot_download
     from tqdm.auto import tqdm
+
+    if is_stream_model(model_id):
+        return _download_stream(model_id, on_progress)
 
     total = total_size_bytes(model_id)
     state = {"done": 0}

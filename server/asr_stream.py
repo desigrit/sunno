@@ -1,0 +1,139 @@
+"""Streaming transducer engine, for machines with no usable graphics card.
+
+Most PCs have no NVIDIA card, and on those Whisper is slow because of what it is rather
+than how it is run: an encoder-decoder that pads every window to thirty seconds, so a
+two second sentence costs about what a twenty second one does. A transducer does not
+pad. Measured here on a processor at four threads, averaged over 2, 4 and 8 second
+utterances, a streaming Zipformer decodes in about 180 ms where Whisper base takes 730
+and large-v3 takes 4540. That is the reason this file exists.
+
+It runs on sherpa-onnx, which the app already ships and uses for speaker embeddings, so
+this adds a model and no new native dependency. sherpa-onnx also publishes native
+win_arm64 wheels, which CTranslate2 does not, so this is the first engine that can run
+everywhere without emulation.
+
+**Used statelessly, on purpose.** sherpa-onnx can hold state across chunks and emit words
+while someone is still speaking, which is a better design for captions than waiting for a
+sentence to end. This engine deliberately does not do that yet. The pipeline hands an
+engine the whole utterance so far on every partial, and ``AudioConditioner`` renormalises
+gain over everything it is given, so the prefix of a partial is not the same audio it was
+last time: measured, one loud word changed already-decoded samples by 67 percent. Feeding
+tails into a recogniser holding state would splice two different gains together, quietly,
+with nothing to catch it. So each call builds a fresh stream over the whole utterance,
+exactly as the CTranslate2 and ONNX engines already do. That is correct, and it is still
+several times faster than what it replaces. True streaming needs the pipeline to hand out
+deltas and to say which utterance they belong to, which is a change to a seam every engine
+shares and is not this file's to make.
+
+Two things this cannot report, both accepted deliberately: ``clarity``, the per-utterance
+confidence badge, and per-word uncertainty. A transducer exposes no comparable score, and
+inventing one would be worse than leaving it out for someone relying on this to follow a
+conversation. The UI already treats both as optional.
+"""
+
+from __future__ import annotations
+
+import time
+
+import numpy as np
+
+from .config import SAMPLE_RATE, Settings
+from .engine import Transcript
+
+
+class StreamingEngine:
+    """A streaming transducer, used one utterance at a time."""
+
+    def __init__(self, settings: Settings) -> None:
+        import sherpa_onnx
+
+        from .models import stream_model_paths
+
+        self.settings = settings
+        self._sherpa = sherpa_onnx
+
+        paths = stream_model_paths(settings.model_size)
+        self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+            tokens=str(paths["tokens"]),
+            encoder=str(paths["encoder"]),
+            decoder=str(paths["decoder"]),
+            joiner=str(paths["joiner"]),
+            num_threads=_threads(),
+            provider="cpu",
+            decoding_method="greedy_search",
+        )
+
+    # --- context -------------------------------------------------------
+    # A transducer takes no prompt, so previous text cannot bias it and a custom vocabulary
+    # has nowhere to go. Both are no-ops here, and both are called by this engine's own
+    # decode paths in the other implementations rather than by the pipeline, so they exist
+    # to keep the three engines interchangeable.
+    def add_context(self, text: str) -> None:
+        return None
+
+    def clear_context(self) -> None:
+        return None
+
+    # --- decoding ------------------------------------------------------
+    def _run(self, audio: np.ndarray, is_final: bool) -> Transcript:
+        started = time.perf_counter()
+
+        stream = self._recognizer.create_stream()
+        stream.accept_waveform(SAMPLE_RATE, audio)
+        stream.input_finished()
+        while self._recognizer.is_ready(stream):
+            self._recognizer.decode_stream(stream)
+        text = self._recognizer.get_result(stream).strip()
+
+        return Transcript(
+            text=self._readable(text),
+            duration_s=len(audio) / SAMPLE_RATE,
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+            is_final=is_final,
+            # See the module docstring. Reported as absent rather than invented.
+            clarity=None,
+            words=[],
+        )
+
+    def _readable(self, text: str) -> str:
+        """Lower-case, because these models emit unbroken upper case.
+
+        A whole conversation in capitals is legible but tiring, and this app exists to be
+        read for the length of a conversation.
+
+        Restoring real sentence case and punctuation needs a second model, and the one that
+        fits has no clear licence, so it is left out. See the note in models.py. Doing it
+        here without a model is not an option worth taking: capitalising after every full
+        stop requires knowing where the full stops are, which is the thing that is missing.
+
+        Applied identically to provisional and final text, on purpose. Anything that
+        depends on later words rewrites text already on screen: an earlier version ran a
+        punctuation model over each growing partial and the opening words changed on 13 of
+        31 refreshes, cycling between "lazy dog. We", "lazy dog. we" and "lazy dog we".
+        The transducer alone rewrote nothing, 0 of 31. Lower-casing cannot change its mind.
+        """
+        return text.lower()
+
+    def partial(self, audio: np.ndarray) -> Transcript:
+        return self._run(audio, is_final=False)
+
+    def final(self, audio: np.ndarray) -> Transcript:
+        return self._run(audio, is_final=True)
+
+    def warmup(self) -> float:
+        """One real decode, so the first thing anyone says does not pay the load cost."""
+        started = time.perf_counter()
+        self._run(np.zeros(SAMPLE_RATE, dtype=np.float32), is_final=True)
+        return (time.perf_counter() - started) * 1000.0
+
+
+def _threads() -> int:
+    """Threads for the recogniser.
+
+    Capped low on purpose. These models measured no faster at sixteen threads than at
+    four, 178 ms against 179, because the work per chunk is too small to spread, and
+    taking cores the rest of the machine is using costs more than it returns.
+    """
+    import os
+
+    return max(1, min(4, os.cpu_count() or 4))

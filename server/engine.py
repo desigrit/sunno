@@ -70,33 +70,64 @@ def available_engines() -> dict[str, bool]:
     return {
         "ct2": importlib.util.find_spec("ctranslate2") is not None,
         "onnx": importlib.util.find_spec("onnxruntime_genai") is not None,
+        "stream": importlib.util.find_spec("sherpa_onnx") is not None,
     }
 
 
-def resolve_engine(preference: str = "auto") -> str:
+def resolve_engine(preference: str = "auto", model_id: str | None = None) -> str:
     """Turn a preference into an engine that will really load.
 
-    CTranslate2 wins when both are present. It is faster and more accurate at the same model
-    size, and on a machine where it works there is no reason to take the ONNX path.
+    The model decides first. A streaming transducer and a Whisper checkpoint are different
+    artifacts, not two settings of one thing, so asking for one of these models is asking
+    for this engine and there is nothing to weigh.
+
+    Otherwise CTranslate2 wins when it is present, because at the same model size it is
+    faster and more accurate than the ONNX path, which exists for Windows on ARM where
+    CTranslate2 has no wheel at all.
+
+    Note what is deliberately absent: no rule here prefers the streaming engine on a
+    machine with no graphics card. Which model suits a machine is already decided, better,
+    by hardware.default_model measuring it. Duplicating that judgement here would override
+    people who chose a model on purpose.
     """
     have = available_engines()
-    if preference in ("ct2", "onnx"):
+
+    if model_id is not None:
+        from .models import is_stream_model
+
+        if is_stream_model(model_id):
+            if not have["stream"]:
+                raise RuntimeError(
+                    f"'{model_id}' needs the streaming engine, but sherpa-onnx could not "
+                    "be imported."
+                )
+            return "stream"
+
+    if preference in ("ct2", "onnx", "stream"):
         return preference
     if have["ct2"]:
         return "ct2"
     if have["onnx"]:
         return "onnx"
-    # Neither. Say so here rather than letting an ImportError surface from three frames deep
-    # in a decode call, where it reads as a missing model rather than a missing engine.
+    # Deliberately no bare fallback to "stream" here. sherpa-onnx is a hard requirement of
+    # the app, so it is always importable, and falling through to it would make the error
+    # below unreachable: a machine whose CTranslate2 install is broken would be handed the
+    # streaming engine for a Whisper id, which then raises a KeyError naming the model.
+    # That is exactly the "reads as a missing model rather than a missing engine" failure
+    # this check exists to prevent. A streaming model already returned above.
     raise RuntimeError(
-        "No speech engine is available. Expected either ctranslate2 (Intel and AMD builds) "
-        "or onnxruntime-genai (ARM builds); neither could be imported."
+        "No speech engine is available for this model. Expected ctranslate2 (Intel and "
+        "AMD builds) or onnxruntime-genai (ARM builds); neither could be imported."
     )
 
 
 def create_engine(settings: "Settings", preference: str = "auto") -> SpeechEngine:
     """Build the engine this machine can run."""
-    kind = resolve_engine(preference)
+    kind = resolve_engine(preference, getattr(settings, "model_size", None))
+    if kind == "stream":
+        from .asr_stream import StreamingEngine
+
+        return StreamingEngine(settings)
     if kind == "onnx":
         from .asr_onnx import OnnxEngine
 

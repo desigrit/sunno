@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from server.models import CATALOG, _REPOS  # noqa: E402
+from server.models import CATALOG, _REPOS, _STREAM_REPOS, is_stream_model  # noqa: E402
 
 failures: list[str] = []
 
@@ -51,9 +51,33 @@ wrong = {k: (_REPOS[k], _MODELS[k]) for k in set(_REPOS) & set(_MODELS) if _REPO
 check("every repo matches", not wrong, f"mismatched {wrong}")
 
 # The picker's ids are the ones a user actually reaches, so a gap there is worse than a gap
-# elsewhere in the table.
-unknown = [e["id"] for e in CATALOG if e["id"] not in _REPOS]
+# elsewhere in the table. A catalog id has to resolve through exactly one of the two tables:
+# _REPOS for Whisper checkpoints, _STREAM_REPOS for streaming transducers, which are a
+# different artifact rather than another Whisper size.
+unknown = [
+    e["id"] for e in CATALOG
+    if e["id"] not in _REPOS and not is_stream_model(e["id"])
+]
 check("every catalog id resolves", not unknown, f"unresolvable {unknown}")
+
+# An id in both tables would resolve differently depending on which check ran first, which
+# is the kind of thing that works until someone reorders two lines.
+both = [e["id"] for e in CATALOG if e["id"] in _REPOS and is_stream_model(e["id"])]
+check("no id claimed by both tables", not both, f"ambiguous {both}")
+
+# Every streaming model needs its four parts plus somewhere to fetch them, or the engine
+# raises a missing-file error at construction that reads like a failed download.
+incomplete = []
+for model_id, spec in _STREAM_REPOS.items():
+    missing = {"encoder", "decoder", "joiner", "tokens"} - set(spec.get("files", {}))
+    if missing or not spec.get("repo"):
+        incomplete.append((model_id, sorted(missing)))
+check("every streaming model is complete", not incomplete, f"incomplete {incomplete}")
+
+# The picker quotes approx_mb before anything is downloaded, so a streaming model with no
+# catalog entry would be offered with no size at all.
+uncatalogued = [m for m in _STREAM_REPOS if m not in {e["id"] for e in CATALOG}]
+check("every streaming model is offered", not uncatalogued, f"missing {uncatalogued}")
 
 print()
 if failures:
