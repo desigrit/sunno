@@ -92,7 +92,7 @@ CATALOG: list[dict] = [
     },
     {
         "id": "stream-en",
-        "name": "Live English",
+        "name": "Zipformer streaming",
         "detail": "Built for PCs with no graphics card. English only, lower case with no "
                   "punctuation. It does not mark words it was unsure of, and it ignores "
                   "your vocabulary list.",
@@ -105,21 +105,34 @@ CATALOG: list[dict] = [
 # encoder, a decoder and a joiner rather than one file. Kept apart from _REPOS so that a
 # Whisper id can never resolve to half of one of these.
 #
-# Apache-2.0, which is why this one. Two better-sounding options were declined on licence
-# grounds rather than on merit. Kroko's community weights measured 2.8 percent word error
-# against this model's 7.0 and arrive already punctuated, but they are CC-BY-SA, and what
-# ShareAlike asks of an app that ships a model is not a question to settle on someone
-# else's product. NVIDIA's Nemotron is permissively licensed and more accurate again, but
-# at 631 MB it decoded a whole utterance in about 2.2 seconds against this one's 0.18,
-# which is the wrong end of the trade for the machines this exists to serve.
+# Apache-2.0, declared in the repo's own metadata, which is why this one.
+#
+# Kroko was tried and withdrawn, and the reason is worth recording so nobody spends the
+# afternoon again. Its community weights are genuinely better here, measured on real
+# two-speaker audio: capitals and punctuation of its own, "Microsoft Store team" where this
+# model gives "microsoph store team", and a third the prefix churn. It was added, it worked,
+# and then the licence was checked properly rather than taken from a README. The chain is:
+# the sherpa-onnx mirror that actually serves the ONNX files declares no licence at all
+# (`cardData: null`) and its README says only "See license at .../Banafo/Kroko-ASR"; that
+# repo declares `license: other` with `license_name: "test"` and `license_link: LICENSE`;
+# that LICENSE file is zero bytes. The word CC-BY-SA appears only in prose in a marketing
+# README that splits models into community and commercial tiers without saying which tier
+# this checkpoint is. So the position is not "ShareAlike, and is that workable" but "no
+# grant at all", which is the stricter case, and the same one the punctuation model below
+# was refused over. Revisit if Banafo fills that file in. No request has been sent from
+# here, so nobody is waiting on a reply.
+#
+# Provenance is a second, separate problem there. Banafo publishes `.data` files; the
+# mirror serves `encoder.onnx` / `decoder.onnx` / `joiner.onnx`. Somebody converted them,
+# and conversion is exactly what ShareAlike would bind, so even a CC-BY-SA answer would not
+# close it on its own.
 #
 # No punctuation model, for the same reason. sherpa-onnx publishes a 7 MB streaming
 # punctuation and casing model that works well here, measured at 4.6 ms and verified to
-# turn "the quick brown fox" into "The quick brown fox.", but every copy of it found so
-# far is either an unlicensed personal mirror or a release asset with no licence of its
-# own, and an unlicensed model is a stricter position than the ShareAlike one already
-# declined. Captions are lower case until that is resolved, which is a readability cost
-# taken deliberately over a licensing risk taken accidentally. The candidate is
+# turn "the quick brown fox" into "The quick brown fox.", but every copy of it found so far
+# is either an unlicensed personal mirror or a release asset with no licence of its own.
+# Captions are lower case until that is resolved, which is a readability cost taken
+# deliberately over a licensing risk taken accidentally. The candidate is
 # `sherpa-onnx-online-punct-en-2024-08-06`, in the k2-fsa/sherpa-onnx `punctuation-models`
 # release.
 _STREAM_REPOS: dict[str, dict] = {

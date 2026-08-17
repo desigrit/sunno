@@ -110,7 +110,19 @@ class StreamingEngine:
         depends on later words rewrites text already on screen: an earlier version ran a
         punctuation model over each growing partial and the opening words changed on 13 of
         31 refreshes, cycling between "lazy dog. We", "lazy dog. we" and "lazy dog we".
-        The transducer alone rewrote nothing, 0 of 31. Lower-casing cannot change its mind.
+        Lower-casing cannot change its mind, because it reads one character at a time.
+
+        That is a claim about this function, not about the captions. The transducer itself
+        revises as more audio arrives, and on real two-speaker audio it does so often: 147
+        of 251 refreshes across testdata/ changed a prefix already displayed, measured at
+        the pipeline's own 700 ms and 450 ms cadence by bench/bench_stream_churn.py, which
+        exists so this number can be re-run rather than believed. An earlier version of
+        this note cited "0 of 31" as though that were a property of the engine; it was a
+        property of one clean synthesized clip, and it does not survive real speech. The
+        cause is structural rather than fixable here: the pipeline re-decodes the whole
+        utterance on every partial, so the model is free to reach a different answer each
+        time. Handing out deltas with a committed prefix is what would stop it, which is
+        the same pipeline change described above.
         """
         return text.lower()
 
