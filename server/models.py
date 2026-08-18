@@ -92,10 +92,9 @@ CATALOG: list[dict] = [
     },
     {
         "id": "stream-en",
-        "name": "Zipformer streaming",
+        "name": "Zipformer",
         "detail": "Built for PCs with no graphics card. English only, lower case with no "
-                  "punctuation. It does not mark words it was unsure of, and it ignores "
-                  "your vocabulary list.",
+                  "punctuation.",
         "approx_mb": 69,
         "languages": "English",
     },
@@ -108,12 +107,9 @@ CATALOG: list[dict] = [
     # AUTO_SELECT_EXCLUDED below rather than by this comment.
     {
         "id": "stream-en-kroko",
-        "name": "Kroko streaming",
-        "detail": "Built for PCs with no graphics card. Writes capitals and punctuation, "
-                  "unlike the other streaming model, and changes words on screen less "
-                  "often as you speak. English only. It does not mark words it was unsure "
-                  "of, and it ignores your vocabulary list. Its publisher has not declared "
-                  "a licence for it.",
+        "name": "Kroko",
+        "detail": "Built for PCs with no graphics card. English only, with capitals and "
+                  "punctuation.",
         "approx_mb": 68,
         "languages": "English",
     },
@@ -153,13 +149,15 @@ def auto_selectable(model_id: str) -> bool:
 #
 # It ships anyway, as a deliberate and recorded decision by the project owner, who was shown
 # the above and accepted it. What that costs is not hidden: the model is never auto-selected
-# (see AUTO_SELECT_EXCLUDED), its catalogue description says the licence is undeclared, and
-# THIRD-PARTY-NOTICES.md carries a section stating it plainly. What it buys is readability
-# rather than speed: it writes its own capitals and punctuation, and it revises text already
-# on screen far less often, 44 caption refreshes in 251 against 147. On latency the two are
-# near-tied, 120 ms against 135 on the same clip and thread count, so speed is not the
-# argument for it. An earlier version of this comment claimed 80 against 130, which did not
-# reproduce; see the note in hardware.py.
+# (see AUTO_SELECT_EXCLUDED) and THIRD-PARTY-NOTICES.md carries a section stating the licence
+# position plainly. The catalogue description used to say it too and no longer does, removed
+# on the owner's instruction because it made that row read as a warning beside every other
+# model; the notices are the place it is recorded. What it buys is readability rather than
+# speed: it writes its own capitals and punctuation, and it revises text already on screen
+# far less often, 44 caption refreshes in 251 against 147. On latency the two are near-tied,
+# 120 ms against 135 on the same clip and thread count, so speed is not the argument for it.
+# An earlier version of this comment claimed 80 against 130, which did not reproduce; see
+# the note in hardware.py.
 #
 # No punctuation model yet. sherpa-onnx publishes a 7 MB streaming punctuation and casing
 # model that would give `stream-en` sentence case, measured at 4.6 ms, but it also has no

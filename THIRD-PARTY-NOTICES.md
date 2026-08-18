@@ -60,7 +60,7 @@ What Sunno does and does not do with it:
   preselection honours the mark, including the "nothing on this PC keeps up, so offer the
   fastest" fallback, which this model would otherwise win outright. The backend applies the
   same rule in `hardware.default_model`. Tests enforce both. A user reaches this model only
-  by choosing it in the picker, where its description says its licence is undeclared.
+  by choosing it themselves.
 - It is **never redistributed**. No copy is in the MSIX; the app downloads it at runtime.
 - It is **not modified** by Sunno. No fine-tuning, quantisation or conversion happens here.
 

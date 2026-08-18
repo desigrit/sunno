@@ -26,6 +26,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# Before any server import, because several modules resolve paths at import time. This
+# points the app's data directory at a temp folder so the suite cannot write to the real
+# profile; see tests/_isolate.py for what went wrong without it. The cost, stated there: the
+# "already downloaded" checks below now always skip.
+import tests._isolate  # noqa: E402,F401
+
 from server.config import SAMPLE_RATE, Settings  # noqa: E402
 from server.engine import available_engines, resolve_engine  # noqa: E402
 from server.hardware import (  # noqa: E402
@@ -106,15 +112,40 @@ for stream_id, spec in _STREAM_REPOS.items():
     if entry:
         check(f"{stream_id} quotes its size", entry.get("approx_mb", 0) > 0)
         check(f"{stream_id} says which languages it covers", bool(entry.get("languages")))
-        # Somebody choosing an unlicensed model by hand should be told so on the screen
-        # where they choose it, not only in a notices file they will never open.
-        if stream_id in AUTO_SELECT_EXCLUDED:
-            check(f"{stream_id} admits its licence in the picker",
-                  "licence" in entry.get("detail", "").lower(),
-                  "the description does not mention the undeclared licence")
+        # There WAS a check here that an unlicensed model named its licence in this string.
+        # It was removed with the string, on the owner's instruction, and deliberately not
+        # replaced with a weaker version of itself. THIRD-PARTY-NOTICES.md is where the
+        # licence position lives and it no longer claims the picker restates it.
     check(f"{stream_id} names a repo and four files",
           bool(spec.get("repo"))
           and {"encoder", "decoder", "joiner", "tokens"} <= set(spec.get("files", {})))
+
+# Descriptions are one or two short sentences. On the real screen a four-sentence pair of
+# streaming rows stood about twice the height of every Whisper row and read as a warning
+# rather than a description, which is what prompted this.
+#
+# Measured in characters, not sentences. A first version counted full stops, which guards
+# the shape that regression happened to take rather than the thing that went wrong: the same
+# over-long text rewritten with commas is ONE sentence and longer still, and it sails
+# through, while a legitimate short line like "Needs about 1.5 GB of memory." fails on the
+# decimal point.
+#
+# The ceiling caps the catalogue string against the longest Whisper row, which is 68. It is
+# NOT the rendered width: the picker draws ModelChoice.DetailWithSpeed, which prefixes a
+# delay in brackets, thirteen or fourteen characters depending on magnitude and omitted
+# entirely when the lag is unknown. A relative bound against the rows it sits beside is the
+# property worth having here, and no row carries a prefix long enough to change the ordering.
+#
+# Applied to every entry rather than only the streaming pair, because the Whisper rows are
+# what define the house style being matched, and a guard that exempts the examples it is
+# imitating would not notice the style moving.
+_DETAIL_MAX = 90   # longest today is 82; base, the longest Whisper row, is 68
+for entry in CATALOG:
+    detail = entry.get("detail", "")
+    check(f"{entry['id']} keeps its catalogue description short",
+          0 < len(detail) <= _DETAIL_MAX,
+          f"{len(detail)} characters against a {_DETAIL_MAX} ceiling, so this row will "
+          "stand well above the ones beside it")
 
 # A streaming model missing from any lag table falls through to the unknown-model default,
 # and the picker then tells the user a model that decodes in under 200 ms is about five

@@ -356,10 +356,24 @@ def _write_cached_score(score: float) -> None:
 
 
 def _score_path():
-    from pathlib import Path
+    """Where the measured cpu_score and observed lags are cached.
 
-    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    return Path(base) / "Sunno" / "hardware.json"
+    Goes through paths.data_dir() rather than reading LOCALAPPDATA directly, so it honours
+    the Sunno_DATA_DIR override the rest of the Python side respects. It did not, and the
+    consequence was not theoretical: the test suite could not be isolated from the real
+    profile, so running the tests wrote a cpu_score measured under test load into the state
+    a real launch then reads to quote model latencies on the first-run screen.
+
+    That is the whole of what this fixes. It does NOT make a redirected profile coherent,
+    because the frontend does not know about the override at all: Diagnostics.HardwareJson
+    and AppSettings both build LocalApplicationData/Sunno paths by hand, so under
+    Sunno_DATA_DIR the backend writes here while the diagnostics report reads the old
+    location and prints "(not measured yet)". Making that whole story work is a change to
+    the C# side and is not attempted here.
+    """
+    from .paths import data_dir
+
+    return data_dir() / "hardware.json"
 
 
 def _read_state() -> dict:
