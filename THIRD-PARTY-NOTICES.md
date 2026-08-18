@@ -30,6 +30,43 @@ Sunno redistributes the components below. Each remains under its own licence.
 | Silero VAD | MIT | Vendored at `server/assets/silero_vad_v6.onnx` and redistributed in the package. From [snakers4/silero-vad](https://github.com/snakers4/silero-vad). |
 | WeSpeaker CAM++ speaker embedding | Apache-2.0 | Downloaded at first run, not redistributed in the package. |
 | Streaming Zipformer English transducer | Apache-2.0 | Downloaded at first run, not redistributed in the package. From [csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26), trained with [k2-fsa/icefall](https://github.com/k2-fsa/icefall) on LibriSpeech. |
+| Kroko ASR streaming English transducer | **None declared** | Optional, never a default. See the section below. |
+
+## Models with no declared licence
+
+One model Sunno can download has **no licence grant from its publisher**. That is stated
+here plainly rather than glossed, because every other model listed above has a clear
+licence and the difference matters to anyone redistributing or forking this app.
+
+**Kroko ASR streaming English transducer.** Created by Banafo. Two separate gaps:
+
+1. **No licence.** The repository Sunno downloads from,
+   [csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06),
+   declares no licence, and its README says only "See license at
+   https://huggingface.co/Banafo/Kroko-ASR". That repository declares `license: other` with
+   `license_name: "test"` and `license_link: LICENSE` — and at the time of writing that
+   LICENSE file is empty. Banafo's project README describes community models as CC-BY-SA,
+   but nothing identifies this particular checkpoint as one of them, so this file does not
+   claim CC-BY-SA on their behalf.
+2. **Unattributed conversion.** Banafo publishes `.data` files. The repository above serves
+   `encoder.onnx`, `decoder.onnx` and `joiner.onnx`. Somebody converted them, and that work
+   is not attributed, so Sunno fetches a third party's redistribution of a conversion rather
+   than an artifact from the author.
+
+What Sunno does and does not do with it:
+
+- It is **never selected automatically**. The model list the app sends to its own first-run
+  screen marks this model as not auto-selectable, and every branch of that screen's
+  preselection honours the mark — including the "nothing on this PC keeps up, so offer the
+  fastest" fallback, which this model would otherwise win outright. The backend applies the
+  same rule in `hardware.default_model`. Tests enforce both. A user reaches this model only
+  by choosing it in the picker, where its description says its licence is undeclared.
+- It is **never redistributed**. No copy is in the MSIX; the app downloads it at runtime.
+- It is **not modified** by Sunno. No fine-tuning, quantisation or conversion happens here.
+
+This is a deliberate, informed decision by the project owner, not an oversight. If Banafo
+declares a licence, or asks that the model not be used this way, this file and the model
+list will be updated.
 
 ## LGPL note: soxr
 

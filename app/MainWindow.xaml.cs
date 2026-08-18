@@ -26,7 +26,7 @@ public sealed record AudioDevice(int Index, string Name, string HostApi, bool Lo
 
 /// <summary>A model shown in first-run setup.</summary>
 public sealed record ModelChoice(string Id, string Name, string Detail, int ApproxMb, bool Available,
-                                 int LagMs = 0, bool Responsive = true)
+                                 int LagMs = 0, bool Responsive = true, bool AutoSelect = true)
 {
     public string SizeLabel => ApproxMb >= 1024
         ? $"{ApproxMb / 1024.0:0.0} GB"
@@ -1868,7 +1868,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
         var choices = options
             .Select(o => new ModelChoice(o.Id, o.Name, o.Detail, o.ApproxMb, o.Available,
-                                         o.LagMs, o.Responsive))
+                                         o.LagMs, o.Responsive, o.AutoSelect))
             .ToList();
 
         BuildModelGroups(choices);
@@ -1881,17 +1881,29 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // state at all (server/hardware.py default_model). When nothing keeps up but
         // something is already downloaded, this offers the downloaded one and the backend
         // would not. That is a kindness about a multi-gigabyte download, not an oversight.
-        var preferred = choices
+        //
+        // Every branch draws from selectable, not choices. A model whose publisher has
+        // declared no licence is listed and choosable but never preselected, because
+        // THIRD-PARTY-NOTICES.md tells the reader the app never picks one on their behalf
+        // and this screen is what makes that true or false. The backend has the same rule in
+        // hardware.default_model, but that runs only when nobody passes --model and this app
+        // always does, so this is where it is actually enforced. The fastest branch is where
+        // it bites hardest: the excluded model is the quickest in the catalogue, so on a PC
+        // too slow for anything else it would otherwise win outright.
+        var selectable = choices.Where(m => m.AutoSelect).ToList();
+        if (selectable.Count == 0) selectable = choices;   // cannot happen; better than nothing
+
+        var preferred = selectable
             .Where(m => m.Responsive)
             .OrderByDescending(m => m.Available)
             .FirstOrDefault()
-            ?? choices.FirstOrDefault(m => m.Available)
+            ?? selectable.FirstOrDefault(m => m.Available)
             // Last resort: the fastest, matching server/hardware.py's
-            // `min(catalog_ids, key=estimated_lag_ms)`. This used to be the first entry in
+            // `min(allowed, key=estimated_lag_ms)`. This used to be the first entry in
             // the catalogue, which is ordered most-accurate-first — so on a machine too slow
             // for anything, the two sides disagreed and the screen preselected the largest
             // download and the longest delay, which is the worst answer available.
-            ?? choices.OrderBy(m => m.LagMs <= 0 ? int.MaxValue : m.LagMs).FirstOrDefault();
+            ?? selectable.OrderBy(m => m.LagMs <= 0 ? int.MaxValue : m.LagMs).FirstOrDefault();
         ModelList.SelectedItem = preferred;
 
         SetupError.IsOpen = false;

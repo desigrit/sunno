@@ -18,7 +18,7 @@ public sealed record LevelEvent(double Db, bool Speaking);
 /// <summary>A model offered during first-run setup.</summary>
 public sealed record ModelOption(
     string Id, string Name, string Detail, int ApproxMb, string Languages, bool Available,
-    int LagMs = 0, bool Responsive = true);
+    int LagMs = 0, bool Responsive = true, bool AutoSelect = true);
 
 public sealed record DownloadProgressEvent(string Model, long Downloaded, long Total, double Percent);
 
@@ -270,7 +270,11 @@ public sealed class CaptionClient : IAsyncDisposable
                 GetString(m, "languages") ?? "",
                 GetBool(m, "available") ?? false,
                 GetInt(m, "lag_ms") ?? 0,
-                GetBool(m, "responsive") ?? true));
+                GetBool(m, "responsive") ?? true,
+                // Defaults true so an older backend, which does not send this, keeps
+                // behaving as it did. Only a backend that knows about unlicensed models
+                // can mark one, and it marks them false.
+                GetBool(m, "auto_select") ?? true));
         }
         return options;
     }

@@ -4,8 +4,8 @@ Most PCs have no NVIDIA card, and on those Whisper is slow because of what it is
 than how it is run: an encoder-decoder that pads every window to thirty seconds, so a
 two second sentence costs about what a twenty second one does. A transducer does not
 pad. Measured here on a processor at four threads, averaged over 2, 4 and 8 second
-utterances, a streaming Zipformer decodes in about 180 ms where Whisper base takes 730
-and large-v3 takes 4540. That is the reason this file exists.
+utterances, a streaming Zipformer decodes in about 135 ms and Kroko in about 120, where
+Whisper base takes 730 and large-v3 takes 4540. That is the reason this file exists.
 
 It runs on sherpa-onnx, which the app already ships and uses for speaker embeddings, so
 this adds a model and no new native dependency. sherpa-onnx also publishes native
@@ -47,10 +47,11 @@ class StreamingEngine:
     def __init__(self, settings: Settings) -> None:
         import sherpa_onnx
 
-        from .models import stream_model_paths
+        from .models import stream_model_is_cased, stream_model_paths
 
         self.settings = settings
         self._sherpa = sherpa_onnx
+        self._cased = stream_model_is_cased(settings.model_size)
 
         paths = stream_model_paths(settings.model_size)
         self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
@@ -96,35 +97,39 @@ class StreamingEngine:
         )
 
     def _readable(self, text: str) -> str:
-        """Lower-case, because these models emit unbroken upper case.
+        """Lower-case, for the models that emit unbroken upper case.
 
         A whole conversation in capitals is legible but tiring, and this app exists to be
-        read for the length of a conversation.
+        read for the length of a conversation. Models that write their own capitals and
+        punctuation are left alone: lower-casing Kroko would discard the thing that makes
+        it worth choosing.
 
-        Restoring real sentence case and punctuation needs a second model, and the one that
-        fits has no clear licence, so it is left out. See the note in models.py. Doing it
-        here without a model is not an option worth taking: capitalising after every full
-        stop requires knowing where the full stops are, which is the thing that is missing.
+        Restoring sentence case on a model that has none needs a second model, and the one
+        that fits has no clear licence and no clean download path, so it is left out. See
+        the note in models.py. Doing it here without a model is not an option worth taking:
+        capitalising after every full stop requires knowing where the full stops are, which
+        is the thing that is missing.
 
-        Applied identically to provisional and final text, on purpose. Anything that
-        depends on later words rewrites text already on screen: an earlier version ran a
-        punctuation model over each growing partial and the opening words changed on 13 of
-        31 refreshes, cycling between "lazy dog. We", "lazy dog. we" and "lazy dog we".
-        Lower-casing cannot change its mind, because it reads one character at a time.
+        Applied identically to provisional and final text, on purpose, in both directions.
+        Anything that depends on later words rewrites text already on screen: an earlier
+        version ran a punctuation model over each growing partial and the opening words
+        changed on 13 of 31 refreshes, cycling between "lazy dog. We", "lazy dog. we" and
+        "lazy dog we". Neither lower-casing nor passing text through unchanged can do that,
+        because neither looks beyond the character in front of it.
 
         That is a claim about this function, not about the captions. The transducer itself
-        revises as more audio arrives, and on real two-speaker audio it does so often: 147
-        of 251 refreshes across testdata/ changed a prefix already displayed, measured at
-        the pipeline's own 700 ms and 450 ms cadence by bench/bench_stream_churn.py, which
-        exists so this number can be re-run rather than believed. An earlier version of
-        this note cited "0 of 31" as though that were a property of the engine; it was a
-        property of one clean synthesized clip, and it does not survive real speech. The
-        cause is structural rather than fixable here: the pipeline re-decodes the whole
-        utterance on every partial, so the model is free to reach a different answer each
-        time. Handing out deltas with a committed prefix is what would stop it, which is
-        the same pipeline change described above.
+        revises as more audio arrives, and on real two-speaker audio it does so often: over
+        testdata/ at the pipeline's own 700 ms and 450 ms cadence, stream-en changed a
+        prefix already displayed on 147 of 251 refreshes and Kroko on 44 of the same 251,
+        measured by bench/bench_stream_churn.py so the figures can be re-run rather than
+        believed. An earlier version of this note cited "0 of 31" as though that were a
+        property of the engine; it was a property of one clean synthesized clip and it does
+        not survive real speech. The cause is structural rather than fixable here: the
+        pipeline re-decodes the whole utterance on every partial, so the model is free to
+        reach a different answer each time. Handing out deltas with a committed prefix is
+        what would stop it, which is the same pipeline change described above.
         """
-        return text.lower()
+        return text if self._cased else text.lower()
 
     def partial(self, audio: np.ndarray) -> Transcript:
         return self._run(audio, is_final=False)
@@ -142,9 +147,15 @@ class StreamingEngine:
 def _threads() -> int:
     """Threads for the recogniser.
 
-    Capped low on purpose. These models measured no faster at sixteen threads than at
-    four, 178 ms against 179, because the work per chunk is too small to spread, and
-    taking cores the rest of the machine is using costs more than it returns.
+    Capped low on purpose, and the cap is not a guess. These models are measurably worse
+    with more threads, because the work per chunk is too small to spread and the
+    coordination costs more than it returns. So this is not "four is enough", it is "four is
+    better", on top of not taking cores the rest of the machine is using.
+
+    hardware.py depends on this cap: it files one figure for these models in both the four
+    and sixteen thread tables, on the grounds that the sixteen thread column is unreachable.
+    Raising this number without remeasuring those rows makes the picker quote a latency the
+    app does not deliver, so tests/test_stream_engine.py asserts the two stay in step.
     """
     import os
 

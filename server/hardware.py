@@ -73,37 +73,57 @@ _LAG_MS_CUDA: dict[str, int] = {
     "medium": 550,
     "distil-large-v3": 500,
     "large-v3": 650,
-    # Same figure as the processor rows, because it is the same work: this model runs on
+    # Same figures as the processor rows, because it is the same work: these models run on
     # the processor whatever else the machine has (asr_stream.py pins provider="cpu"), so
-    # a graphics card does not change it. Without a row here it fell through to the
+    # a graphics card does not change them. Without a row here they fell through to the
     # unknown-model default and the picker told everyone with a GPU that a model which
-    # decodes in 180 ms was five seconds behind.
-    "stream-en": 180,
+    # decodes in well under a second was five seconds behind.
+    "stream-en": 135,
+    "stream-en-kroko": 120,
 }
 
 # CPU lag at two thread counts on the reference machine. Scaling with cores is strongly
 # sublinear — quadrupling threads takes large-v3 from 4.5 s only to 4.4 s — so these are
 # interpolated on a log scale rather than divided by core count.
 #
-# stream-en is a streaming transducer rather than a Whisper checkpoint, measured by
-# bench/bench_stream_latency.py, which times a whole-utterance decode over the same 2, 4
-# and 8 second clips so the figure means the same thing as the rows around it. It is the
-# same at both thread counts because it measured 179 ms at four and 178 at sixteen: the
-# work per chunk is too small to spread further.
+# The two stream- rows are streaming transducers rather than Whisper checkpoints, measured
+# by bench/bench_stream_latency.py over the same 2, 4 and 8 second clips as the rows around
+# them, on testdata/3-two-speakers-en.wav at four threads: stream-en 135 ms, Kroko 120 ms.
+# Both were restated together in one run, because two figures in the same column measured
+# different ways are worse than either being stale, and an earlier stream-en figure of 180
+# no longer reproduced on the same script and clip.
 #
-# Note the shape as well as the number. This model has almost no fixed cost and scales
-# close to linearly, about 44 ms per second of speech, so the 180 ms mean covers 2 to 8
-# second utterances and a 20 second one, which config.py still permits, costs nearer 880
-# ms. Whisper is the other way round, mostly fixed cost, so the same single figure hides
-# a different spread for each.
+# Eight consecutive passes, not three, and the difference mattered. A first attempt filed
+# Kroko at 80 ms from a median of three, which a review could not reproduce: the model has
+# an occasional fast mode and short runs land in one mode or the other, so three passes
+# pinned nothing. Over eight, Kroko sits at 120-125 and stream-en at 132-144. Filing the
+# common mode rather than the best one also matters beyond honesty: at 80 ms Kroko was the
+# quickest entry in the whole catalogue by a wide margin, which is what let it win the
+# picker's fastest-first branch outright.
 #
-# Deliberately NOT the streaming figure. Fed audio continuously this model puts words on
+# They carry the same value at BOTH thread counts, and the reason is not that they measured
+# the same. They did not; more threads are worse for these models, because the work per
+# chunk is too small to spread and the coordination costs more than it returns. The reason
+# is that asr_stream._threads() caps the recogniser at four whatever the machine has, so the
+# sixteen-thread column is unreachable for these models and filing a sixteen-thread
+# measurement there would describe something the app never does. That couples this table to
+# that cap, so tests/test_stream_engine.py asserts the coupling rather than leaving it to
+# this comment: raise the cap and the test fails.
+#
+# Note the shape as well as the number. Both have almost no fixed cost and scale close to
+# linearly, about 30 ms per second of speech, so the means above cover 2 to 8 second
+# utterances and a 20 second one, which config.py still permits, costs nearer 610 ms.
+# Whisper is the other way round, mostly fixed cost, so the same single figure hides a
+# different spread for each.
+#
+# Deliberately NOT the streaming figure. Fed audio continuously these models put words on
 # screen while someone is still speaking, which measured near zero lag, but the pipeline
 # waits for an endpoint before it decodes anything, so nobody would see that today. Filing
-# it here would make this model win on every machine, including ones with a graphics card,
+# it here would make them win on every machine, including ones with a graphics card,
 # on the strength of a number the app cannot yet deliver.
 _LAG_MS_CPU_4: dict[str, int] = {
-    "stream-en": 180,
+    "stream-en": 135,
+    "stream-en-kroko": 120,
     "base": 730,
     "small": 1450,
     "medium": 3460,
@@ -111,7 +131,8 @@ _LAG_MS_CPU_4: dict[str, int] = {
     "large-v3": 4540,
 }
 _LAG_MS_CPU_16: dict[str, int] = {
-    "stream-en": 180,
+    "stream-en": 135,
+    "stream-en-kroko": 120,
     "base": 405,
     "small": 810,
     "medium": 2260,
@@ -474,12 +495,24 @@ def default_model(catalog_ids: list[str], device: str | None = None) -> str:
 
     Not simply "the fastest": on a GPU every model is comfortably inside the budget, and
     starting such a machine on the least accurate model would be a downgrade for no reason.
+
+    Models whose publisher has declared no licence are removed before either branch runs.
+    THIRD-PARTY-NOTICES.md tells the reader none of them is a default, and that has to be
+    true of the fallback as well as the scan: the fallback picks the quickest model in the
+    list, and the quickest streaming model is one of the undeclared ones, so ordering alone
+    would have handed it every machine too slow for anything else.
     """
+    from .models import auto_selectable
+
     device = device or resolve_device()
-    for model_id in catalog_ids:
+    # The `or catalog_ids` is defensive rather than expected. It cannot trigger while any
+    # Whisper model is catalogued, and returning nothing is not an option a caller can use.
+    allowed = [m for m in catalog_ids if auto_selectable(m)] or list(catalog_ids)
+
+    for model_id in allowed:
         if estimated_lag_ms(model_id, device) <= RESPONSIVE_LAG_MS:
             return model_id
-    return min(catalog_ids, key=lambda m: estimated_lag_ms(m, device))
+    return min(allowed, key=lambda m: estimated_lag_ms(m, device))
 
 
 # Above this, captions arrive too late to follow a live conversation. Chosen to match the

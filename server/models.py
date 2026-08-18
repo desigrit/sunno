@@ -99,49 +99,96 @@ CATALOG: list[dict] = [
         "approx_mb": 69,
         "languages": "English",
     },
+    # Placed after stream-en deliberately, and the order is load-bearing rather than
+    # cosmetic. This list is otherwise best-accuracy-first, and Kroko is the more accurate
+    # of the two, so its natural slot is above. It sits below because default_model scans
+    # this list in order, and THIRD-PARTY-NOTICES.md tells the reader that neither model
+    # without a declared licence is a default. Ordering alone would still hand it the
+    # bottom-of-the-list fallback on a very slow machine, so the guarantee is enforced by
+    # AUTO_SELECT_EXCLUDED below rather than by this comment.
+    {
+        "id": "stream-en-kroko",
+        "name": "Kroko streaming",
+        "detail": "Built for PCs with no graphics card. Writes capitals and punctuation, "
+                  "unlike the other streaming model, and changes words on screen less "
+                  "often as you speak. English only. It does not mark words it was unsure "
+                  "of, and it ignores your vocabulary list. Its publisher has not declared "
+                  "a licence for it.",
+        "approx_mb": 68,
+        "languages": "English",
+    },
 ]
+
+# Models the app will never choose on someone's behalf.
+#
+# Not a quality judgement. These are the models whose publisher has declared no licence, and
+# THIRD-PARTY-NOTICES.md states plainly that none of them is a default. A user who reads that
+# and picks one anyway has chosen it; the app arriving at one on its own would make the
+# disclosure false. Enforced in hardware.default_model and pinned by a test, because catalogue
+# order alone does not survive the fallback branch when nothing meets the latency budget.
+AUTO_SELECT_EXCLUDED: frozenset[str] = frozenset({"stream-en-kroko"})
+
+
+def auto_selectable(model_id: str) -> bool:
+    """Whether the app may choose this model when the user has not."""
+    return model_id not in AUTO_SELECT_EXCLUDED
 
 # Streaming transducer models, which are a different shape from a Whisper checkpoint: an
 # encoder, a decoder and a joiner rather than one file. Kept apart from _REPOS so that a
 # Whisper id can never resolve to half of one of these.
 #
-# Apache-2.0, declared in the repo's own metadata, which is why this one.
+# The two differ in licence, and it is the sharpest difference in the catalogue. `stream-en`
+# is Apache-2.0, declared in the repo's own metadata. `stream-en-kroko` has no declared
+# licence at all, and the chain was followed rather than assumed: the repo that serves the
+# ONNX files declares nothing (`cardData: null`) and its README says only "See license at
+# .../Banafo/Kroko-ASR"; that repo declares `license: other` with `license_name: "test"` and
+# `license_link: LICENSE`; that LICENSE file is zero bytes. CC-BY-SA appears only as prose in
+# a README that splits models into community and commercial tiers without saying which tier
+# this checkpoint is in. So the honest description is "no grant", not "ShareAlike".
 #
-# Kroko was tried and withdrawn, and the reason is worth recording so nobody spends the
-# afternoon again. Its community weights are genuinely better here, measured on real
-# two-speaker audio: capitals and punctuation of its own, "Microsoft Store team" where this
-# model gives "microsoph store team", and a third the prefix churn. It was added, it worked,
-# and then the licence was checked properly rather than taken from a README. The chain is:
-# the sherpa-onnx mirror that actually serves the ONNX files declares no licence at all
-# (`cardData: null`) and its README says only "See license at .../Banafo/Kroko-ASR"; that
-# repo declares `license: other` with `license_name: "test"` and `license_link: LICENSE`;
-# that LICENSE file is zero bytes. The word CC-BY-SA appears only in prose in a marketing
-# README that splits models into community and commercial tiers without saying which tier
-# this checkpoint is. So the position is not "ShareAlike, and is that workable" but "no
-# grant at all", which is the stricter case, and the same one the punctuation model below
-# was refused over. Revisit if Banafo fills that file in. No request has been sent from
-# here, so nobody is waiting on a reply.
+# There is a second, separate gap. Banafo publishes `.data` files; the repo above serves
+# `encoder.onnx` / `decoder.onnx` / `joiner.onnx`. Somebody converted them, unattributed, so
+# the app fetches a third party's conversion rather than an artifact from the author. Even a
+# clear licence from Banafo would not by itself cover that.
 #
-# Provenance is a second, separate problem there. Banafo publishes `.data` files; the
-# mirror serves `encoder.onnx` / `decoder.onnx` / `joiner.onnx`. Somebody converted them,
-# and conversion is exactly what ShareAlike would bind, so even a CC-BY-SA answer would not
-# close it on its own.
+# It ships anyway, as a deliberate and recorded decision by the project owner, who was shown
+# the above and accepted it. What that costs is not hidden: the model is never auto-selected
+# (see AUTO_SELECT_EXCLUDED), its catalogue description says the licence is undeclared, and
+# THIRD-PARTY-NOTICES.md carries a section stating it plainly. What it buys is readability
+# rather than speed: it writes its own capitals and punctuation, and it revises text already
+# on screen far less often, 44 caption refreshes in 251 against 147. On latency the two are
+# near-tied, 120 ms against 135 on the same clip and thread count, so speed is not the
+# argument for it. An earlier version of this comment claimed 80 against 130, which did not
+# reproduce; see the note in hardware.py.
 #
-# No punctuation model, for the same reason. sherpa-onnx publishes a 7 MB streaming
-# punctuation and casing model that works well here, measured at 4.6 ms and verified to
-# turn "the quick brown fox" into "The quick brown fox.", but every copy of it found so far
-# is either an unlicensed personal mirror or a release asset with no licence of its own.
-# Captions are lower case until that is resolved, which is a readability cost taken
-# deliberately over a licensing risk taken accidentally. The candidate is
-# `sherpa-onnx-online-punct-en-2024-08-06`, in the k2-fsa/sherpa-onnx `punctuation-models`
-# release.
+# No punctuation model yet. sherpa-onnx publishes a 7 MB streaming punctuation and casing
+# model that would give `stream-en` sentence case, measured at 4.6 ms, but it also has no
+# licence and only reaches this app as a GitHub release tarball, so it brings a download path
+# with no resume or integrity check. Kroko already punctuates, which is most of the reason to
+# want it. The candidate is `sherpa-onnx-online-punct-en-2024-08-06`, in the k2-fsa/sherpa-onnx
+# `punctuation-models` release. No request for a licence has been sent from here, so nobody is
+# waiting on a reply.
 _STREAM_REPOS: dict[str, dict] = {
     "stream-en": {
         "repo": "csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26",
+        # Emits unbroken upper case with no punctuation, so the engine lower-cases it.
+        "cased": False,
         "files": {
             "encoder": "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
             "decoder": "decoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
             "joiner": "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+            "tokens": "tokens.txt",
+        },
+    },
+    "stream-en-kroko": {
+        "repo": "csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06",
+        # Writes its own capitals and punctuation. Lower-casing it would throw away the
+        # main reason to prefer it, so _readable leaves this one alone.
+        "cased": True,
+        "files": {
+            "encoder": "encoder.onnx",
+            "decoder": "decoder.onnx",
+            "joiner": "joiner.onnx",
             "tokens": "tokens.txt",
         },
     },
@@ -150,6 +197,17 @@ _STREAM_REPOS: dict[str, dict] = {
 
 def is_stream_model(model_id: str) -> bool:
     return model_id in _STREAM_REPOS
+
+
+def stream_model_is_cased(model_id: str) -> bool:
+    """Whether a streaming model writes its own capitals and punctuation.
+
+    Asked by the engine before it lower-cases. Defaults to False for an unknown id, which is
+    the safe direction: lower-casing already-readable text is untidy, whereas leaving a wall
+    of upper case on screen is the thing this is here to avoid.
+    """
+    spec = _STREAM_REPOS.get(model_id)
+    return bool(spec and spec.get("cased"))
 
 
 def _stream_root() -> Path:
@@ -248,6 +306,12 @@ def catalog_with_status(device: str | None = None) -> list[dict]:
     4.5 s behind, which is fine for captioning a recorded video and useless for following a
     conversation. Surfacing it here means the user learns that before downloading 3 GB
     rather than after.
+
+    ``auto_select`` rides along because the frontend, not this process, is what actually
+    chooses a model for a first-time user. hardware.default_model only runs when nobody
+    passed --model, and both launchers always do, so a guard living only there guards a path
+    the product never takes. Sending the flag with the catalogue puts the rule next to the
+    data it constrains, where the screen that preselects can honour it.
     """
     from . import hardware
 
@@ -261,6 +325,7 @@ def catalog_with_status(device: str | None = None) -> list[dict]:
             lag_ms=lag_ms,
             lag_text=hardware.describe_lag(lag_ms),
             responsive=lag_ms <= hardware.RESPONSIVE_LAG_MS,
+            auto_select=auto_selectable(entry["id"]),
         ))
     return entries
 

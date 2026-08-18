@@ -68,8 +68,8 @@ def main() -> None:
     print("-" * 60)
 
     for model_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        # A directory without an encoder is not a model, it is the punctuation model or a
-        # stray folder. Skipped quietly rather than reported as a failed benchmark.
+        # A directory without an encoder is not a model, it is a stray folder or a model of
+        # some other shape. Skipped quietly rather than reported as a failed benchmark.
         if not any(model_dir.glob("encoder*.onnx")):
             continue
         try:
