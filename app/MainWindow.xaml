@@ -758,13 +758,14 @@
                                     <TextBlock Style="{StaticResource CaptionTextBlockStyle}"
                                                TextWrapping="Wrap"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                               Text="How clearly you were heard, shown on speech you have marked as your own." />
+                                               Text="How clearly you were heard, shown on speech you have marked as your own. Whisper models only." />
                                 </StackPanel>
                                 <ToggleSwitch x:Name="ClarityToggle" Grid.Column="1"
                                               IsOn="True" Toggled="OnClarityToggled"
                                               MinWidth="0" OnContent="" OffContent=""
                                               HorizontalAlignment="Right"
-                                              AutomationProperties.Name="Show clarity score on your own lines" />
+                                              AutomationProperties.Name="Show clarity score on your own lines"
+                                              AutomationProperties.HelpText="Whisper models only. The streaming models do not produce a clarity score." />
                             </Grid>
                         </Border>
 

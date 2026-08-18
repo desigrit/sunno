@@ -1435,6 +1435,21 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void OnModelCatalog(string current, string? computeDevice,
                                 IReadOnlyList<ModelOption> options)
     {
+        // Which model the backend says is loaded, against what this process asked for.
+        //
+        // Here because of a reported oddity nobody has yet explained: on launch with a model
+        // already chosen, the collapsed header shows the wrong model, and expanding the panel
+        // corrects it instantly. Expanding re-requests the catalogue (OnToggleModelSection),
+        // so the correction says the SECOND frame is right and something about the first is
+        // not. The header is written from Models.FirstOrDefault(m => m.IsSelected) and
+        // IsSelected is o.Id == current, so a wrong header means a wrong `current` arrived
+        // rather than a stale radio button. This records both halves of that comparison for
+        // every frame, which distinguishes a bad `current` from a bad _settings.Model in one
+        // launch. Cheap, truncated per launch, and it lands in the file a bug report already
+        // carries.
+        App.Trace($"model_catalog: current={current} settings={_settings.Model} " +
+                  $"device={computeDevice} models={options.Count}");
+
         // "cuda" or "cpu", for the diagnostics report. This frame is the only one that carries
         // it; the status frame's "device" is the audio device name.
         if (!string.IsNullOrEmpty(computeDevice)) _computeDevice = computeDevice;
@@ -3256,7 +3271,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         var isSelf = new CheckBox { Content = "This is me", IsChecked = row.IsSelf };
         var hint = new TextBlock
         {
-            Text = "Your own lines appear dimmed, with a clarity score you can read back.",
+            Text = "Your own lines appear dimmed, with a clarity score you can read back on Whisper models.",
             TextWrapping = TextWrapping.Wrap,
             Opacity = 0.7,
         };

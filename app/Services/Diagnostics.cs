@@ -19,7 +19,8 @@ namespace Sunno.Services;
 ///                      earlier build it still holds verbatim conversation, including other
 ///                      people who never agreed to anything.
 ///   speakers.json      Pinned speakers: a person's name next to a voice fingerprint.
-///   Vocabulary         Free text the user typed to bias recognition. In practice it is
+///   Vocabulary         Free text to bias recognition. No screen currently offers a way
+///                      to set it, so in practice it is
 ///                      colleague names, project names and places.
 ///   Device names       "Headset (R-Phonak hearing aid)" tells the reader the user wears a
 ///                      hearing aid. That is health information, disclosed by a field nobody

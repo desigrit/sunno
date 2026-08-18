@@ -120,9 +120,10 @@ with a colour-coded speaker chip. Click any chip to:
 
 - **Name the speaker**: names persist across sessions, and a named profile stops drifting, so
   recognition of that person gets more reliable.
-- **Mark them as you**: your own lines then render fainter, labelled *You*, with a **clarity
-  score**. Your speech is still transcribed; the score is there so you can read back how clearly
-  you came across.
+- **Mark them as you**: your own lines then render fainter, labelled *You*, and on a Whisper
+  model they also carry a **clarity score**. Your speech is still transcribed; the score is
+  there so you can read back how clearly you came across. The streaming models do not produce
+  one, which is why the setting and both speaker dialogs name Whisper explicitly.
 - **Merge two speakers**: use this when one person gets split across two labels.
 
 **Accuracy expectations.** On a two-speaker recording this correctly finds two speakers and gets
@@ -140,8 +141,14 @@ happens against a deliberately-chosen reference instead of a noisy first guess.
 
 ### Clarity score
 
-Lines marked as yours carry a 0–100 clarity score derived from Whisper's average token
-log-probability. It is **not** a calibrated measure of pronunciation: it is a monotonic proxy
+Lines marked as yours carry a 0-100 clarity score derived from Whisper's average token
+log-probability, **on a Whisper model only**. It comes from `asr.py`; the streaming engines
+in `asr_stream.py` and `asr_onnx.py` both return `clarity=None`, because a transducer exposes
+no comparable score and inventing one would be worse than leaving it out. That is why the
+Settings toggle, both speaker dialogs and the section above all name Whisper explicitly, and
+why `tests/test_stream_engine.py` pins those strings against the engines that justify them.
+
+It is **not** a calibrated measure of pronunciation: it is a monotonic proxy
 for how confidently the model decoded the audio. Read it comparatively ("that came through more
 clearly than last time"), not absolutely. Mic distance and background noise move it too.
 

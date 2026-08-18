@@ -19,6 +19,8 @@ Run:  .venv\\Scripts\\python.exe tests\\test_stream_engine.py
 
 from __future__ import annotations
 
+import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -299,6 +301,96 @@ for path, needles, why in _CSHARP_CONTRACT:
     missing = [n for n in needles if n not in source]
     check(f"{path.name} still honours the auto-select contract", not missing,
           f"missing {missing}: {why}")
+
+# Clarity is a Whisper-only feature and the UI now says so. Several things have to stay true
+# for that sentence to be honest, and they fail in opposite directions, so all are checked.
+#
+# This exists because the picker used to carry the only admission that per-word uncertainty
+# and clarity do nothing on a streaming model. That sentence was removed when the picker copy
+# was simplified, which left a live Settings toggle and two speaker dialogs describing a
+# feature that is inert on two of the seven models. The qualifier replaced it.
+#
+# Three surfaces, not two. A review found the browser client's speaker dialog still promising
+# it unconditionally after both desktop surfaces had been fixed; server/app.py serves ui/ on
+# every launch and stage-backend.ps1 packages it, so it is as shipped as the WinUI. A guard
+# that listed only the surfaces somebody remembered would have reported this closed forever.
+_stream_src = (Path(__file__).resolve().parents[1] / "server" / "asr_stream.py").read_text(
+    encoding="utf-8")
+_onnx_src = (Path(__file__).resolve().parents[1] / "server" / "asr_onnx.py").read_text(
+    encoding="utf-8")
+_reqs = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
+
+# Asserted as "every clarity= in the file assigns None", not as a substring or a count. Both
+# weaker forms were tried and both were defeated. `"clarity=None" in src` passes as soon as
+# the phrase appears anywhere, and these modules already discuss clarity in prose. Counting
+# occurrences of `clarity=None,` is no better: changing the return to `clarity=_score(),
+# # was clarity=None, before` keeps the count at one and sails through, which is a comment a
+# developer making exactly this change would plausibly write. Reading every assignment is the
+# property that actually holds today and the one that must break when it stops holding.
+def _clarity_assignments(source: str) -> set[str]:
+    return set(re.findall(r"clarity\s*=\s*([A-Za-z_][\w.]*)", source))
+
+
+check("the streaming engine still reports no clarity, so the qualifier is still true",
+      _clarity_assignments(_stream_src) == {"None"},
+      f"asr_stream assigns clarity from {sorted(_clarity_assignments(_stream_src))}, so it "
+      "may now produce a score, and naming Whisper in Settings and the speaker dialogs "
+      "would understate what the app can do")
+
+# The ONNX engine also returns no clarity, and it serves WHISPER ids. It cannot be selected
+# today because onnxruntime_genai is not installed, so "Whisper models only" holds. The day
+# that changes, a Whisper model starts producing no clarity and the qualifier becomes an
+# active overpromise, which is the exact defect this text exists to prevent.
+# docs/ARM-PORT.md already plans an ARM tier on Whisper base and tiny and tells the next
+# developer to install onnxruntime-genai to try it on x64, so this is a scheduled collision.
+#
+# WHEN THAT DAY COMES, the fix is not to weaken this check. It is to decide what the UI
+# should say once a Whisper model can produce no clarity score, change the three surfaces
+# above, and then change this. The check going red on an ARM machine is the alarm working.
+#
+# Two separate checks with separate messages, because they break for opposite reasons and a
+# single combined condition reported the wrong cause: a first version fired on the asr_onnx
+# half while telling the reader that genai had become a dependency.
+#
+# find_spec rather than requirements.txt, because find_spec is what decides. engine.py gates
+# the onnx engine on exactly this call, and stage-backend.ps1 robocopies site-packages
+# wholesale without excluding genai, so a developer following ARM-PORT.md reaches the danger
+# state with requirements.txt untouched. The manifest is kept as a second condition since it
+# is the thing a reviewer would read.
+#
+# Counted rather than tested for containment, on both legs. A bare `"clarity=None" in src`
+# passes as soon as the phrase appears anywhere, and both these modules already discuss
+# clarity in prose, so the developer changing the return value is exactly the one likely to
+# mention it in a comment and mask their own change.
+check("the ONNX engine still returns no clarity, which is why Whisper is named",
+      _clarity_assignments(_onnx_src) == {"None"},
+      f"asr_onnx assigns clarity from {sorted(_clarity_assignments(_onnx_src))}, so naming "
+      "Whisper may no longer be the right qualifier and this text should be revisited")
+check("the ONNX engine, which produces no clarity, still cannot be selected",
+      importlib.util.find_spec("onnxruntime_genai") is None and "genai" not in _reqs.lower(),
+      "onnxruntime_genai is now available, so engine.py can route a Whisper id to an engine "
+      "that returns clarity=None, and 'Whisper models only' becomes an overpromise")
+
+for path, needle in (
+    # Needles must be unique within their file. The first version of this looked for
+    # "Whisper models only." in MainWindow.xaml, and then the accessibility fix added
+    # AutomationProperties.HelpText starting with those same four words, which silently
+    # disarmed the check: deleting the visible description left the HelpText matching and
+    # the suite green. That is the same defect recorded at the C# contract check above, made
+    # twice. Each surface now gets a phrase that occurs once.
+    (_app / "MainWindow.xaml", "marked as your own. Whisper models only."),
+    (_app / "MainWindow.xaml", "The streaming models do not produce a clarity score."),
+    (_app / "MainWindow.xaml.cs", "clarity score you can read back on Whisper models"),
+    (Path(__file__).resolve().parents[1] / "ui" / "index.html",
+     "clarity score on Whisper models"),
+):
+    source = path.read_text(encoding="utf-8") if path.is_file() else ""
+    check(f"{path.name} still says which models have a clarity score: {needle[:34]}...",
+          source.count(needle) == 1,
+          f"found {source.count(needle)} occurrences, expected exactly 1. Either the "
+          "qualifier is gone, so the app promises a score it does not produce on Zipformer "
+          "or Kroko, or it now appears twice and this check no longer pins the one that "
+          "matters")
 
 # Every model downloaded at first run has to appear in the notices, and a streaming model
 # is two clicks from a Store submission rather than a research script.

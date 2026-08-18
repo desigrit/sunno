@@ -168,8 +168,10 @@ class SpeakerIdentifier:
         """Mark a speaker as the user themselves.
 
         Their speech is still transcribed - the user reads it back as clarity feedback for
-        speech practice - but it is rendered distinctly and carries a clarity score, so
-        their own lines never get confused with what other people said.
+        speech practice - but it is rendered distinctly, so their own lines never get
+        confused with what other people said. On a Whisper model it also carries a clarity
+        score; the streaming engines produce none, which is why the setting and both speaker
+        dialogs name Whisper.
         """
         with self._lock:
             if speaker_id not in self._profiles:
