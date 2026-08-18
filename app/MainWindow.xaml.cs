@@ -189,6 +189,26 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         ConfigureWindow();
         App.Trace("MainWindow ctor: window configured");
 
+        // Open straight onto the setup screen when this machine has no settings file at all,
+        // which means nobody has ever finished setting Sunno up here.
+        //
+        // Without it the first launch shows the ordinary window, with its microphone picker,
+        // speaker list and "Starting the speech engine" state, and then covers all of it with
+        // the model picker several seconds later when the backend reports that no model is
+        // downloaded. Nothing is broken in that sequence, but it reads as the app changing
+        // its mind, and the thing it briefly offered cannot be used yet.
+        //
+        // The signal is deliberately "no settings file" rather than "no model on disk". The
+        // frontend cannot see the model cache, only the backend can, and asking it is what
+        // costs the seconds this exists to hide. A returning user whose model was deleted
+        // still sees the old sequence; that is rare and self-explanatory, where a first run
+        // is neither.
+        if (_settings.IsFirstRun)
+        {
+            App.Trace("MainWindow ctor: no settings on disk, opening on setup");
+            ShowSetupWhileWaiting();
+        }
+
         _client.Partial += ev => _ui.TryEnqueue(() => OnPartial(ev));
         _client.Final += ev => _ui.TryEnqueue(() => OnFinal(ev));
         _client.Discarded += id => _ui.TryEnqueue(() => OnDiscarded(id));
@@ -588,6 +608,19 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (st.Running is bool running) SetRunning(running);
         _backendLoading = st.State == "loading";
 
+        // A status frame that proves the engine got past the model gate means a setup screen
+        // put up only to cover the wait has nothing left to wait for.
+        //
+        // "starting" is excluded, and the exclusion is the whole point. app.py seeds
+        // latest_status to {"state": "starting"} and sends it to every new connection, and
+        // the socket accepts connections BEFORE `await model_ready.wait()`. So a bare
+        // "any status frame" test fires while the backend is still deciding whether a model
+        // exists, which on the very path this screen exists for would show the setup screen,
+        // replace it with the ordinary window, then bring it back when model_required
+        // arrives: two flashes where there was one. Every other state, starting with
+        // "loading", is emitted after the gate.
+        if (st.State != "starting") DismissProvisionalSetup();
+
         // Remember the model the engine reported, for the diagnostics report. Only overwrite on
         // a frame that actually carries it: error frames and plain running/paused updates leave
         // it null, and losing it would make the report say "unknown" for the rest of the session.
@@ -877,6 +910,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         App.Trace($"backend crashed: {reason}");
         _backendLoading = false;
+        // A crash before the first status frame would otherwise leave the placeholder setup
+        // screen up for good, hiding the error underneath a full-window overlay. Placed here
+        // rather than left to ShowFatalBackendError because two branches below start a
+        // fallback model and return without ever reaching it.
+        DismissProvisionalSetup();
         // Dropped here rather than beside the fatal banner below, because two branches of this
         // method start a fallback model and return without ever reaching it. A crash during a
         // device switch takes one of them — the device path clears _engineReadyThisSession,
@@ -943,6 +981,15 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         _backendFatal = true;
         _backendLoading = false;
+        // The single funnel for "the engine is dead", so it is where the placeholder setup
+        // screen has to come down. Every other route is unreliable here: three of the four
+        // failing paths in BackendHost.Start return an error string without ever raising
+        // Crashed (no Python runtime, no server package, a Start() that throws and leaves no
+        // process to report Exited), and even a stray status frame is discarded by the
+        // _backendFatal guard in OnStatus before it could dismiss anything. Without this, a
+        // first launch on an incomplete install would sit behind a full-window overlay with
+        // this very banner painted underneath it, unreadable, and no way to reach Settings.
+        DismissProvisionalSetup();
         // The engine is dead, so nothing is coming up. A device ring still turning here would
         // promise a microphone that is never going to arrive, next to a banner saying the
         // opposite.
@@ -1873,8 +1920,105 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     // ---------- first-run setup ----------
 
+    /// <summary>
+    /// Show the setup screen before the backend has said anything.
+    ///
+    /// Only the frame: the catalogue has not arrived, so there is nothing to list and nothing
+    /// to download yet. A placeholder row says so, and the button stays disabled until
+    /// OnModelRequired fills the list, because a "Download and continue" that silently does
+    /// nothing is worse than one that is visibly not ready. OnModelRequired clears the
+    /// placeholder as its first act, so this cannot outlive the wait.
+    ///
+    /// Provisional, and that matters more than it looks. "No settings file" is not the same
+    /// as "no model": someone who deletes their profile but still has a model cached gets
+    /// here, and for them no model_required frame is ever sent, so nothing on the normal
+    /// path would take this screen down again and the app would be unreachable behind it.
+    /// DismissProvisionalSetup is the other half, and it runs on the first sign that the
+    /// engine is alive.
+    /// </summary>
+    private void ShowSetupWhileWaiting()
+    {
+        _setupProvisional = true;
+        ModelList.Items.Clear();
+        // The same words the ordinary empty state uses, because that is what is actually
+        // happening. An earlier draft said "Looking for models on this PC", which was untrue
+        // for most of the wait: nothing is looking for models, the Python backend is booting.
+        AddModelNote("Starting the speech engine. This takes about half a minute the first time.");
+        DownloadButton.IsEnabled = false;
+        SetupError.IsOpen = false;
+        DownloadPanel.Visibility = Visibility.Collapsed;
+        SetupTroubleLink.Visibility = Visibility.Visible;
+        // Unreachable today, since this only runs when there is no settings file and so
+        // CompactMode is its default of false. Kept so the two places that raise this overlay
+        // do not disagree about whether a full-window screen inside a 160px strip needs
+        // handling; OnModelRequired does the same and explains why.
+        ExitCompact();
+        SetupOverlay.Visibility = Visibility.Visible;
+
+        // Last resort, and deliberately far past the advertised wait. Every known path that
+        // ends the wait calls DismissProvisionalSetup, but this screen covers the whole window,
+        // so an unknown path that never reports would be a lockout rather than a delay. A
+        // backend process that starts and then hangs before it binds its socket raises neither
+        // a status frame nor Crashed, and an antivirus scan of a freshly installed Python
+        // payload is a real way to get there.
+        //
+        // Two minutes, not the thirty seconds the copy above quotes. A backstop set to the
+        // typical wait fires just as the backend is about to answer: the placeholder vanishes,
+        // the ordinary window appears, and model_required then slams the setup screen back up
+        // a moment later. That is the "app changing its mind" sequence this whole thing exists
+        // to remove, recreated by its own safety net. A backstop belongs past the tail of the
+        // distribution, not at its median.
+        _setupTimeout = _ui.CreateTimer();
+        _setupTimeout.Interval = TimeSpan.FromSeconds(120);
+        _setupTimeout.Tick += (t, _) =>
+        {
+            t.Stop();
+            if (!_setupProvisional) return;
+            App.Trace("setup placeholder timed out; falling back to the ordinary window");
+            DismissProvisionalSetup();
+        };
+        _setupTimeout.Start();
+    }
+
+    /// <summary>
+    /// Take down a setup screen that was only ever a placeholder for the wait.
+    ///
+    /// Called when the engine proves it is running, when it proves it is dead, or when the
+    /// timer gives up. Does nothing once the screen has become a real prompt, so a user
+    /// part-way through choosing a model is never interrupted by a late frame.
+    /// </summary>
+    private void DismissProvisionalSetup()
+    {
+        if (!_setupProvisional) return;
+        _setupProvisional = false;
+        StopSetupTimeout();
+        ModelList.Items.Clear();
+        SetupTroubleLink.Visibility = Visibility.Collapsed;
+        SetupOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Stop and drop the placeholder's backstop timer.
+    ///
+    /// Called from both places the placeholder state ends, not just the dismissal. A timer
+    /// left running past a real setup prompt is harmless today, because its handler checks
+    /// the flag and gives up, but it is a live callback outliving the state it belongs to and
+    /// the second call site added to this class would make it a real bug.
+    /// </summary>
+    private void StopSetupTimeout()
+    {
+        _setupTimeout?.Stop();
+        _setupTimeout = null;
+    }
+
     private void OnModelRequired(string? computeDevice, IReadOnlyList<ModelOption> options)
     {
+        // A real prompt from here on, so the provisional dismissal must not fire behind it,
+        // and its backstop has nothing left to guard.
+        _setupProvisional = false;
+        StopSetupTimeout();
+        SetupTroubleLink.Visibility = Visibility.Collapsed;
+
         // Recorded for the diagnostics report, which on a first run had no other source for
         // it: this is the only frame a machine with no model downloaded ever sees, and it was
         // dropping the field. The wording on this screen deliberately does not use it, because
@@ -2110,6 +2254,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     // ---------- devices ----------
 
+    private bool _setupProvisional;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _setupTimeout;
     private bool _loadingDevices;
 
     private async Task LoadDevicesAsync(bool fresh = false)

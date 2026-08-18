@@ -29,7 +29,12 @@ public sealed partial class MainWindow
         // Setup wins. MoreButton is only painted over during first run, not disabled, so
         // without this the page could open on top of setup and closing it would drop the
         // user back into a half-finished download.
-        if (SetupOverlay.Visibility == Visibility.Visible) return;
+        //
+        // Not when it is only a placeholder for backend startup, though. That screen asks
+        // nothing and there is nothing to interrupt, and it covers the whole window, so
+        // treating it like a real prompt would take away the one route to the diagnostics
+        // export at exactly the moment a backend that will not start makes it worth having.
+        if (SetupOverlay.Visibility == Visibility.Visible && !_setupProvisional) return;
 
         RefreshDiagnostics();
 

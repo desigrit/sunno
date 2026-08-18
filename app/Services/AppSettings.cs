@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Sunno.Services;
 
@@ -83,6 +84,26 @@ public sealed class AppSettings
     public int? ExpandedLeft { get; set; }
     public int? ExpandedTop { get; set; }
 
+    /// <summary>
+    /// Whether this machine has no settings file at all, meaning nobody has ever finished
+    /// setting Sunno up here.
+    ///
+    /// Deliberately narrower than "these are the defaults". A file that exists but cannot be
+    /// read also yields defaults, and that user is not new: dropping them onto a first-run
+    /// screen would look like the app had forgotten them, which is the opposite of reassuring
+    /// when their settings have just been lost. They get the ordinary window, and the
+    /// unreadable file is traced instead.
+    ///
+    /// Used by the startup path to decide whether to open straight onto the setup screen.
+    /// Without it the window shows its normal shell for as long as the Python backend takes
+    /// to start, and then replaces it with the model picker, which reads as the app changing
+    /// its mind about what it is.
+    ///
+    /// Not serialised. It describes this load, not the user's preferences.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsFirstRun { get; private set; }
+
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Sunno", "settings.json");
@@ -91,15 +112,24 @@ public sealed class AppSettings
     {
         try
         {
-            if (File.Exists(FilePath))
+            if (!File.Exists(FilePath))
             {
-                var json = File.ReadAllText(FilePath);
-                return JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+                return new AppSettings { IsFirstRun = true };
             }
+
+            var json = File.ReadAllText(FilePath);
+            var loaded = JsonSerializer.Deserialize<AppSettings>(json);
+            if (loaded is not null) return loaded;
+
+            App.Trace("settings.json deserialised to null; using defaults");
         }
-        catch
+        catch (Exception ex)
         {
-            // A corrupt settings file must not stop the app starting.
+            // A corrupt settings file must not stop the app starting. It is traced rather
+            // than swallowed silently, because the failure is invisible otherwise and its
+            // symptom is alarming: every preference reverts, including the chosen model,
+            // which then reads as the app forgetting what it was told.
+            App.Trace($"settings.json unreadable ({ex.GetType().Name}: {ex.Message}); using defaults");
         }
         return new AppSettings();
     }

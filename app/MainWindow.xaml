@@ -611,11 +611,21 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0" Spacing="6">
-                    <FontIcon Glyph="&#xE896;" FontSize="26" HorizontalAlignment="Left"
-                              Margin="0,0,0,10"
-                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                    <TextBlock Text="Choose a speech model"
-                               Style="{StaticResource TitleTextBlockStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,4">
+                        <!-- Inline with the heading rather than stacked above it. On its own
+                             line the glyph read as a separate element the eye had to account
+                             for before reaching the actual question. AccessibilityView="Raw"
+                             because it is decoration: the heading already says what this is,
+                             and a screen reader announcing a download glyph before it adds
+                             nothing. -->
+                        <FontIcon Glyph="&#xE896;" FontSize="24"
+                                  VerticalAlignment="Center"
+                                  AutomationProperties.AccessibilityView="Raw"
+                                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        <TextBlock Text="Choose a speech model"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource TitleTextBlockStyle}" />
+                    </StackPanel>
                     <TextBlock TextWrapping="Wrap" Margin="0,0,0,18"
                                Style="{StaticResource BodyTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -682,6 +692,16 @@
                             Click="OnDownloadModel" Margin="0,16,0,0"
                             HorizontalAlignment="Left"
                             Style="{StaticResource AccentButtonStyle}" />
+
+                    <!-- Only while this screen is a placeholder for backend startup, never on
+                         the real prompt. The overlay is opaque and hit-test visible, so it
+                         swallows pointer input to the toolbar underneath, including the button
+                         that opens Settings. A backend that never reports leaves the user
+                         looking at a screen with nothing on it and no way to reach the
+                         diagnostics export, which is the one thing that would explain it. -->
+                    <HyperlinkButton x:Name="SetupTroubleLink" Visibility="Collapsed"
+                                     Click="OnOpenSettings" Margin="0,10,0,0"
+                                     Content="Taking too long? Open settings" />
 
                     <TextBlock Margin="0,12,0,0" TextWrapping="Wrap"
                                Style="{StaticResource CaptionTextBlockStyle}"
