@@ -44,7 +44,7 @@ licence and the difference matters to anyone redistributing or forking this app.
    [csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06),
    declares no licence, and its README says only "See license at
    https://huggingface.co/Banafo/Kroko-ASR". That repository declares `license: other` with
-   `license_name: "test"` and `license_link: LICENSE` — and at the time of writing that
+   `license_name: "test"` and `license_link: LICENSE`, and at the time of writing that
    LICENSE file is empty. Banafo's project README describes community models as CC-BY-SA,
    but nothing identifies this particular checkpoint as one of them, so this file does not
    claim CC-BY-SA on their behalf.
@@ -57,7 +57,7 @@ What Sunno does and does not do with it:
 
 - It is **never selected automatically**. The model list the app sends to its own first-run
   screen marks this model as not auto-selectable, and every branch of that screen's
-  preselection honours the mark — including the "nothing on this PC keeps up, so offer the
+  preselection honours the mark, including the "nothing on this PC keeps up, so offer the
   fastest" fallback, which this model would otherwise win outright. The backend applies the
   same rule in `hardware.default_model`. Tests enforce both. A user reaches this model only
   by choosing it in the picker, where its description says its licence is undeclared.
