@@ -629,7 +629,7 @@
                     <TextBlock TextWrapping="Wrap" Margin="0,0,0,18"
                                Style="{StaticResource BodyTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               Text="Sunno runs entirely on your PC. Nothing is sent to the internet once this is downloaded, and the model is downloaded once and reused." />
+                               Text="Sunno runs entirely on your PC. It uses the internet once during setup to download what it needs, and nothing is sent anywhere after that." />
                 </StackPanel>
 
                 <ListView x:Name="ModelList" Grid.Row="1" SelectionMode="Single"
@@ -702,6 +702,18 @@
                     <HyperlinkButton x:Name="SetupTroubleLink" Visibility="Collapsed"
                                      Click="OnOpenSettings" Margin="0,10,0,0"
                                      Content="Taking too long? Open settings" />
+
+                    <!-- Shown only on a PC with an NVIDIA card that has not got the CUDA
+                         libraries yet. Ordinary secondary text rather than an InfoBar: this is
+                         a fact about what the download includes, not a warning, and there is
+                         nothing to act on or dismiss. It appears on this screen and nowhere
+                         else. Once the download starts the libraries are simply part of it,
+                         and a running transfer that keeps explaining its own contents invites
+                         a question the user cannot do anything with. -->
+                    <TextBlock x:Name="GpuPayloadNote" Visibility="Collapsed"
+                               Margin="0,12,0,0" TextWrapping="Wrap"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
                     <TextBlock Margin="0,12,0,0" TextWrapping="Wrap"
                                Style="{StaticResource CaptionTextBlockStyle}"

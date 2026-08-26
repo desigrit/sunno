@@ -6,6 +6,10 @@ numpy
 websockets
 onnxruntime>=1.17
 huggingface_hub
+# Used directly by server/cuda_download.py for the CUDA payload fetch. It arrives anyway as a
+# huggingface_hub dependency, but relying on that means a future hub release that drops it
+# would break the GPU download with no change on our side and nothing pointing at the cause.
+httpx
 sherpa-onnx
 
 # CUDA runtime for CTranslate2 (CUDA 12).

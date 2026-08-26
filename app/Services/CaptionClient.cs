@@ -18,7 +18,16 @@ public sealed record LevelEvent(double Db, bool Speaking);
 /// <summary>A model offered during first-run setup.</summary>
 public sealed record ModelOption(
     string Id, string Name, string Detail, int ApproxMb, string Languages, bool Available,
-    int LagMs = 0, bool Responsive = true, bool AutoSelect = true);
+    int LagMs = 0, bool Responsive = true, bool AutoSelect = true, bool UsesGpu = true);
+
+/// <summary>
+/// Whether this PC wants the CUDA libraries and hasn't got them, and how big they are.
+///
+/// Machine state rather than model state, so it rides on the frame instead of being repeated
+/// on every row. Which models it applies to is the row's own <c>UsesGpu</c>: the streaming
+/// recognisers pin themselves to CPU providers and never need it.
+/// </summary>
+public sealed record GpuPayloadInfo(bool Needed, int ApproxMb);
 
 public sealed record DownloadProgressEvent(string Model, long Downloaded, long Total, double Percent);
 
@@ -60,7 +69,7 @@ public sealed class CaptionClient : IAsyncDisposable
     /// something. The backend sends settings.device on this frame too; it was simply being
     /// dropped here, which left the one screen that most needs the distinction unable to name it.
     /// </summary>
-    public event Action<string?, IReadOnlyList<ModelOption>>? ModelRequired;
+    public event Action<string?, IReadOnlyList<ModelOption>, GpuPayloadInfo>? ModelRequired;
     /// <summary>
     /// The catalogue, the model currently selected, and the compute device the engine resolved.
     ///
@@ -69,7 +78,7 @@ public sealed class CaptionClient : IAsyncDisposable
     /// name, and reading it as a compute device once put a user's hearing aid into a diagnostics
     /// report.
     /// </summary>
-    public event Action<string, string?, IReadOnlyList<ModelOption>>? ModelCatalog;
+    public event Action<string, string?, IReadOnlyList<ModelOption>, GpuPayloadInfo>? ModelCatalog;
     public event Action<DownloadProgressEvent>? DownloadProgress;
     public event Action<string>? DownloadComplete;
     public event Action<string>? DownloadFailed;
@@ -204,11 +213,13 @@ public sealed class CaptionClient : IAsyncDisposable
                 break;
             }
             case "model_required":
-                ModelRequired?.Invoke(GetString(root, "device"), ParseCatalog(root));
+                ModelRequired?.Invoke(GetString(root, "device"), ParseCatalog(root),
+                                      ParseGpuPayload(root));
                 break;
             case "model_catalog":
                 ModelCatalog?.Invoke(GetString(root, "current") ?? "",
-                                     GetString(root, "device"), ParseCatalog(root));
+                                     GetString(root, "device"), ParseCatalog(root),
+                                     ParseGpuPayload(root));
                 break;
             case "download_progress":
                 DownloadProgress?.Invoke(new DownloadProgressEvent(
@@ -222,6 +233,12 @@ public sealed class CaptionClient : IAsyncDisposable
                 break;
             case "download_failed":
                 DownloadFailed?.Invoke(GetString(root, "message") ?? "Download failed.");
+                break;
+            default:
+                // Every other frame type is handled above. A silent drop here is how a new
+                // backend frame can look like it works while doing nothing at all, so say so
+                // once rather than leaving the next person to find it with a debugger.
+                App.Trace($"unhandled backend frame: {type}");
                 break;
         }
     }
@@ -274,10 +291,23 @@ public sealed class CaptionClient : IAsyncDisposable
                 // Defaults true so an older backend, which does not send this, keeps
                 // behaving as it did. Only a backend that knows about unlicensed models
                 // can mark one, and it marks them false.
-                GetBool(m, "auto_select") ?? true));
+                GetBool(m, "auto_select") ?? true,
+                // Defaults true for the same reason: a backend that predates the split
+                // ships only Whisper models, all of which use the GPU when there is one.
+                GetBool(m, "uses_gpu") ?? true));
         }
         return options;
     }
+
+    /// <summary>
+    /// Whether this PC still needs the CUDA libraries, and roughly how large they are.
+    ///
+    /// Absent on an older backend, which shipped them inside the package, so the default is
+    /// "nothing to fetch" — that build's payload is already on disk.
+    /// </summary>
+    private static GpuPayloadInfo ParseGpuPayload(JsonElement root) =>
+        new(GetBool(root, "gpu_payload_needed") ?? false,
+            GetInt(root, "gpu_payload_mb") ?? 0);
 
     public Task ToggleAsync() => SendAsync(new { cmd = "toggle" });
     public Task StartCaptureAsync() => SendAsync(new { cmd = "start" });

@@ -24,7 +24,7 @@ Sunno redistributes the components below. Each remains under its own licence.
 
 | Component | Licence | Notes |
 |---|---|---|
-| NVIDIA CUDA runtime (cuBLAS, NVRTC) | NVIDIA CUDA Toolkit EULA | Redistributable components only, per the EULA's distribution list. https://docs.nvidia.com/cuda/eula/ |
+| NVIDIA CUDA runtime (cuBLAS, NVRTC) | NVIDIA CUDA Toolkit EULA | Redistributable components only, per the EULA's distribution list. Not in the package: published unmodified as separate assets on this repository's releases page and downloaded at first run on PCs with a compatible NVIDIA GPU. https://docs.nvidia.com/cuda/eula/ |
 | CPython 3.12 | Python Software Foundation License 2.0 | https://docs.python.org/3/license.html |
 | Whisper model weights | MIT (OpenAI) | Downloaded at first run, not redistributed in the package. |
 | Silero VAD | MIT | Vendored at `server/assets/silero_vad_v6.onnx` and redistributed in the package. From [snakers4/silero-vad](https://github.com/snakers4/silero-vad). |

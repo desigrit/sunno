@@ -253,11 +253,19 @@ def engine_importable() -> bool:
 
 
 def has_cuda() -> bool:
-    """Whether CTranslate2 can actually run on a GPU here.
+    """Whether this machine's GPU could run CTranslate2, given the right libraries.
 
-    Deliberately not a check for an NVIDIA card: the card can be present while the CUDA
-    payload we ship is missing or unloadable, and the only answer that matters is whether
-    a model would load.
+    This answers a hardware question, not a readiness one. It goes through CTranslate2, but
+    everything it touches is answered by the driver: measured with the CUDA payload off the
+    search path entirely, ``get_cuda_device_count()`` still returns 1 and
+    ``get_supported_compute_types("cuda")`` still reports float16, and a process memory map
+    afterwards shows only nvcuda.dll loaded — no cuBLAS, no NVRTC.
+
+    So a True here does not mean a model will load. CTranslate2 resolves cuBLAS lazily, at
+    the first real decode, which means a machine with no payload sails through this check,
+    through engine construction, and only fails when somebody speaks. ``payload_ready``
+    below is the half that answers whether the libraries are actually there, and
+    ``resolve_device`` requires both.
     """
     if not engine_importable():
         return False
@@ -274,15 +282,40 @@ def has_cuda() -> bool:
         return False
 
 
+def payload_ready() -> bool:
+    """Whether the CUDA libraries are installed and complete."""
+    try:
+        from .cuda_setup import payload_present
+
+        return payload_present()
+    except Exception:
+        return False
+
+
+def gpu_capable() -> bool:
+    """A GPU that could be used once the payload is installed.
+
+    Distinct from ``resolve_device() == "cuda"``, which is about right now. This is what
+    decides whether to offer the download at all, so an AMD or Intel machine is never asked
+    to fetch 455 MB it can never load.
+    """
+    return has_cuda()
+
+
 def resolve_device(preference: str = "auto") -> str:
-    """Turn a preference into a device that will really load."""
+    """Turn a preference into a device that will really load.
+
+    The payload check is what makes that sentence true. Without it this returned "cuda" on
+    any machine with an NVIDIA card, including one where the libraries had never been
+    downloaded, and the resulting engine failed at the first utterance rather than at
+    startup.
+    """
     if preference == "cpu":
         return "cpu"
-    if preference == "cuda":
-        # An explicit request still gets checked: failing here with a clear device string
-        # beats failing later inside CTranslate2 with a missing-DLL error.
-        return "cuda" if has_cuda() else "cpu"
-    return "cuda" if has_cuda() else "cpu"
+    # Explicit and automatic requests are treated the same. An explicit --compute-device
+    # cuda cannot be honoured without the libraries either, and app.py's own strict check
+    # would send it back to CPU a moment later regardless of what is returned here.
+    return "cuda" if (has_cuda() and payload_ready()) else "cpu"
 
 
 def compute_type_for(device: str) -> str:

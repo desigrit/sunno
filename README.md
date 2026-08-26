@@ -61,8 +61,9 @@ Sunno does the recognition on your own machine. No account, no sign in, no telem
 to send anything to. Turn off your Wi-Fi and it works exactly the same. The people around you are
 not being uploaded anywhere, and you can tell them so honestly.
 
-The only time Sunno touches the network is downloading the speech model on first run. After
-that, never.
+Sunno touches the network during setup and then never again. It downloads the speech model,
+and on a PC with an NVIDIA graphics card the CUDA libraries that card needs. After that,
+nothing.
 
 Full details in [PRIVACY.md](PRIVACY.md), including the one thing that does get written to disk:
 if you pin a speaker so Sunno recognises them next time, their name and voice fingerprint are
@@ -77,9 +78,14 @@ saved locally.
 **Option B: From source** - see [Building](#building) below.
 
 On first run Sunno downloads a speech model. Whisper large-v3 is roughly 3 GB; the streaming
-models are under 70 MB. Either way it needs an internet connection for that one step only.
+models are under 70 MB. On a PC with an NVIDIA graphics card it also fetches about 450 MB of
+CUDA libraries, once, alongside the model. Those used to ship inside the installer, which
+made it 828 MB larger for every PC including the ones that can never use them. Setup is the
+only step that needs an internet connection.
+
 It runs on any modern PC: with an NVIDIA GPU captions appear almost
-immediately, and without one you can either use your processor with a Whisper model, which works
+immediately once those libraries are in place, and without one you can either use your
+processor with a Whisper model, which works
 but lags further behind, or pick one of the streaming models built for exactly that case.
 The app measures your machine and tells you what to expect before you commit to a download.
 

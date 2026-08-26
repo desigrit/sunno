@@ -318,8 +318,10 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                             "type": "model_catalog",
                             "current": settings.model_size,
                             "device": settings.device,
+                            "gpu_payload_needed": gpu_payload_needed(),
+                            "gpu_payload_mb": round(cuda_bytes() / 1e6),
                             "catalog": await asyncio.to_thread(
-                                model_catalog.catalog_with_status, settings.device
+                                model_catalog.catalog_with_status, catalog_device()
                             ),
                         })
 
@@ -419,8 +421,72 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     chosen_model = settings.model_size
     downloading = False
 
+    def gpu_payload_needed() -> bool:
+        """Whether this machine wants the CUDA libraries and does not have them.
+
+        Both halves matter. An AMD or Intel machine must never be asked to fetch 455 MB it
+        can never load, and a machine that already has them must never fetch them twice.
+        """
+        from . import hardware
+
+        return hardware.gpu_capable() and not hardware.payload_ready()
+
+    def payload_needed_for(model_id: str) -> bool:
+        """Whether choosing this model should pull the CUDA libraries down.
+
+        The streaming models pin themselves to CPU providers, so they never need it however
+        good the graphics card is.
+        """
+        from . import models as model_catalog
+
+        if model_catalog.is_stream_model(model_id):
+            return False
+        return gpu_payload_needed()
+
+    def cuda_bytes() -> int:
+        try:
+            from . import cuda_download
+
+            return cuda_download.compressed_total()
+        except Exception:
+            return 0
+
+    def catalog_device() -> str:
+        """Which device the picker should quote timings for.
+
+        Not settings.device. On a machine with an NVIDIA GPU but no libraries yet, the
+        engine really is on the processor, but choosing a model installs the libraries, so
+        the speed the user is deciding against is the GPU one. Quoting processor timings
+        here would push a first-run RTX owner towards Whisper base and mark large-v3 as
+        several seconds behind, on a machine that will run it in half a second.
+
+        The number is wrong for one case: someone whose library download fails or is
+        cancelled stays on the processor while this still promises GPU speed. Accepted
+        deliberately. The alternative mis-sells every fresh install to protect a few.
+        """
+        from . import hardware
+
+        return "cuda" if hardware.gpu_capable() else settings.device
+
     async def ensure_model(model_id: str) -> None:
-        """Download a model if it isn't cached, reporting progress, then release the loader."""
+        """Install whatever `model_id` needs, then release the loader.
+
+        Two things can be missing: the model itself, and the CUDA libraries the Whisper
+        engine needs on a machine that has an NVIDIA GPU. They are reported as one download
+        against one total, because from the user's side it is a single act — they picked a
+        model and it is being set up. Two bars, or a bar that finishes and then starts again,
+        describes our packaging rather than their intent.
+
+        Model first, then the payload. Either leg can be interrupted by the user closing the
+        app, and the order decides what they are left with: model-first leaves a working
+        install running on the processor, payload-first leaves 455 MB of libraries and no way
+        to caption anything.
+
+        A payload failure is deliberately not fatal and does not even mark the operation
+        failed. The model is there, captions work, they are just slower. Saying "couldn't
+        download that model" over a model that downloaded perfectly would be a lie, and the
+        next model switch retries the payload anyway.
+        """
         nonlocal chosen_model, downloading
         if downloading:
             return
@@ -429,28 +495,57 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         try:
             from . import models as model_catalog
 
-            if not model_catalog.is_available(model_id).available:
+            need_payload = payload_needed_for(model_id)
+            model_missing = not model_catalog.is_available(model_id).available
+            payload_bytes = cuda_bytes() if need_payload else 0
+            model_bytes = 0
+
+            if model_missing or need_payload:
                 emit({"type": "download_started", "model": model_id})
+
+            last = [0.0]
+
+            def report(done: int, total: int, force: bool = False) -> None:
+                # Throttle: the hub reports in small chunks and the UI only needs ~10 Hz.
+                now = time.monotonic()
+                if not force and done < total and now - last[0] < 0.1:
+                    return
+                last[0] = now
+                emit({
+                    "type": "download_progress",
+                    "model": model_id,
+                    "downloaded": done,
+                    "total": total,
+                    "percent": round(100 * done / total, 1) if total else 0.0,
+                })
+
+            if model_missing:
                 print(f"Downloading {model_id} ...", flush=True)
 
-                last = [0.0]
+                def on_model(done: int, total: int) -> None:
+                    nonlocal model_bytes
+                    model_bytes = total
+                    report(done, total + payload_bytes)
 
-                def on_progress(done: int, total: int) -> None:
-                    # Throttle: the hub reports in small chunks and the UI only needs ~10 Hz.
-                    now = time.monotonic()
-                    if done < total and now - last[0] < 0.1:
-                        return
-                    last[0] = now
-                    emit({
-                        "type": "download_progress",
-                        "model": model_id,
-                        "downloaded": done,
-                        "total": total,
-                        "percent": round(100 * done / total, 1) if total else 0.0,
-                    })
-
-                await asyncio.to_thread(model_catalog.download, model_id, on_progress)
+                await asyncio.to_thread(model_catalog.download, model_id, on_model)
                 print(f"Downloaded {model_id}", flush=True)
+
+            if need_payload:
+                # Announced to the log, not to the screen. The user asked for a model; the
+                # libraries it happens to need are our business, and a second named download
+                # appearing halfway through would only raise a question they cannot act on.
+                print("Downloading CUDA support libraries ...", flush=True)
+                base = model_bytes
+                try:
+                    from . import cuda_download
+
+                    def on_payload(done: int, total: int) -> None:
+                        report(base + done, base + total)
+
+                    await asyncio.to_thread(cuda_download.download_payload, on_payload)
+                    print("CUDA support libraries installed", flush=True)
+                except Exception as exc:
+                    print(f"[error] CUDA library download failed: {exc}", flush=True)
 
             emit({"type": "download_complete", "model": model_id})
             model_ready.set()
@@ -470,12 +565,14 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
             model_ready.set()
         else:
             catalog = await asyncio.to_thread(
-                model_catalog.catalog_with_status, settings.device
+                model_catalog.catalog_with_status, catalog_device()
             )
             latest_status = {
                 "type": "model_required",
                 "requested": settings.model_size,
                 "device": settings.device,
+                "gpu_payload_needed": gpu_payload_needed(),
+                "gpu_payload_mb": round(cuda_bytes() / 1e6),
                 "catalog": catalog,
             }
             emit(dict(latest_status))
@@ -484,10 +581,32 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         await model_ready.wait()
         settings.model_size = chosen_model
 
-        # A mis-staged CUDA payload should not be fatal any more: the CPU path works, just
-        # slower, and a captioning app that runs behind is far better than one that refuses
-        # to start. hardware.resolve_device() has already proved CUDA loads, so reaching
-        # here means the payload broke between that check and now.
+        # Re-resolve the device now the download has finished.
+        #
+        # settings.device was fixed in parse_args, before anything was downloaded. On a PC
+        # with an NVIDIA card and no libraries yet, that read "cpu" — correctly at the time.
+        # If the user has just picked a model and we have since installed the libraries, that
+        # answer is stale, and leaving it stale is the worst outcome this change can produce:
+        # the machine downloads the payload and then spends the entire session on the
+        # processor anyway. The picker quoted GPU speed to get them here, so a first run that
+        # ends on CPU is both slow and a broken promise.
+        #
+        # Only ever an upgrade. args.compute_type is honoured if the user set it explicitly,
+        # and a forced --compute-device cpu still resolves to cpu, so this cannot override
+        # either. The create_engine/warmup guard below catches it if the upgrade is wrong.
+        if settings.device != "cuda":
+            from . import hardware
+
+            upgraded = hardware.resolve_device(args.compute_device)
+            if upgraded != settings.device:
+                settings.device = upgraded
+                settings.compute_type = args.compute_type or hardware.compute_type_for(upgraded)
+                print(f"GPU libraries are now installed; using {upgraded}", flush=True)
+
+        # A broken CUDA payload should not be fatal: the CPU path works, just slower, and a
+        # captioning app that runs behind is far better than one that refuses to start.
+        # resolve_device() has already checked the payload is complete, so reaching here with
+        # a fault means it broke between that check and now.
         if settings.device == "cuda":
             from . import hardware
             from .cuda_setup import register_cuda_dlls
@@ -513,8 +632,27 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
 
         from .engine import create_engine
 
-        engine = await asyncio.to_thread(create_engine, settings)
-        warmup_ms = await asyncio.to_thread(engine.warmup)
+        # warmup is inside the guard, not just create_engine, and that distinction is the
+        # whole point. CTranslate2 resolves cuBLAS lazily: constructing a CUDA engine with
+        # no libraries present succeeds, and the failure only appears when something is
+        # actually decoded. warmup is that first decode. Guarding only the constructor would
+        # have caught nothing and left the backend dying here, outside every handler, on a
+        # machine whose payload was incomplete.
+        try:
+            engine = await asyncio.to_thread(create_engine, settings)
+            warmup_ms = await asyncio.to_thread(engine.warmup)
+        except Exception as exc:
+            if settings.device == "cpu":
+                raise
+            from . import hardware
+
+            print(f"[error] GPU engine failed to start ({exc}); falling back to CPU",
+                  flush=True)
+            settings.device = "cpu"
+            settings.compute_type = hardware.compute_type_for("cpu")
+            emit({"type": "status", "state": "loading", "model": settings.model_size})
+            engine = await asyncio.to_thread(create_engine, settings)
+            warmup_ms = await asyncio.to_thread(engine.warmup)
         print(f"Model ready (warmup {warmup_ms:.0f} ms)")
 
         pipeline = CaptionPipeline(

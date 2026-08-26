@@ -2,13 +2,14 @@
 #
 # The venv's python.exe is a 268 KB shim that points at the python.org install via
 # pyvenv.cfg, so it cannot simply be copied. This stages the real interpreter and overlays
-# the venv's site-packages, omitting the CUDA DLLs that nothing imports (see
-# packaging/cuda_allowlist.txt) and other dead weight.
+# the venv's site-packages, omitting the CUDA payload entirely and other dead weight.
+#
+# The CUDA DLLs used to be staged here from packaging/cuda_allowlist.txt. They are now
+# downloaded on demand instead; see the comment further down and server/cuda_download.py.
 
 [CmdletBinding()]
 param(
   [string]$Destination = "$PSScriptRoot\staging\backend",
-  [switch]$SkipCuda,
   [switch]$Clean
 )
 
@@ -50,7 +51,7 @@ Write-Host "Staging site-packages"
 #   scipy (+ scipy.libs)  - 129 MB, replaced by the hand-rolled biquad in preprocess.py
 #   PIL                   - icon generation only (packaging/make_icon.py)
 #   pefile                - CUDA import analysis only (packaging/cuda_decide.py)
-#   nvidia                - staged separately, from the allow-list
+#   nvidia                - downloaded on demand, never packaged
 $pkgExclude = @(
   "pip", "pip-*", "setuptools", "setuptools-*", "pkg_resources", "wheel", "wheel-*",
   "scipy", "scipy.libs", "scipy-*",
@@ -79,19 +80,17 @@ foreach ($banned in @("scipy", "PIL", "pip", "pefile")) {
   if (Test-Path $leak) { throw "Dev-only package '$banned' leaked into the staged payload at $leak" }
 }
 
-# CUDA: copy only what the import graph proves is reachable.
-if (-not $SkipCuda) {
-  $allow = Join-Path $PSScriptRoot "cuda_allowlist.txt"
-  if (-not (Test-Path $allow)) { throw "Missing $allow - run cuda_decide.py first." }
-  $wanted = Get-Content $allow | Where-Object { $_.Trim() }
-  Write-Host "Staging $($wanted.Count) CUDA DLLs from the allow-list"
-  foreach ($rel in $wanted) {
-    $src = Join-Path $site "nvidia\$($rel -replace '/', '\')"
-    $dst = Join-Path $targetSite "nvidia\$($rel -replace '/', '\')"
-    if (-not (Test-Path $src)) { throw "Allow-listed DLL missing: $src" }
-    New-Item -ItemType Directory -Path (Split-Path $dst) -Force | Out-Null
-    Copy-Item $src $dst -Force
-  }
+# CUDA is no longer packaged. It was 828 MB, 61% of the payload, carried by every machine
+# including the AMD and Intel ones that can never load it. It is now published as separate
+# .xz assets on a pinned GitHub release and fetched on demand by server/cuda_download.py, on
+# machines that both have a usable NVIDIA GPU and pick a model that needs one.
+#
+# What still has to ship is the manifest describing those files, because it is what the
+# runtime checks a downloaded payload against. It lives in server/ rather than packaging/
+# for the simple reason that only server/ and ui/ are staged below.
+$manifest = Join-Path $repo "server\cuda_manifest.json"
+if (-not (Test-Path $manifest)) {
+  throw "Missing $manifest - run packaging/make_cuda_manifest.py before packaging."
 }
 
 # Backend source and the speaker model. Explicit include-list, not a directory copy, so a

@@ -26,11 +26,15 @@ public sealed record AudioDevice(int Index, string Name, string HostApi, bool Lo
 
 /// <summary>A model shown in first-run setup.</summary>
 public sealed record ModelChoice(string Id, string Name, string Detail, int ApproxMb, bool Available,
-                                 int LagMs = 0, bool Responsive = true, bool AutoSelect = true)
+                                 int LagMs = 0, bool Responsive = true, bool AutoSelect = true,
+                                 bool UsesGpu = true, int GpuPayloadMb = 0)
 {
-    public string SizeLabel => ApproxMb >= 1024
-        ? $"{ApproxMb / 1024.0:0.0} GB"
-        : $"{ApproxMb} MB";
+    /// <summary>Megabytes this row would actually download, libraries included.</summary>
+    public int TotalMb => (Available ? 0 : ApproxMb) + (UsesGpu ? GpuPayloadMb : 0);
+
+    public string SizeLabel => Format(ApproxMb);
+
+    private static string Format(int mb) => mb >= 1024 ? $"{mb / 1024.0:0.0} GB" : $"{mb} MB";
 
     /// <summary>
     /// Description prefixed with the expected delay.
@@ -60,10 +64,15 @@ public sealed record ModelChoice(string Id, string Name, string Detail, int Appr
     /// Available = True, LagMs = 777, Responsive = True, ... }". On the one screen where
     /// someone commits to a multi-gigabyte download, in an app built for people who rely on
     /// assistive technology, that is the difference between a choice and a wall of noise.
+    ///
+    /// "already downloaded" is now conditional on there being nothing left to fetch. A row
+    /// whose model is cached can still pull the GPU libraries, and announcing that as
+    /// already downloaded would tell a screen-reader user they were committing to nothing
+    /// while starting a 455 MB transfer.
     /// </summary>
     public override string ToString()
     {
-        var size = Available ? "already downloaded" : SizeLabel;
+        var size = TotalMb == 0 ? "already downloaded" : Format(TotalMb);
         return $"{Name}, {size}. {DetailWithSpeed}";
     }
 }
@@ -100,6 +109,18 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// </summary>
     private string? _activeModel;
     private string? _computeDevice;
+
+    /// <summary>
+    /// Whether this PC still needs the CUDA libraries, and how big they are.
+    ///
+    /// Kept as window state rather than per-row because it is a fact about the machine. It
+    /// drives two things: the note under the setup screen's download button, and the guard
+    /// in OnModelChecked that lets a selection through even when the model is already on
+    /// disk. That second use is the whole repair path — without it, the person whose
+    /// captions slowed down after an update clicks their model and nothing happens.
+    /// </summary>
+    private bool _gpuPayloadNeeded;
+    private int _gpuPayloadMb;
     /// <summary>Microphone consent is settled in our favour.</summary>
     private bool _micGranted;
     /// <summary>The backend was launched with --start-stopped and still needs a start command.</summary>
@@ -221,12 +242,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _client.SpeakersMerged += (from, into) => _ui.TryEnqueue(() => OnSpeakersMerged(from, into));
         _client.SpeakerDeleted += (id, label) => _ui.TryEnqueue(() => OnSpeakerDeleted(id, label));
         _client.ConnectionChanged += ok => _ui.TryEnqueue(() => OnConnection(ok));
-        _client.ModelRequired += (device, m) => _ui.TryEnqueue(() => OnModelRequired(device, m));
+        _client.ModelRequired += (device, m, gpu) => _ui.TryEnqueue(() => OnModelRequired(device, m, gpu));
         _client.DownloadProgress += p => _ui.TryEnqueue(() => OnDownloadProgress(p));
         _client.DownloadComplete += _ => _ui.TryEnqueue(OnDownloadComplete);
         _client.DownloadFailed += msg => _ui.TryEnqueue(() => OnDownloadFailed(msg));
-        _client.ModelCatalog += (current, device, list) =>
-            _ui.TryEnqueue(() => OnModelCatalog(current, device, list));
+        _client.ModelCatalog += (current, device, list, gpu) =>
+            _ui.TryEnqueue(() => OnModelCatalog(current, device, list, gpu));
         _backend.Crashed += (reason, detail) => _ui.TryEnqueue(() => OnBackendCrashed(reason, detail));
 
         Activated += (_, _) => _windowActivated = true;
@@ -1480,7 +1501,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     }
 
     private void OnModelCatalog(string current, string? computeDevice,
-                                IReadOnlyList<ModelOption> options)
+                                IReadOnlyList<ModelOption> options, GpuPayloadInfo gpu)
     {
         // Which model the backend says is loaded, against what this process asked for.
         //
@@ -1501,6 +1522,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // it; the status frame's "device" is the audio device name.
         if (!string.IsNullOrEmpty(computeDevice)) _computeDevice = computeDevice;
 
+        _gpuPayloadNeeded = gpu.Needed;
+        _gpuPayloadMb = gpu.ApproxMb;
+
         _suppressModelEvent = true;
         try
         {
@@ -1516,6 +1540,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                     Available = o.Available,
                     LagMs = o.LagMs,
                     Responsive = o.Responsive,
+                    UsesGpu = o.UsesGpu,
                     IsSelected = o.Id == current,
                     InUse = o.Id == current,
                 };
@@ -1545,16 +1570,39 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (sender is not RadioButton { Tag: string id }) return;
 
         var row = Models.FirstOrDefault(m => m.Id == id);
-        if (row is null || id == _settings.Model || _switchingTo is not null) return;
+        if (row is null || _switchingTo is not null) return;
+
+        // Deliberately still an early return when the model has not changed.
+        //
+        // It is tempting to let this through when the GPU libraries are missing, so that
+        // clicking the model already in use repairs it. That gesture does not exist: a
+        // RadioButton does not raise Checked when you click one that is already checked, so
+        // the branch would be unreachable by the action it was written for. What it *would*
+        // catch is a late container realization re-raising Checked, which the trace comment
+        // in OnModelCatalog documents as a real and still-unexplained oddity for this list,
+        // and the cost of being wrong is a 477 MB download plus a backend restart that
+        // nobody asked for, possibly mid-conversation.
+        //
+        // Repair is reachable without it. Choosing any *different* model triggers the branch
+        // below even when that model is already on disk, and the setup screen's own
+        // "Download and continue" works off the list selection rather than this event.
+        if (row is null || id == _settings.Model) return;
+
+        // Whether picking this row has to fetch the GPU libraries as well. Computed before
+        // the availability branch, because a model already on disk would otherwise skip the
+        // download path entirely and the libraries would never be fetched.
+        var needsPayload = _gpuPayloadNeeded && row.UsesGpu;
 
         // Claimed up front so a second click is ignored while the download runs, which can
         // take minutes; SwitchModelAsync re-asserts it for the paths that don't come via here.
         _switchingTo = id;
 
-        if (!row.Available)
+        if (!row.Available || needsPayload)
         {
             // Downloading runs on the live backend, which already reports byte progress; the
-            // engine only reloads once the bytes are on disk.
+            // engine only reloads once the bytes are on disk. The backend decides for itself
+            // whether the model, the libraries, or both are missing, and reports the total as
+            // one number, so nothing here needs to distinguish them.
             row.ShowProgress(0);
             await _client.DownloadModelAsync(id);
             return;   // OnDownloadComplete resumes the switch
@@ -1947,6 +1995,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         DownloadButton.IsEnabled = false;
         SetupError.IsOpen = false;
         DownloadPanel.Visibility = Visibility.Collapsed;
+        // Nothing is known about this machine's GPU until the backend reports, so the note
+        // stays down through the placeholder rather than flashing on when the frame lands.
+        GpuPayloadNote.Visibility = Visibility.Collapsed;
         SetupTroubleLink.Visibility = Visibility.Visible;
         // Unreachable today, since this only runs when there is no settings file and so
         // CompactMode is its default of false. Kept so the two places that raise this overlay
@@ -2011,7 +2062,35 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _setupTimeout = null;
     }
 
-    private void OnModelRequired(string? computeDevice, IReadOnlyList<ModelOption> options)
+    /// <summary>
+    /// Show or hide the note about the GPU libraries riding along with the model download.
+    ///
+    /// Only on a PC with a usable NVIDIA card that has not got them yet. A machine with an
+    /// AMD or Intel GPU never sees it, because it will never fetch them.
+    ///
+    /// The size comes from the backend rather than being written into the string, so it
+    /// cannot drift away from what is actually published, and is rounded down to the nearest
+    /// 50 MB. Rounding rather than quoting 477 keeps it readable as the approximation it is;
+    /// a precise figure invites someone to check it against their network meter, which will
+    /// disagree anyway once protocol overhead and a resumed transfer are counted.
+    /// </summary>
+    private void UpdateGpuPayloadNote()
+    {
+        if (GpuPayloadNote is null) return;
+        if (!_gpuPayloadNeeded || _gpuPayloadMb <= 0)
+        {
+            GpuPayloadNote.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var rounded = Math.Max(50, _gpuPayloadMb / 50 * 50);
+        GpuPayloadNote.Text =
+            $"This PC has an NVIDIA graphics card. Sunno will also download about {rounded} MB " +
+            "of GPU support libraries so captions keep up with the conversation.";
+        GpuPayloadNote.Visibility = Visibility.Visible;
+    }
+
+    private void OnModelRequired(string? computeDevice, IReadOnlyList<ModelOption> options,
+                                 GpuPayloadInfo gpu)
     {
         // A real prompt from here on, so the provisional dismissal must not fire behind it,
         // and its backstop has nothing left to guard.
@@ -2025,9 +2104,14 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // naming the part of the PC that does the work does not help anyone choose.
         if (!string.IsNullOrEmpty(computeDevice)) _computeDevice = computeDevice;
 
+        _gpuPayloadNeeded = gpu.Needed;
+        _gpuPayloadMb = gpu.ApproxMb;
+        UpdateGpuPayloadNote();
+
         var choices = options
             .Select(o => new ModelChoice(o.Id, o.Name, o.Detail, o.ApproxMb, o.Available,
-                                         o.LagMs, o.Responsive, o.AutoSelect))
+                                         o.LagMs, o.Responsive, o.AutoSelect, o.UsesGpu,
+                                         gpu.Needed ? gpu.ApproxMb : 0))
             .ToList();
 
         BuildModelGroups(choices);
@@ -2162,10 +2246,17 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         DownloadButton.IsEnabled = false;
         ModelList.IsEnabled = false;
         DownloadPanel.Visibility = Visibility.Visible;
+        // The note has done its job. From here the libraries are simply part of the download,
+        // and leaving the explanation on screen next to a running bar would keep raising a
+        // question there is nothing to do about.
+        GpuPayloadNote.Visibility = Visibility.Collapsed;
         DownloadBar.IsIndeterminate = true;
-        DownloadText.Text = choice.Available
+        DownloadText.Text = choice.TotalMb == 0
             ? "Preparing…"
-            : $"Starting download of {choice.SizeLabel}…";
+            // The total the user is committing to, libraries included. Quoting the model size
+            // alone would show "3.0 GB" for a transfer that is really 3.5 GB, and the bar
+            // underneath would then disagree with the sentence above it.
+            : $"Starting download of {(choice.TotalMb >= 1024 ? $"{choice.TotalMb / 1024.0:0.0} GB" : $"{choice.TotalMb} MB")}…";
 
         // Remember the choice now, so a restart mid-download resumes with the same model
         // rather than asking again.

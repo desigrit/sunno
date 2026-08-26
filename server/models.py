@@ -310,6 +310,11 @@ def catalog_with_status(device: str | None = None) -> list[dict]:
     passed --model, and both launchers always do, so a guard living only there guards a path
     the product never takes. Sending the flag with the catalogue puts the rule next to the
     data it constrains, where the screen that preselects can honour it.
+
+    ``uses_gpu`` says whether an entry runs on the CUDA engine at all. The streaming models
+    are pinned to CPU providers, so choosing one never triggers a 455 MB download. It is
+    derived from is_stream_model rather than from an id prefix, because nothing else in the
+    codebase treats "stream-" as meaningful and a second, parallel rule would drift.
     """
     from . import hardware
 
@@ -324,6 +329,7 @@ def catalog_with_status(device: str | None = None) -> list[dict]:
             lag_text=hardware.describe_lag(lag_ms),
             responsive=lag_ms <= hardware.RESPONSIVE_LAG_MS,
             auto_select=auto_selectable(entry["id"]),
+            uses_gpu=not is_stream_model(entry["id"]),
         ))
     return entries
 

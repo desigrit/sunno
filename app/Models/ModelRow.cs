@@ -38,6 +38,15 @@ public sealed class ModelRow : INotifyPropertyChanged
     /// <summary>Whether that delay is short enough to follow live conversation.</summary>
     public bool Responsive { get; set; } = true;
 
+    /// <summary>
+    /// Whether this model runs on the CUDA engine at all.
+    ///
+    /// False for the streaming recognisers, which pin themselves to CPU providers. Choosing
+    /// one of those must never pull down the GPU libraries, however capable the graphics
+    /// card is.
+    /// </summary>
+    public bool UsesGpu { get; set; } = true;
+
     private string LagPrefix => LagMs <= 0
         ? string.Empty
         : LagMs < 1000 ? $"(~{LagMs / 1000.0:0.0}s delay) " : $"(~{LagMs / 1000.0:0}s delay) ";

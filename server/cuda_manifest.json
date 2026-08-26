@@ -1,0 +1,35 @@
+{
+  "release_tag": "cuda-12.9.2",
+  "cublas_version": "12.9.2.10",
+  "nvrtc_version": "12.9.86",
+  "files": [
+    {
+      "path": "cublas/bin/cublas64_12.dll",
+      "size": 102518272,
+      "sha256": "52ce5ba0ec5327d39be6021f0f9362d2ed4d64d7206f9b5afc06398d827b8e82",
+      "xz_size": 60693836,
+      "xz_sha256": "1b33aae99dc728d87a069e1f89605ab7bc8244b7c14e1a676863d738ad6dc494"
+    },
+    {
+      "path": "cublas/bin/cublasLt64_12.dll",
+      "size": 668673536,
+      "sha256": "71705a7cf0923f4ab034d0d2620bbfc989ff669ac3d79f868b7a7c597ca559c5",
+      "xz_size": 388646280,
+      "xz_sha256": "853564ced899c25a99b62f89843bd5d98fefb588a281d4bd0cd3d5cd57d88c6b"
+    },
+    {
+      "path": "cuda_nvrtc/bin/nvrtc-builtins64_129.dll",
+      "size": 7217664,
+      "sha256": "c405226b0b394ed8bdc593bb1419b94a989f93248ed2873e8f2e0e27c1688ca1",
+      "xz_size": 318908,
+      "xz_sha256": "16700b54a2739ed015f827bf760c68943fb59179c1495b43f412ad37ed796674"
+    },
+    {
+      "path": "cuda_nvrtc/bin/nvrtc64_120_0.dll",
+      "size": 89832960,
+      "sha256": "0cc63349fedffeec1660b30955e8028b6e4e4c26cf1e41c56dc4569fd5eca82c",
+      "xz_size": 27055836,
+      "xz_sha256": "0a375c7e501d2efe954c1066e692842b6746650de3436b557bb2dfc48d4d7618"
+    }
+  ]
+}

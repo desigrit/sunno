@@ -56,14 +56,24 @@ readable. It is written to disk only for pinned speakers, as described above.
 
 **Almost nothing, and never your audio or your captions.**
 
-There is exactly one network operation in the entire app: downloading the speech recognition
-model the first time you use it, or when you choose a different one. That download comes from
-Hugging Face, a public model host. It transfers model files to you. It does not send them
-anything about you beyond what any file download requires, and it is the only time Sunno uses
-the internet.
+Sunno needs the internet during setup, and then never again. Two things get downloaded, both
+of them files coming to you:
 
-Once the model is on your computer, you can disconnect from the internet permanently and Sunno
-will work exactly as before.
+- **The speech recognition model**, the first time you use it or when you choose a different
+  one. This comes from Hugging Face, a public model host.
+- **The GPU support libraries**, but only if your PC has an NVIDIA graphics card that Sunno
+  can use. These are NVIDIA's own CUDA runtime files, published unmodified from the official
+  NVIDIA packages, and Sunno downloads them from its own releases page on GitHub. They are
+  about 450 MB. They used to be included in the installer, which made it 828 MB larger for
+  everybody, including the majority of PCs that can never use them.
+
+Neither host is sent anything about you beyond what any file download requires. There is no
+other network operation anywhere in the app.
+
+Once those files are on your computer, you can disconnect from the internet permanently and
+Sunno will work exactly as before. If you never connect at all, Sunno still captions using
+whatever model is on the machine; on a PC with an NVIDIA card it simply uses the processor
+instead of the graphics card, which is slower but works.
 
 There is no account, no sign-in, no analytics, no telemetry, no crash reporting service, no
 advertising, and no server operated by us. There is nowhere for your conversations to go, because
@@ -84,6 +94,8 @@ In `%LOCALAPPDATA%\Sunno`:
 | `backend.log.1` | The previous diagnostic log, kept when the current one is rotated |
 | `startup-trace.log` | A few lines recording how far startup got, for diagnosing launch failures |
 | `startup-error.log` | Error text from the app itself, written only when something goes wrong |
+| `stream-models\` | The streaming recognisers, if you chose one. Downloaded model files |
+| `cuda\` | The NVIDIA GPU support libraries, if your PC has a card that can use them. About 828 MB once unpacked |
 
 **On the input device in `settings.json`.** Sunno records the *name* of the microphone you chose,
 not only its position in the list, because Windows renumbers audio devices whenever the set of
