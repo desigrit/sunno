@@ -151,6 +151,7 @@ later move to a handheld screen while this PC keeps doing the work.
 | `app/` | WinUI 3 desktop app |
 | `ui/` | Browser client, for the phone or handheld route |
 | `packaging/` | Icon generation, CUDA trimming, MSIX build |
+| `docs/CONTEXT.md` | Project context and accumulated learnings, for picking this up cold |
 | `docs/ENGINEERING.md` | Why each decision was made, with the measurements behind it |
 
 ## Licence
