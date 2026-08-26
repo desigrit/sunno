@@ -90,8 +90,7 @@ but lags further behind, or pick one of the streaming models built for exactly t
 The app measures your machine and tells you what to expect before you commit to a download.
 
 **Looking for Sunno on a Mac?** It is a separate app, in
-[desigrit/sunno-macos](https://github.com/desigrit/sunno-macos), with its own download. Same
-promises, same shape, a different machine underneath.
+[desigrit/sunno-macos](https://github.com/desigrit/sunno-macos), with its own download.
 
 ## Building
 
