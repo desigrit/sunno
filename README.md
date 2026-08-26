@@ -89,6 +89,10 @@ processor with a Whisper model, which works
 but lags further behind, or pick one of the streaming models built for exactly that case.
 The app measures your machine and tells you what to expect before you commit to a download.
 
+**Looking for Sunno on a Mac?** It is a separate app, in
+[desigrit/sunno-macos](https://github.com/desigrit/sunno-macos), with its own download. Same
+promises, same shape, a different machine underneath.
+
 ## Building
 
 Requires .NET 8, the Windows App SDK, and Python 3.12 from python.org. Not the Microsoft Store
