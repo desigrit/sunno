@@ -130,14 +130,28 @@ public sealed class ModelRow : INotifyPropertyChanged
     public Visibility InUseVisibility => _inUse ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>e.g. "1.5 GB" — shown on the right only when a download is needed.</summary>
-    public string SizeLabel => FormatSize(ApproxMb);
+    public string SizeLabel => FormatSize(TotalMb > 0 ? TotalMb : ApproxMb);
+
+    /// <summary>
+    /// Megabytes choosing this row would actually transfer, GPU libraries included.
+    ///
+    /// A row whose model is already on disk can still pull 455 MB of CUDA libraries, and
+    /// before this it showed nothing at all on the right and then started that transfer. The
+    /// setup screen already had this fixed in ModelChoice; the switcher had the trigger
+    /// wired without the disclosure, which is the worse half to get wrong: it is the surface
+    /// someone reaches on a metered connection to make things smaller.
+    /// </summary>
+    public int TotalMb => (Available ? 0 : ApproxMb) + (UsesGpu ? GpuPayloadMb : 0);
+
+    /// <summary>Megabytes of GPU libraries still to fetch, or 0 when there is nothing to.</summary>
+    public int GpuPayloadMb { get; set; }
 
     public Visibility BusyVisibility => _isBusy ? Visibility.Visible : Visibility.Collapsed;
     public Visibility SecondaryVisibility => _isBusy ? Visibility.Collapsed : Visibility.Visible;
 
-    /// <summary>Size and download glyph: only when it isn't here and isn't already coming.</summary>
+    /// <summary>Size and download glyph: only when something would actually transfer.</summary>
     public Visibility DownloadHintVisibility =>
-        !_available && !_isBusy ? Visibility.Visible : Visibility.Collapsed;
+        TotalMb > 0 && !_isBusy ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>A model mid-download can't be chosen again without confusing the backend.</summary>
     public bool IsEnabled => !_isBusy;
@@ -154,7 +168,12 @@ public sealed class ModelRow : INotifyPropertyChanged
                 if (!Responsive)
                     text += ", which is too slow to follow a live conversation";
             }
-            return _available ? text : $"{text}\n{SizeLabel} download";
+            if (TotalMb <= 0) return text;
+            // Named separately when the model is already here, so the number is not mistaken
+            // for the model's own size.
+            return _available
+                ? $"{text}\n{SizeLabel} download of GPU support libraries"
+                : $"{text}\n{SizeLabel} download";
         }
     }
 

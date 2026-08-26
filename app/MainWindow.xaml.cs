@@ -1541,6 +1541,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                     LagMs = o.LagMs,
                     Responsive = o.Responsive,
                     UsesGpu = o.UsesGpu,
+                    GpuPayloadMb = gpu.Needed && o.UsesGpu ? gpu.ApproxMb : 0,
                     IsSelected = o.Id == current,
                     InUse = o.Id == current,
                 };

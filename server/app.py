@@ -563,6 +563,40 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
 
         if model_catalog.is_available(settings.model_size).available:
             model_ready.set()
+            # The model is on disk, so nothing above will ever ask the user to choose, which
+            # means ensure_model never runs and the CUDA libraries would never be fetched.
+            # That is the state every existing GPU user lands in after updating to the build
+            # that stopped shipping them: cached model, vanished payload, and a permanent
+            # drop from 455 ms to about 4.1 s on large-v3 — which this app's own `responsive`
+            # threshold classifies as too slow to follow a conversation. Not a first-launch
+            # blip; without this it never repairs itself.
+            #
+            # Repaired in the background, on purpose. Blocking here would hold captions
+            # hostage to a 455 MB transfer on a machine that was captioning fine a minute
+            # ago, and for a deaf user no captions is worse than slow ones. So the engine
+            # starts on the processor immediately and the libraries land behind it.
+            #
+            # Silent, as the product intends: no prompt, no progress, nothing to dismiss.
+            # It applies at the next launch, because the engine is already built against the
+            # device resolved above and swapping it mid-conversation is a worse failure than
+            # waiting for a restart.
+            if payload_needed_for(settings.model_size):
+                async def repair_payload() -> None:
+                    from . import cuda_download
+
+                    try:
+                        print("GPU libraries are missing; fetching them in the background. "
+                              "Captions run on the processor until the next restart.",
+                              flush=True)
+                        await asyncio.to_thread(cuda_download.download_payload, None)
+                        print("GPU libraries installed; they take effect next launch.",
+                              flush=True)
+                    except Exception as exc:
+                        # Never fatal, never surfaced. Captions are already running.
+                        print(f"[error] background GPU library fetch failed: {exc}",
+                              flush=True)
+
+                asyncio.create_task(repair_payload())
         else:
             catalog = await asyncio.to_thread(
                 model_catalog.catalog_with_status, catalog_device()

@@ -250,14 +250,30 @@ check("readme no longer claims one step only",
 
 # Every doc that describes the network behaviour, not just the two obvious ones. docs/
 # CONTEXT.md was merged while this change was in flight, carrying the same claim, and no
-# guard existed to catch it. Scanning the whole tree means the next such file is caught on
-# the day it lands rather than after it has been quoted back to a user.
-for doc in sorted(REPO.glob("*.md")) + sorted((REPO / "docs").glob("*.md")):
-    text = doc.read_text(encoding="utf-8")
-    check(f"{doc.name} does not claim a single network operation",
-          "exactly one network operation" not in text
-          and "only network operation" not in text,
-          "the app now downloads the model and, on NVIDIA hardware, the CUDA libraries")
+# guard existed to catch it.
+#
+# Patterns, not two frozen strings. An earlier version of this check tested for the exact
+# CONTEXT.md wording, which meant it would not have caught README.md's own "the only time
+# Sunno touches the network is..." — the very sentence this change had to rewrite. rglob so
+# a doc added in a subdirectory is covered on the day it lands.
+import re  # noqa: E402
+
+_SINGLE_NETWORK = [
+    r"exactly one network",
+    r"only network operation",
+    r"only time .{0,40}(touches the network|uses the internet)",
+    r"one step only",
+    r"single network operation",
+]
+for doc in sorted(REPO.rglob("*.md")):
+    if any(part in {".git", "node_modules", "staging"} for part in doc.parts):
+        continue
+    text = doc.read_text(encoding="utf-8", errors="ignore")
+    hit = next((p for p in _SINGLE_NETWORK if re.search(p, text, re.IGNORECASE)), None)
+    check(f"{doc.relative_to(REPO).as_posix()} does not claim a single network operation",
+          hit is None,
+          f"matched /{hit}/ - the app now downloads the model and, on NVIDIA hardware, "
+          "the CUDA libraries")
 check("privacy names the second download",
       "GPU support libraries" in privacy and "NVIDIA" in privacy)
 check("privacy still promises nothing is uploaded",
@@ -305,6 +321,23 @@ check("the device is re-resolved after the download",
       "GPU libraries are now installed" in app_py)
 check("the re-resolve only ever upgrades",
       'if settings.device != "cuda":' in app_py)
+# The state the whole install base lands in after this update: model already cached, so the
+# picker never appears and ensure_model never runs. Without a repair here the machine sits on
+# the processor permanently, not just for one launch.
+check("a cached model still repairs the payload",
+      "repair_payload" in app_py and "payload_needed_for(settings.model_size)" in app_py,
+      "an existing GPU user would otherwise never get the libraries back")
+check("the repair does not block captions",
+      "asyncio.create_task(repair_payload())" in app_py,
+      "holding captions for a 455 MB transfer is worse than running slow")
+
+# The switcher must disclose what it is about to transfer, the same way the setup screen does.
+row_cs = (REPO / "app" / "Models" / "ModelRow.cs").read_text(encoding="utf-8")
+check("the switcher row knows the payload size", "GpuPayloadMb" in row_cs)
+check("the switcher size includes the payload", "public int TotalMb" in row_cs)
+check("the switcher shows a size whenever bytes will move",
+      "TotalMb > 0 && !_isBusy" in row_cs,
+      "an already-downloaded row showed nothing and then transferred 455 MB")
 
 
 # ---------------------------------------------------------------- download
