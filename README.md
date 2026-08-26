@@ -70,7 +70,7 @@ saved locally.
 
 ## Install
 
-**From the Microsoft Store:** coming soon.
+**From the Microsoft Store:** [apps.microsoft.com/detail/9msv0v6jv8hk](https://apps.microsoft.com/detail/9msv0v6jv8hk)
 
 **From source:** see [Building](#building) below.
 
