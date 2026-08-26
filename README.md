@@ -70,9 +70,11 @@ saved locally.
 
 ## Install
 
+**Option A:**
+
 <a href="https://get.microsoft.com/installer/download/9msv0v6jv8hk?referrer=appbadge&amp;cid=sunno-github"><picture><source media="(prefers-color-scheme: dark)" srcset="https://get.microsoft.com/images/en-us%20light.svg"><img alt="Get Sunno from the Microsoft Store" src="https://get.microsoft.com/images/en-us%20dark.svg" width="200"></picture></a>
 
-**From source:** see [Building](#building) below.
+**Option B: From source** - see [Building](#building) below.
 
 On first run Sunno downloads a speech model. Whisper large-v3 is roughly 3 GB; the streaming
 models are under 70 MB. Either way it needs an internet connection for that one step only.
