@@ -31,7 +31,23 @@ the table at dinner, beside you in a meeting, or pass a small mic to whoever is 
   out of your speakers.
 - **Handles accented speech well.** This was the whole reason for choosing Whisper large-v3 over
   faster alternatives. See [the engineering notes](docs/ENGINEERING.md#why-these-choices).
+- **Shrinks to a strip** when you only want the words, and stays on top of whatever you are
+  reading.
+- **Runs without a graphics card.** Alongside the Whisper models there are two streaming ones,
+  Zipformer and Kroko, built for machines with no GPU. Both are under 70 MB and stay about a
+  tenth of a second behind.
 - Adjustable text size, always on top, and you can select and copy any part of the transcript.
+
+<table>
+<tr>
+<td width="50%"><img alt="Sunno in compact mode, a small strip showing only the captions" src="docs/screenshot-compact.png"></td>
+<td width="50%"><img alt="The speech model picker, listing seven models with their download size and expected delay" src="docs/screenshot-models.png"></td>
+</tr>
+<tr>
+<td>Compact mode, for when you want the words and nothing else.</td>
+<td>Pick a model. Each one shows its size and how far behind it will run on your PC.</td>
+</tr>
+</table>
 
 ## It runs on your PC. All of it.
 
@@ -58,9 +74,11 @@ saved locally.
 
 **From source:** see [Building](#building) below.
 
-On first run Sunno downloads its speech model, roughly 3 GB, and needs an internet connection for
-that one step only. It runs on any modern PC: with an NVIDIA GPU captions appear almost
-immediately, and without one it uses your processor instead, which works but lags further behind.
+On first run Sunno downloads a speech model. Whisper large-v3 is roughly 3 GB; the streaming
+models are under 70 MB. Either way it needs an internet connection for that one step only.
+It runs on any modern PC: with an NVIDIA GPU captions appear almost
+immediately, and without one you can either use your processor with a Whisper model, which works
+but lags further behind, or pick one of the streaming models built for exactly that case.
 The app measures your machine and tells you what to expect before you commit to a download.
 
 ## Building
