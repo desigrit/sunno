@@ -61,9 +61,11 @@ uploaded.
 
 These are non-negotiable. Each has already cost something to keep.
 
-**Fully offline after the model download.** There is exactly one network operation in the
-entire application: fetching the model on first run. Turn off the Wi-Fi afterwards and it
-works identically. No account, no telemetry, no crash reporting service.
+**Fully offline after setup.** Two network operations exist in the entire application, both
+of them downloads and both confined to setup: fetching the speech model, and on a PC with a
+usable NVIDIA card fetching the CUDA runtime libraries that card needs. Turn off the Wi-Fi
+afterwards and it works identically. A machine that is never online still captions, on the
+processor. No account, no telemetry, no crash reporting service.
 
 **No transcript text on disk, ever.** This was not free. `backend.log` originally recorded
 every finalised caption, and on the development machine it accumulated 316 lines of real
@@ -204,7 +206,7 @@ back to CPU entirely and produce identical transcripts 4 to 11 percent slower.
 | Prefix churn, Kroko | 44 in the same 251 | same |
 | Gain drift within one utterance | one loud word moved already-decoded samples by 67% | `asr_stream.py` docstring |
 | soxr HQ against QQ resampling 44.1 to 16 kHz | 81.4 dB against 73.9 dB | `loopback.py` |
-| CUDA payload trimmed | 828 MB shipped of 1,984 MB installed | PE import table analysis |
+| CUDA payload unbundled | 828 MB, 61% of the payload, now downloaded on demand | `server/cuda_download.py` |
 | scipy removed | 128 MB of payload for one biquad | `preprocess.py` |
 
 ### Numbers that were retracted

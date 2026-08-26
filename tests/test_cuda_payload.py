@@ -247,6 +247,17 @@ check("privacy no longer claims a single network operation",
       "exactly one network operation" not in privacy)
 check("readme no longer claims one step only",
       "that one step only" not in readme)
+
+# Every doc that describes the network behaviour, not just the two obvious ones. docs/
+# CONTEXT.md was merged while this change was in flight, carrying the same claim, and no
+# guard existed to catch it. Scanning the whole tree means the next such file is caught on
+# the day it lands rather than after it has been quoted back to a user.
+for doc in sorted(REPO.glob("*.md")) + sorted((REPO / "docs").glob("*.md")):
+    text = doc.read_text(encoding="utf-8")
+    check(f"{doc.name} does not claim a single network operation",
+          "exactly one network operation" not in text
+          and "only network operation" not in text,
+          "the app now downloads the model and, on NVIDIA hardware, the CUDA libraries")
 check("privacy names the second download",
       "GPU support libraries" in privacy and "NVIDIA" in privacy)
 check("privacy still promises nothing is uploaded",
