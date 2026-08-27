@@ -1,5 +1,10 @@
 faster-whisper
-sounddevice
+# Pinned. server/native.py works around how this version resolves its bundled PortAudio DLL
+# (sounddevice.py lines 77-85, which read platform.machine() and therefore pick an ARM64
+# binary inside an emulated x64 process). tests/test_arm_emulation.py asserts the actual
+# resolved path, so an upgrade that moves that logic fails loudly here rather than silently
+# on a Snapdragon.
+sounddevice==0.5.5
 soxr
 numpy
 

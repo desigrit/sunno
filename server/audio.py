@@ -10,9 +10,15 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 import numpy as np
-import sounddevice as sd
 
 from .config import FRAME_SAMPLES, SAMPLE_RATE
+from .native import import_sounddevice
+
+# Not a bare ``import sounddevice``. On Windows-on-ARM that resolves an ARM64 PortAudio
+# this x64 process cannot load, and the OSError kills the backend at import time before
+# anything can report why. server/native.py explains why platform.machine() is the wrong
+# question and what is asked instead.
+sd = import_sounddevice()
 
 
 # The one host API whose device list tracks whether the hardware is actually there.

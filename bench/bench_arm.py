@@ -42,6 +42,7 @@ import argparse
 import json
 import platform
 import sys
+import sysconfig
 import time
 import wave
 from pathlib import Path
@@ -62,22 +63,8 @@ _MACHINE_NAMES: dict[int, str] = {
 }
 
 
-def machines() -> tuple[str, str]:
-    """(process machine, native machine) as Windows reports them.
-
-    Duplicated from server/hardware.py on purpose. This file has to run on a machine with no
-    checkout - downloading one script is a much smaller ask than cloning a repo with a 3 GB
-    model history - and the check it performs is the one that decides whether the numbers below
-    mean anything at all. A copy that always runs beats an import that sometimes does.
-
-    Deliberately not platform.machine(): that resolves through PROCESSOR_ARCHITECTURE and
-    PROCESSOR_ARCHITEW6432, both process-relative, so an emulated x64 Python on a Snapdragon
-    reports "AMD64" and the whole run silently measures the wrong thing.
-
-    IsWow64Process2 answers both halves, and the pair carries the meaning: pProcessMachine is
-    IMAGE_FILE_MACHINE_UNKNOWN when the process is not emulated, so native alone cannot tell a
-    native ARM64 Python from an x64 one running under Prism.
-    """
+def wow64_machines() -> tuple[str, str]:
+    """(process, native) from IsWow64Process2. DIAGNOSTIC ONLY - see :func:`machines`."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -104,6 +91,51 @@ def machines() -> tuple[str, str]:
         return _MACHINE_NAMES.get(process.value, f"0x{process.value:04x}"), native_name
     except Exception:
         return "unknown", "unknown"
+
+
+_CANONICAL = {
+    "AMD64": "x64",
+    "X86_64": "x64",
+    "X64": "x64",
+    "ARM64": "ARM64",
+    "AARCH64": "ARM64",
+    "ARM": "ARM32",
+    "ARM32": "ARM32",
+    "X86": "x86",
+    "I386": "x86",
+    "I686": "x86",
+}
+
+_TAG_TO_MACHINE = {"win-amd64": "AMD64", "win-arm64": "ARM64", "win32": "x86"}
+
+
+def machines() -> tuple[str, str]:
+    """(process machine, native machine).
+
+    Duplicated from server/hardware.py on purpose. This file has to run on a machine with no
+    checkout - downloading one script is a much smaller ask than cloning a repo with a 3 GB
+    model history - and the check it performs is the one that decides whether the numbers below
+    mean anything at all. A copy that always runs beats an import that sometimes does.
+
+    The process half comes from ``sysconfig.get_platform()``, fixed when CPython was compiled
+    and therefore immune to emulation; the native half from ``platform.machine()``, which on
+    Windows answers from WMI's processor architecture and so describes the host CPU.
+
+    Deliberately NOT IsWow64Process2, which this function used until the ARM64 startup crash of
+    1.0.77 forced the question. Its pProcessMachine is documented as IMAGE_FILE_MACHINE_UNKNOWN
+    for a process that "is not a WOW64 process", and reports disagree over what an emulated x64
+    process on ARM64 returns. If it answers UNKNOWN there, the old code returned (native, native),
+    read as not-emulated, and this script would have published emulated-x64 timings labelled
+    ARM64 - the precise outcome its own refusal-to-run guard exists to prevent. It is still
+    recorded in the JSON through :func:`wow64_machines`, but it no longer decides anything.
+    """
+    tag = sysconfig.get_platform()
+    process = _TAG_TO_MACHINE.get(tag, "AMD64")
+    native = platform.machine()
+    return (
+        _CANONICAL.get(process.strip().upper(), process),
+        _CANONICAL.get(native.strip().upper(), native),
+    )
 
 
 # Ordered fastest-first, because on a slow machine the later entries may not be worth waiting
@@ -208,9 +240,19 @@ def describe_machine() -> dict:
         "processor": platform.processor(),
         "process_machine": process,
         "native_machine": native,
+        # Recorded so a run from real ARM64 hardware finally settles what this API returns
+        # there. It decides nothing - see machines().
+        "wow64_probe": list(wow64_machines()),
+        "platform_tag": sysconfig.get_platform(),
         # An unreadable answer degrades to "not emulated" rather than putting a slowness
-        # warning on a machine nothing is known about.
-        "emulated": process != native and "unknown" not in (process, native),
+        # warning on a machine nothing is known about. The empty string counts as
+        # unreadable: platform.machine() returns "" when the WMI query raises and neither
+        # PROCESSOR_* variable is set, and treating that as emulation would make this
+        # script refuse to run on exactly the failure path the guard exists for.
+        "emulated": bool(process)
+        and bool(native)
+        and process != native
+        and "unknown" not in (process, native),
     }
 
 

@@ -12,8 +12,36 @@ import threading
 import time
 from pathlib import Path
 
-from . import cuda_setup  # noqa: F401  (must precede ctranslate2 import)
-from .audio import MicrophoneOpenError, MicrophoneStream, WavFileStream, print_input_devices
+# These are where a broken native dependency shows up, and until 1.0.80 the failure took
+# the diagnosis down with it: the traceback named the first failing library and said
+# nothing about the ones behind it, on a machine the developer does not own. Reporting
+# here and re-raising turns one crash report into the whole picture. A healthy start never
+# enters the handler, so this costs nothing.
+try:
+    from . import cuda_setup  # noqa: F401  (must precede ctranslate2 import)
+    from .audio import (
+        MicrophoneOpenError,
+        MicrophoneStream,
+        WavFileStream,
+        print_input_devices,
+    )
+except Exception:
+    # The traceback is captured and printed by the reporter rather than left to a bare
+    # re-raise: the frontend keeps only the last three diagnostic lines, so anything
+    # printed after the summary would push the summary out of the one window that reaches
+    # the user. SystemExit(1) then ends the process exactly as the propagating exception
+    # would have, without the interpreter printing the traceback a second time.
+    import traceback as _traceback
+
+    _detail = _traceback.format_exc()
+    try:
+        from .native import print_startup_failure
+
+        print_startup_failure(_detail)
+    except Exception:
+        print(_detail, flush=True)  # diagnostics must never replace the real traceback
+    raise SystemExit(1)
+
 from .config import Settings
 from .paths import bundled_model, data_dir, speaker_profiles_path, ui_dir
 from .pipeline import CaptionPipeline, SessionController
@@ -519,6 +547,18 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     # If it does not load, engine_importable() reports the real failure with the same machine name.
     if _hw.is_emulated():
         print("  Note:      x64 engine running under ARM64 emulation; expect it to be slow")
+        # IsWow64Process2's process half is contested on ARM64 and no longer carries control
+        # flow (see hardware.py). Printing it here is how the first real Snapdragon launch
+        # settles what it actually returns, without anyone having to run a separate tool.
+        print(f"  Arch:      process {_hw.process_machine()} on host {_hw.native_machine()}"
+              f"; wow64 probe {_hw.wow64_machines()}")
+        # Only the cheap set, and only here: these four are imported on any real launch
+        # anyway, so probing them costs ~20 ms, and this is the one platform where knowing
+        # which of them loaded is worth printing unprompted.
+        from .native import format_report, probe
+
+        for _line in format_report(probe(include_heavy=False)):
+            print(_line)
 
     model_ready = asyncio.Event()
     chosen_model = settings.model_size

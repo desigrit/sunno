@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import functools
 import os
+import platform
 
 # Measured on a Quadro RTX 8000 (float16) and an i9-14900K (int8), faster-whisper 1.x,
 # greedy decode, best of three, utterances of 2/4/8 s averaged. Rerun bench/bench_latency.py
@@ -155,18 +156,53 @@ _MACHINE_NAMES: dict[int, str] = {
     0xAA64: "ARM64",
 }
 
+# platform.machine() and sysconfig's platform tag each have their own spelling for the same
+# architectures. Both are mapped through this one table before they are ever compared.
+#
+# Getting this wrong is not cosmetic. An earlier draft normalised only the process side, so
+# "AMD64" was compared against "x64", every native x64 machine looked emulated, and the
+# result would have been a "expect it to be slow" warning shown to the entire x64 user base
+# plus bench/bench_arm.py refusing to run on the very machine that produced its x64
+# baseline. test_arm_emulation.py pins this.
+_CANONICAL = {
+    "AMD64": "x64",
+    "X86_64": "x64",
+    "X64": "x64",
+    "ARM64": "ARM64",
+    "AARCH64": "ARM64",
+    "ARM": "ARM32",
+    "ARM32": "ARM32",
+    "X86": "x86",
+    "I386": "x86",
+    "I686": "x86",
+}
+
+
+def _canonical(name: str) -> str:
+    """One spelling per architecture, so two sources can be compared at all."""
+    return _CANONICAL.get(name.strip().upper(), name)
+
 
 def _machines() -> tuple[str, str]:
-    """(process machine, native machine) as Windows reports them.
+    """(process machine, native machine) as IsWow64Process2 reports them.
 
-    Deliberately not ``platform.machine()``. That resolves through PROCESSOR_ARCHITECTURE and
-    PROCESSOR_ARCHITEW6432, both process-relative, so an x64 build running under emulation on
-    an ARM64 PC reports "AMD64" - precisely the blind spot this exists to close.
+    DIAGNOSTIC ONLY. Nothing may branch on this. See :func:`wow64_machines`.
 
-    IsWow64Process2 answers both halves at once, and the pair is what carries the meaning:
-    pProcessMachine is IMAGE_FILE_MACHINE_UNKNOWN when the process is *not* emulated, so
-    native alone cannot distinguish an emulated x64 build from a native ARM64 one. Both run on
-    an ARM64 machine; only one of them is slow.
+    An earlier version of this docstring claimed that ``platform.machine()`` is
+    process-relative and "reports AMD64" for an x64 build emulated on ARM64. That is false,
+    and the crash in 1.0.77 is the proof: sounddevice can only have computed
+    ``libportaudioarm64.dll`` if ``platform.machine()`` returned ARM64 on that Snapdragon.
+    CPython 3.12's ``_get_machine_win32()`` asks WMI for ``Win32_Processor.Architecture``
+    first - its comment reads "WOW64 processes mask the native architecture" - and falls
+    back to ``PROCESSOR_ARCHITEW6432 or PROCESSOR_ARCHITECTURE`` only when that raises.
+    All of those describe the host CPU, which is how :func:`native_machine` uses it.
+
+    IsWow64Process2 answers both halves at once, but its process half is contested:
+    Microsoft documents pProcessMachine as IMAGE_FILE_MACHINE_UNKNOWN when the process "is
+    not a WOW64 process", and first-hand reports disagree over what an emulated x64 process
+    on ARM64 actually returns. If it is UNKNOWN there, the branch below hands back
+    ``(native, native)`` and an emulated process is indistinguishable from a native ARM64
+    one. Until that is measured on real hardware this must not carry control flow.
     """
     try:
         import ctypes
@@ -200,14 +236,37 @@ def _machines() -> tuple[str, str]:
         return "unknown", "unknown"
 
 
+def wow64_machines() -> tuple[str, str]:
+    """The raw IsWow64Process2 pair, for diagnostics reports only.
+
+    Exposed so a bug report from a real ARM64 machine can settle what this API actually
+    returns there. Nothing may branch on it until that is known.
+    """
+    return _machines()
+
+
 def native_machine() -> str:
-    """The machine Windows is really running on, not the one this process is emulating."""
-    return _machines()[1]
+    """The machine Windows is really running on, not the one this process is emulating.
+
+    ``platform.machine()`` reports the host CPU: CPython asks WMI for the processor
+    architecture before consulting any process-relative environment variable, precisely
+    because "WOW64 processes mask the native architecture". Correct under emulation, and
+    correct on a machine that is not emulating anything.
+    """
+    return _canonical(platform.machine())
 
 
 def process_machine() -> str:
-    """The machine this process is built for."""
-    return _machines()[0]
+    """The machine this process is built for.
+
+    From ``sysconfig.get_platform()``, which is fixed when CPython is compiled and is the
+    same tag pip matched when choosing the wheels on disk. Emulation cannot move it, and it
+    describes the binaries actually present - the only architecture question the loaders
+    care about. See server/native.py.
+    """
+    from .native import process_machine_name
+
+    return _canonical(process_machine_name())
 
 
 def is_emulated() -> bool:
@@ -216,8 +275,18 @@ def is_emulated() -> bool:
     Compares the pair rather than testing for ARM64. A native ARM64 build also runs on a
     machine whose native architecture is ARM64, and reporting that as emulation would put a
     "this will be slow" notice on the one build that is not.
+
+    Both sides go through :func:`_canonical` first. Comparing ``platform.machine()``'s
+    "AMD64" against sysconfig's "x64" would call every native x64 machine emulated.
+
+    An empty or unrecognised answer is not emulation. ``platform.machine()`` returns ``""``
+    when the WMI query raises and neither PROCESSOR_* variable is set, and reporting that
+    as emulation would put the slowness notice back on ordinary machines through a
+    different door than the one round 2 closed.
     """
-    process, native = _machines()
+    process, native = process_machine(), native_machine()
+    if not process or not native:
+        return False
     if "unknown" in (process, native):
         return False
     return process != native
