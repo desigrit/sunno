@@ -352,11 +352,12 @@ class MicrophoneStream:
     def frames(self, should_continue: Callable[[], bool] | None = None) -> Iterator[np.ndarray]:
         resampler = None
         if self.capture_rate != SAMPLE_RATE:
-            import soxr
+            # soxr where it exists, FFmpeg's swresample where it does not. A native ARM64
+            # build has no soxr wheel, and without the fallback it could only caption from a
+            # microphone that already ran at 16 kHz. See server/resample.py.
+            from .resample import make_resampler
 
-            resampler = soxr.ResampleStream(
-                self.capture_rate, SAMPLE_RATE, 1, dtype="float32", quality="HQ"
-            )
+            resampler = make_resampler(self.capture_rate, SAMPLE_RATE)
 
         pending = np.zeros(0, dtype=np.float32)
         while True:

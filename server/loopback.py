@@ -22,7 +22,6 @@ import time
 from typing import Callable, Iterator
 
 import numpy as np
-import soxr
 
 from .config import FRAME_SAMPLES, SAMPLE_RATE
 
@@ -221,9 +220,13 @@ class LoopbackStream:
             # transcript happened to come out identical on the clip tested, but there was no
             # reason for system audio to be fed a worse signal than the microphone, and the
             # cost of the better filter is not measurable next to a Whisper decode.
-            resampler = soxr.ResampleStream(
-                self.capture_rate, SAMPLE_RATE, 1, dtype="float32", quality="HQ"
-            )
+            #
+            # Now routed through resample.make_resampler so the quality choice stays in one
+            # place and so a machine with no soxr wheel still gets a filter rather than an
+            # ImportError. swresample measures 81.2 dB on the same comparison.
+            from .resample import make_resampler
+
+            resampler = make_resampler(self.capture_rate, SAMPLE_RATE)
 
         while keep_going():
             try:
