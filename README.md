@@ -36,6 +36,10 @@ the table at dinner, beside you in a meeting, or pass a small mic to whoever is 
 - **Runs without a graphics card.** Alongside the Whisper models there are two streaming ones,
   Zipformer and Kroko, built for machines with no GPU. Both are under 70 MB and stay about a
   tenth of a second behind.
+- **Saves a conversation when you want one.** Press record and Sunno writes the audio and its
+  transcript to your PC when you stop, with speaker labels and timestamps. Nothing is recorded
+  unless you ask, the folder is not even created until the first save, and nothing is uploaded
+  either way. See [Recording](#recording).
 - Adjustable text size, always on top, and you can select and copy any part of the transcript.
 
 <table>
@@ -58,16 +62,42 @@ conversation at your dinner table, with your family in it, leaves your house. Pe
 thought about it will still feel it, and they are right to.
 
 Sunno does the recognition on your own machine. No account, no sign in, no telemetry, no server
-to send anything to. Turn off your Wi-Fi and it works exactly the same. The people around you are
-not being uploaded anywhere, and you can tell them so honestly.
+to send anything to. Once setup is done, turn off your Wi-Fi and it works exactly the same. The
+people around you are not being uploaded anywhere, and you can tell them so honestly.
 
 Sunno touches the network during setup and then never again. It downloads the speech model,
 and on a PC with an NVIDIA graphics card the CUDA libraries that card needs. After that,
 nothing.
 
-Full details in [PRIVACY.md](PRIVACY.md), including the one thing that does get written to disk:
-if you pin a speaker so Sunno recognises them next time, their name and voice fingerprint are
-saved locally.
+Two things get written to disk, and both are yours: a pinned speaker's name and voice
+fingerprint, so Sunno recognises them next time, and any recording you deliberately make. Full
+details in [PRIVACY.md](PRIVACY.md).
+
+## Recording
+
+Press the record button beside the compact-mode button. Sunno writes the audio and its
+transcript when you stop.
+
+```
+~/Sunno/Recordings/Recording/
+  audio.m4a         AAC, 16 kHz mono, about 23 MB an hour
+  transcript.json   speakers, timings, per word offsets
+  transcript.txt    plain text with speaker labels and timestamps
+```
+
+Change the folder in Settings. A few things worth knowing:
+
+- **Nothing is written until you press record.** The folder is not created until the first save,
+  so an install that never records leaves no trace.
+- **A recording ends when you stop it or close Sunno, and not before.** Pausing, swapping
+  microphone, changing speech model and a dropped USB cable are all gaps inside one recording
+  rather than the end of it.
+- **An interrupted recording is finished on the next launch** rather than lost. Audio is appended
+  as it arrives and each line is written as it is decoded, so a process that dies mid meeting
+  costs you the sentence being spoken and nothing more.
+- **The audio is the recogniser's own 16 kHz mono stream**, tapped before any conditioning. Right
+  for speech and not archival, but it does mean the audio and the transcript can never disagree,
+  because they are the same samples.
 
 ## Install
 

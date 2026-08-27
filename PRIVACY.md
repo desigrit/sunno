@@ -170,7 +170,7 @@ thing that makes a conversation persist, so it works on its own terms:
 
 - **Nothing is recorded until you press record.** The folder is not even created until the first
   recording is saved. An install that never records leaves nothing behind.
-- **Recordings go to `%USERPROFILE%\Sunno\Recordings`** — a per-user folder on your own machine.
+- **Recordings go to `%USERPROFILE%\Sunno\Recordings`**, a per-user folder on your own machine.
   You can change it in Settings. It is deliberately not `Documents`, because on a managed PC
   `Documents` is often redirected into OneDrive, and a recording of a meeting would then sync to
   a company's cloud without anyone choosing that.
