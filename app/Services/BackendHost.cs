@@ -119,7 +119,7 @@ public sealed class BackendHost : IDisposable
 
     public string Start(string? device = null, string model = "large-v3", string? vocabulary = null,
                         bool startStopped = false, int? loopbackDevice = null,
-                        string? computeDevice = null)
+                        string? computeDevice = null, string? recordingsPath = null)
     {
         if (IsRunning) return "already running";
 
@@ -160,6 +160,14 @@ public sealed class BackendHost : IDisposable
 
         var args = new List<string> { "-m", "server.app", "--model", model };
         if (!string.IsNullOrWhiteSpace(device)) { args.Add("--device"); args.Add(device); }
+        // Only so the backend can finish a recording the last run was killed during. Every
+        // recording that starts normally carries its own destination on the command that
+        // starts it, so this does not decide where anything is written.
+        if (!string.IsNullOrWhiteSpace(recordingsPath))
+        {
+            args.Add("--recordings-path");
+            args.Add(recordingsPath);
+        }
         if (!string.IsNullOrWhiteSpace(vocabulary)) { args.Add("--vocabulary"); args.Add(vocabulary); }
         // Capturing an output endpoint rather than a microphone, so calls and video get
         // captioned. Mutually exclusive with --device on the backend side.
@@ -258,7 +266,7 @@ public sealed class BackendHost : IDisposable
     /// </summary>
     public string Restart(string? device, string model, string? vocabulary,
                           bool startStopped = false, int? loopbackDevice = null,
-                          string? computeDevice = null)
+                          string? computeDevice = null, string? recordingsPath = null)
     {
         _stopping = true;
         try
@@ -282,7 +290,8 @@ public sealed class BackendHost : IDisposable
         {
             _stopping = false;
         }
-        return Start(device, model, vocabulary, startStopped, loopbackDevice, computeDevice);
+        return Start(device, model, vocabulary, startStopped, loopbackDevice, computeDevice,
+                     recordingsPath);
     }
 
     private void Record(string? line)

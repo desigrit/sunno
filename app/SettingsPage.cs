@@ -40,6 +40,7 @@ public sealed partial class MainWindow
 
         ClarityToggle.IsOn = _settings.ShowClarity;
         ForceCpuToggle.IsOn = _settings.ForceCpu;
+        RefreshRecordingsPath();
         AboutVersion.Text = $"Sunno {Diagnostics.AppVersion()}";
         NoSpeakersInSettings.Visibility = Speakers.Count == 0
             ? Visibility.Visible
@@ -294,7 +295,8 @@ public sealed partial class MainWindow
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex,
-            computeDevice: _settings.ForceCpu ? "cpu" : "auto");
+            computeDevice: _settings.ForceCpu ? "cpu" : "auto",
+            recordingsPath: _settings.RecordingsPath);
 
         if (!string.IsNullOrEmpty(error))
         {

@@ -29,6 +29,17 @@ public sealed record ModelOption(
 /// </summary>
 public sealed record GpuPayloadInfo(bool Needed, int ApproxMb);
 
+/// <summary>
+/// What the backend is doing with a recording.
+/// </summary>
+/// <param name="State">idle, recording, saving, saved or failed.</param>
+/// <param name="ElapsedSeconds">Length of audio written so far, not wall-clock time since
+/// the button was pressed. Those differ whenever capture stops and starts inside one
+/// recording, and the audio length is what matches the file that comes out.</param>
+public sealed record RecordingState(string State, double ElapsedSeconds, string? Name,
+                                    string? Folder, double DurationSeconds, int Lines,
+                                    string? Message);
+
 public sealed record DownloadProgressEvent(string Model, long Downloaded, long Total, double Percent);
 
 /// <summary>
@@ -82,6 +93,8 @@ public sealed class CaptionClient : IAsyncDisposable
     public event Action<DownloadProgressEvent>? DownloadProgress;
     public event Action<string>? DownloadComplete;
     public event Action<string>? DownloadFailed;
+    /// <summary>Recording started, stopped, saved or failed.</summary>
+    public event Action<RecordingState>? Recording;
 
     public bool IsConnected => _socket?.State == WebSocketState.Open;
 
@@ -234,6 +247,16 @@ public sealed class CaptionClient : IAsyncDisposable
             case "download_failed":
                 DownloadFailed?.Invoke(GetString(root, "message") ?? "Download failed.");
                 break;
+            case "recording":
+                Recording?.Invoke(new RecordingState(
+                    GetString(root, "state") ?? "idle",
+                    GetDouble(root, "elapsed_s") ?? 0,
+                    GetString(root, "name"),
+                    GetString(root, "folder"),
+                    GetDouble(root, "duration_s") ?? 0,
+                    GetInt(root, "lines") ?? 0,
+                    GetString(root, "message")));
+                break;
             default:
                 // Every other frame type is handled above. A silent drop here is how a new
                 // backend frame can look like it works while doing nothing at all, so say so
@@ -245,6 +268,11 @@ public sealed class CaptionClient : IAsyncDisposable
 
     public Task DownloadModelAsync(string model) =>
         SendAsync(new { cmd = "download_model", model });
+
+    public Task StartRecordingAsync(string? path = null) =>
+        SendAsync(new { cmd = "start_recording", path });
+
+    public Task StopRecordingAsync() => SendAsync(new { cmd = "stop_recording" });
 
     public Task RequestModelsAsync() => SendAsync(new { cmd = "list_models" });
 

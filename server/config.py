@@ -100,6 +100,11 @@ class Settings:
     # played through that output gets captioned instead of what is spoken.
     loopback_device: int | None = None
 
+    # Where a recording is written when the user presses record. None means the default in
+    # recorder.default_root(). Nothing is created until a recording actually starts, so an
+    # install that never records leaves nothing behind.
+    recordings_path: str | None = None
+
     # Phrases Whisper commonly hallucinates over near-silence.
     hallucinations: tuple[str, ...] = field(
         default_factory=lambda: (

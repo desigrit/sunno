@@ -483,6 +483,54 @@
              stops receiving clicks. Declared after the body so it draws above it. -->
         <StackPanel x:Name="WindowCommands" Grid.Row="1" Orientation="Horizontal" Spacing="2"
                     HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,4,12,0">
+            <!-- Record.
+                 A pill rather than a fixed icon, because it has to carry a running timer
+                 while recording and nothing at all when idle. It is declared first so it
+                 sits left of compact mode, and it grows leftward: the two buttons to its
+                 right must never shift under the pointer while it animates.
+
+                 Not in the bottom transport bar, which is where an earlier draft put it.
+                 That bar is collapsed entirely in compact mode, and its right-hand slot is
+                 the one that shows "No audio" — the recovery hint for the worst failure this
+                 app has. Recording chrome must not evict it. -->
+            <Button x:Name="RecordButton" Click="OnToggleRecording"
+                    Height="32" MinWidth="32" Padding="0"
+                    Background="Transparent" BorderThickness="0"
+                    AutomationProperties.Name="Start recording"
+                    ToolTipService.ToolTip="Save this conversation to a file">
+                <Grid x:Name="RecordVisual" Height="30" MinWidth="30">
+                    <!-- The pill body. Collapsed to a circle at rest, so the corner radius
+                         stays at half the height through the whole animation. -->
+                    <Border x:Name="RecordPill" CornerRadius="15" Height="30"
+                            HorizontalAlignment="Right"
+                            Background="{ThemeResource SunnoInkBrush}" Opacity="0" />
+                    <StackPanel x:Name="RecordContent" Orientation="Horizontal" Spacing="8"
+                                VerticalAlignment="Center" HorizontalAlignment="Right"
+                                Margin="0,0,9,0">
+                        <TextBlock x:Name="RecordElapsed" Text="" FontSize="13"
+                                   Margin="16,0,0,0" Visibility="Collapsed"
+                                   VerticalAlignment="Center"
+                                   Foreground="White" />
+                        <!-- Rest state: a ring, not a filled disc. A solid circle of
+                             saturated red at this size sits far heavier than the thin
+                             monochrome glyphs beside it and reads as an alarm rather than a
+                             control. -->
+                        <Grid x:Name="RecordIdleMark" Width="14" Height="14">
+                            <Ellipse Stroke="#E83E3E" StrokeThickness="2" Width="14" Height="14" />
+                            <Ellipse Fill="#E83E3E" Width="6" Height="6" />
+                        </Grid>
+                        <!-- Recording: the dot that pulses. Solid, because at this size a
+                             ring against the green fill disappears. -->
+                        <Ellipse x:Name="RecordLiveDot" Fill="#FF5A5A" Width="10" Height="10"
+                                 Visibility="Collapsed" />
+                        <muxc:ProgressRing x:Name="RecordSavingRing" Width="16" Height="16"
+                                           IsActive="False" Visibility="Collapsed"
+                                           Foreground="White" />
+                        <FontIcon x:Name="RecordSavedTick" Glyph="&#xE73E;" FontSize="14"
+                                  Foreground="White" Visibility="Collapsed" />
+                    </StackPanel>
+                </Grid>
+            </Button>
             <!-- The way in sits beside the way out, and matches where the way back lives in
                  compact. Ahead of the overflow menu because it is a window command, not a
                  setting, and it is the one someone reaches for repeatedly. -->
@@ -799,6 +847,41 @@
                                               AutomationProperties.Name="Show clarity score on your own lines"
                                               AutomationProperties.HelpText="Whisper models only. The streaming models do not produce a clarity score." />
                             </Grid>
+                        </Border>
+
+                        <TextBlock Text="Recordings" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel Spacing="10">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Where recordings are saved" />
+                                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}"
+                                               TextWrapping="Wrap"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               Text="The audio and its transcript are written here when you stop a recording. Nothing is written until then." />
+                                </StackPanel>
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <!-- Read-only rather than editable. A path typed by hand is
+                                         a path that can be wrong in ways only discovered when a
+                                         recording fails to save, and the picker already answers
+                                         "does this exist and can I write to it". -->
+                                    <TextBox x:Name="RecordingsPathBox" Grid.Column="0"
+                                             IsReadOnly="True" TextWrapping="NoWrap"
+                                             FontFamily="Consolas" FontSize="12"
+                                             AutomationProperties.Name="Recordings folder" />
+                                    <Button x:Name="RecordingsChangeButton" Grid.Column="1"
+                                            Content="Change" Click="OnChangeRecordingsFolder"
+                                            AutomationProperties.Name="Change recordings folder" />
+                                    <Button x:Name="RecordingsOpenButton" Grid.Column="2"
+                                            Content="Open folder" Click="OnOpenRecordingsFolder"
+                                            AutomationProperties.Name="Open recordings folder" />
+                                </Grid>
+                            </StackPanel>
                         </Border>
 
                         <TextBlock Text="Speech engine" Style="{StaticResource BodyStrongTextBlockStyle}"

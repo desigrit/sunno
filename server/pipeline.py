@@ -188,7 +188,14 @@ class AsrWorker:
                     # timestamp reflects the conversation rather than our queue depth.
                     "started_at": job.started_at,
                     "words": [
-                        {"t": w.text, "p": round(w.probability, 3)} for w in result.words
+                        # Timings are omitted rather than sent as null when the engine has
+                        # none, so the frame does not grow by two dead keys per word on the
+                        # streaming path, where every word would carry them.
+                        ({"t": w.text, "p": round(w.probability, 3)}
+                         if w.start_s is None else
+                         {"t": w.text, "p": round(w.probability, 3),
+                          "s": round(w.start_s, 2), "e": round(w.end_s or w.start_s, 2)})
+                        for w in result.words
                     ],
                 }
             )
@@ -209,6 +216,7 @@ class CaptionPipeline:
         emit: Emit,
         should_run: Callable[[], bool] | None = None,
         speaker: "SpeakerIdentifier | None" = None,
+        on_audio: Callable[[np.ndarray], None] | None = None,
     ) -> None:
         from .preprocess import AudioConditioner
         from .vad import StreamingSileroVAD
@@ -216,6 +224,10 @@ class CaptionPipeline:
         self.settings = settings
         self._emit = emit
         self._should_run = should_run or (lambda: True)
+        # Set once and read on every frame. A recording outlives any one capture session --
+        # pausing, switching microphone and a transient stall all end run() and start it
+        # again -- so the destination lives with the caller and this is only the tap.
+        self._on_audio = on_audio
         self._vad = StreamingSileroVAD(FRAME_SAMPLES)
         self._speaker = speaker
         self._condition = AudioConditioner(settings)
@@ -284,6 +296,16 @@ class CaptionPipeline:
             self._reset_segmentation()
 
     def _process(self, frame: np.ndarray) -> None:
+        # Ahead of everything else, so a recording gets a continuous timeline: every frame,
+        # speech or silence, and the raw samples rather than the conditioned ones _finalise
+        # hands the recogniser. What was recorded should be what the microphone heard.
+        if self._on_audio is not None:
+            try:
+                self._on_audio(frame)
+            except Exception:
+                # A failing recorder must never take captions down with it.
+                pass
+
         prob = self._vad(frame)
         now = time.monotonic()
         self._publish_level(frame, prob, now)

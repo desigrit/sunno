@@ -10,6 +10,11 @@ huggingface_hub
 # huggingface_hub dependency, but relying on that means a future hub release that drops it
 # would break the GPU download with no change on our side and nothing pointing at the cause.
 httpx
+# Audio encoding for saved recordings (server/recorder.py). PyAV wraps FFmpeg; a recording is
+# written as WAV while it runs and transcoded to AAC on stop, which is about a fifth of the
+# size for speech. It happened to be present transitively before this was declared, which is
+# not a dependency, it is luck.
+av
 sherpa-onnx
 
 # CUDA runtime for CTranslate2 (CUDA 12).

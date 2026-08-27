@@ -198,8 +198,14 @@ class CTranslate2Engine:
         cleaned = self._clean(text)
         words: list[Word] = []
         if cleaned and is_final:
+            # w.start and w.end come free with word_timestamps above and were previously
+            # discarded here. They are what lets a saved recording highlight the word being
+            # spoken and seek to a word when it is clicked, which for someone reading rather
+            # than hearing is the difference between a transcript and a usable recording.
             words = [
-                Word(w.word, float(w.probability))
+                Word(w.word, float(w.probability),
+                     None if w.start is None else float(w.start),
+                     None if w.end is None else float(w.end))
                 for seg in collected
                 for w in (seg.words or [])
             ]

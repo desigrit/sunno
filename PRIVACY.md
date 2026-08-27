@@ -25,7 +25,8 @@ written for.
 
 **Audio from the input you choose.** Either a microphone or, if you select it, the sound your PC
 is playing. Audio is held in memory only for as long as it takes to recognise it, in chunks of a
-few seconds. It is never written to disk and never sent anywhere.
+few seconds, and is never sent anywhere. It is not written to disk either, unless you press
+record: see [Recordings](#recordings) below.
 
 **The text of what was said.** Recognition happens on your computer, using a speech model stored
 on your computer. The resulting captions are shown in the app window and held in memory for the
@@ -156,8 +157,31 @@ send it deliberately.
 You choose where the file is written, and nothing is uploaded. Sending it to anyone is your
 decision and your action.
 
-**Transcripts are not saved.** When you close Sunno, or clear the transcript, the captions are
-gone. If you want to keep something, select it and copy it out yourself.
+**Transcripts are not saved unless you record.** When you close Sunno, or clear the transcript,
+the captions are gone. If you want to keep something, select it and copy it out yourself, or
+press record before the conversation and Sunno will write it to a file when you stop.
+
+---
+
+## Recordings
+
+Everything above describes Sunno when you are only reading captions. Pressing record is the one
+thing that makes a conversation persist, so it works on its own terms:
+
+- **Nothing is recorded until you press record.** The folder is not even created until the first
+  recording is saved. An install that never records leaves nothing behind.
+- **Recordings go to `%USERPROFILE%\Sunno\Recordings`** — a per-user folder on your own machine.
+  You can change it in Settings. It is deliberately not `Documents`, because on a managed PC
+  `Documents` is often redirected into OneDrive, and a recording of a meeting would then sync to
+  a company's cloud without anyone choosing that.
+- **Each recording is a folder** holding `audio.m4a`, `transcript.json` and `transcript.txt`.
+  Deleting the folder deletes the recording, all of it.
+- **The audio is the same 16 kHz speech Sunno transcribes.** Good enough for voices and no more,
+  which also means the recording and its transcript can never disagree.
+- **The transcript contains what was said and, for speakers you have pinned, the name you gave
+  them.** Plain text, readable by anything, and yours to delete.
+- **Nothing about a recording is uploaded.** Recording changes where audio is stored on your
+  computer. It does not change the fact that it never leaves it.
 
 ---
 
@@ -186,13 +210,20 @@ us to do any of that with.
 
 ## Recording other people
 
-Sunno is a tool for understanding conversations, and it is designed so you can be honest with the
-people in the room: nothing is uploaded and nothing is kept.
+Sunno is a tool for understanding conversations, and until you press record it keeps nothing:
+audio is held in memory for a few seconds and captions disappear when you close the window.
+
+Pressing record changes that, and it is worth being clear about what it changes. Sunno writes
+the audio and a transcript of it to your computer, including what other people said and, where
+you have pinned a speaker, the name you gave them. Nothing is uploaded, and the folder is on
+your own machine rather than in any cloud, but a recording is a lasting record of a conversation
+in a way that a caption on screen is not.
 
 Whether you may capture a conversation at all is a matter of local law, and laws on recording and
 consent differ considerably between countries and between states. It is your responsibility to
 know and follow the rules where you are. Telling people that you are using captions is generally
-both the decent and the safe thing to do.
+both the decent and the safe thing to do, and telling them you are recording is more important
+still.
 
 ---
 

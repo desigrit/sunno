@@ -248,6 +248,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _client.DownloadFailed += msg => _ui.TryEnqueue(() => OnDownloadFailed(msg));
         _client.ModelCatalog += (current, device, list, gpu) =>
             _ui.TryEnqueue(() => OnModelCatalog(current, device, list, gpu));
+        _client.Recording += state => _ui.TryEnqueue(() => OnRecordingState(state));
         _backend.Crashed += (reason, detail) => _ui.TryEnqueue(() => OnBackendCrashed(reason, detail));
 
         Activated += (_, _) => _windowActivated = true;
@@ -294,7 +295,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex,
-            computeDevice: _settings.ForceCpu ? "cpu" : "auto");
+            computeDevice: _settings.ForceCpu ? "cpu" : "auto",
+            recordingsPath: _settings.RecordingsPath);
         // Through the banner, not SetStatus. SetStatus writes to the small elapsed-time label in
         // the corner, which is sized for "1:08" - a failure sentence put there is invisible, so
         // an install missing its engine showed the loading text and nothing else, forever. The
@@ -1649,7 +1651,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex,
-            computeDevice: _settings.ForceCpu ? "cpu" : "auto");
+            computeDevice: _settings.ForceCpu ? "cpu" : "auto",
+            recordingsPath: _settings.RecordingsPath);
 
         if (!string.IsNullOrEmpty(error))
         {
@@ -3059,7 +3062,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             vocabulary: _settings.Vocabulary,
             startStopped: _startedPaused,
             loopbackDevice: device.Loopback ? device.Index : null,
-            computeDevice: _settings.ForceCpu ? "cpu" : "auto");
+            computeDevice: _settings.ForceCpu ? "cpu" : "auto",
+            recordingsPath: _settings.RecordingsPath);
         if (!string.IsNullOrEmpty(error)) ShowFatalBackendError(error);
     }
 

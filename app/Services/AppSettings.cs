@@ -85,6 +85,16 @@ public sealed class AppSettings
     public int? ExpandedTop { get; set; }
 
     /// <summary>
+    /// Where recordings are written. Null means the backend's own default, which is
+    /// %USERPROFILE%\Sunno\Recordings.
+    ///
+    /// Null rather than a resolved path on purpose: writing the default in here would bake
+    /// one machine's profile path into a settings file, and a folder that is only ever
+    /// created when a recording is actually saved cannot be pre-empted by a default.
+    /// </summary>
+    public string? RecordingsPath { get; set; }
+
+    /// <summary>
     /// Whether this machine has no settings file at all, meaning nobody has ever finished
     /// setting Sunno up here.
     ///

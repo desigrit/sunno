@@ -25,6 +25,16 @@ if TYPE_CHECKING:
 class Word:
     text: str
     probability: float
+    # Seconds from the start of the utterance this word was decoded from, not from the start
+    # of the session or the recording. The caller knows when the utterance began and can add
+    # the offset; this object cannot, and inventing a session-relative number here would be
+    # wrong the moment an utterance is re-decoded.
+    #
+    # None on engines that do not produce timings. The streaming recognisers emit no words at
+    # all, so their transcripts have nothing to sync against and a saved recording made with
+    # one of them can only be navigated line by line.
+    start_s: float | None = None
+    end_s: float | None = None
 
 
 @dataclass
