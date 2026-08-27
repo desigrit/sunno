@@ -198,6 +198,9 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     parser.add_argument("--language", default="en", help="forced language, or 'auto'")
     parser.add_argument("--recordings-path", default=None,
                         help="where recordings are written (default: ~/Sunno/Recordings)")
+    parser.add_argument("--resume-recording", default=None,
+                        help="continue writing into this recording folder rather than "
+                             "finalising it; used when restarting mid-recording")
     parser.add_argument("--host", default="127.0.0.1", help="bind address (0.0.0.0 for LAN)")
     parser.add_argument("--http-port", type=int, default=8765)
     parser.add_argument("--ws-port", type=int, default=8766)
@@ -315,9 +318,13 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
             "type": "recording",
             "state": "recording" if active is not None else "idle",
             "elapsed_s": round(active.elapsed_s, 1) if active is not None else 0.0,
+            # Sent so the app can hand it straight back as `resume` when the backend is
+            # restarted for a new microphone or model. Without it a restart mid-recording
+            # would begin a second file rather than continuing the first.
+            "folder": str(active.folder) if active is not None else None,
         }
 
-    def start_recording(path: str | None = None) -> None:
+    def start_recording(path: str | None = None, resume: str | None = None) -> None:
         if recorder["active"] is not None:
             return
         from pathlib import Path
@@ -326,8 +333,9 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
 
         try:
             root = Path(path) if path else recordings_root()
-            recorder["active"] = rec_mod.Recorder(root)
-            print(f"Recording to {recorder['active'].folder}", flush=True)
+            recorder["active"] = rec_mod.Recorder(root, resume=resume)
+            verb = "Resuming" if resume else "Recording to"
+            print(f"{verb} {recorder['active'].folder}", flush=True)
             emit(recording_frame())
         except Exception as exc:
             # A destination that cannot be written is the likely failure here, and it must
@@ -338,13 +346,14 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     def stop_recording() -> None:
         """Finish the recording, if there is one.
 
-        Also the handler for everything that ends capture without the user pressing stop --
-        closing the window, changing microphone, changing model. Each of those tears down the
-        pipeline, so a recording that survived them would be a file whose timeline no longer
-        matched what was said.
+        Always emits a terminal frame, even with nothing to stop. Changing microphone
+        restarts the backend, and if the app still believed it was recording while this
+        process had no recorder, an early return left the pill on screen with nothing behind
+        it: pressing it did nothing at all, for the rest of the session, with no way back.
         """
         active = recorder["active"]
         if active is None:
+            emit({"type": "recording", "state": "idle", "elapsed_s": 0.0})
             return
         recorder["active"] = None
         emit({"type": "recording", "state": "saving"})
@@ -396,7 +405,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                 elif cmd == "toggle":
                     controller.toggle()
                 elif cmd == "start_recording":
-                    start_recording(msg.get("path"))
+                    start_recording(msg.get("path"), msg.get("resume"))
                 elif cmd == "stop_recording":
                     stop_recording()
                 elif cmd == "download_model":
@@ -652,17 +661,26 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     async with serve(handler, settings.host, settings.ws_port):
         asyncio.create_task(broadcaster())
 
-        # Anything the last run did not finish. A folder still holding a WAV means the
-        # process was killed mid-recording, so the meeting is on disk but unplayable; this
-        # turns it into a real file before the user goes looking for it.
+        # Anything the last run did not finish. A folder still holding raw audio means the
+        # process ended mid-recording, so the meeting is on disk but not yet a file; this
+        # turns it into one before the user goes looking for it.
+        #
+        # --resume-recording is skipped, because that folder is not an orphan: the app is
+        # about to ask us to carry on writing to it after a restart for a new microphone or
+        # model. Finalising it here would cut the recording in half.
         try:
             from . import recorder as rec_mod
 
-            for found in rec_mod.recover(recordings_root()):
+            for found in rec_mod.recover(recordings_root(), skip=args.resume_recording):
                 print(f"Recovered {found.name} from a previous session "
                       f"({found.duration_s:.0f}s)", flush=True)
         except Exception as exc:
             print(f"[error] could not recover past recordings: {exc}", flush=True)
+
+        # Pick the recording back up before any client connects, so the first frame a
+        # reconnecting app receives already says "still recording" rather than "idle".
+        if args.resume_recording:
+            start_recording(None, args.resume_recording)
 
         # Decide up front whether we can load, or must ask the user to pick and download.
         from . import models as model_catalog
@@ -885,15 +903,18 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                         pipeline.drain()  # let in-flight transcriptions finish
                         break  # file exhausted
             finally:
-                # A recording open at shutdown is the meeting somebody could not re-run.
-                # Saving it here covers every way the pump ends -- the window closing, the
-                # backend being restarted for a new microphone or a new model, Ctrl+C -- so
-                # the only path that loses a file is the process being killed outright, and
-                # recorder.recover picks that up on the next launch.
-                try:
-                    stop_recording()
-                except Exception:
-                    pass
+                # Let go of the files without finalising. This process is ending, but the
+                # recording may not be: changing microphone or model restarts the backend,
+                # and the next process reopens the same folder and carries on. A recording
+                # ends when the user stops it or closes Sunno, and closing Sunno finalises it
+                # on the next launch through recover().
+                active = recorder["active"]
+                if active is not None:
+                    try:
+                        active.detach()
+                        print(f"Released {active.folder} for the next process", flush=True)
+                    except Exception:
+                        pass
                 pipeline.close()
 
         print("Press Ctrl+C to stop.\n")

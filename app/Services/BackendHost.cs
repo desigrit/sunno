@@ -119,7 +119,8 @@ public sealed class BackendHost : IDisposable
 
     public string Start(string? device = null, string model = "large-v3", string? vocabulary = null,
                         bool startStopped = false, int? loopbackDevice = null,
-                        string? computeDevice = null, string? recordingsPath = null)
+                        string? computeDevice = null, string? recordingsPath = null,
+                        string? resumeRecording = null)
     {
         if (IsRunning) return "already running";
 
@@ -167,6 +168,15 @@ public sealed class BackendHost : IDisposable
         {
             args.Add("--recordings-path");
             args.Add(recordingsPath);
+        }
+        // A recording that was running when the backend was restarted for a new microphone
+        // or model. The new process reopens that folder and appends, so the restart shows up
+        // as a gap in the audio rather than as the end of the recording. It also tells the
+        // backend not to treat that folder as an orphan to be finalised on startup.
+        if (!string.IsNullOrWhiteSpace(resumeRecording))
+        {
+            args.Add("--resume-recording");
+            args.Add(resumeRecording);
         }
         if (!string.IsNullOrWhiteSpace(vocabulary)) { args.Add("--vocabulary"); args.Add(vocabulary); }
         // Capturing an output endpoint rather than a microphone, so calls and video get
@@ -266,7 +276,8 @@ public sealed class BackendHost : IDisposable
     /// </summary>
     public string Restart(string? device, string model, string? vocabulary,
                           bool startStopped = false, int? loopbackDevice = null,
-                          string? computeDevice = null, string? recordingsPath = null)
+                          string? computeDevice = null, string? recordingsPath = null,
+                        string? resumeRecording = null)
     {
         _stopping = true;
         try
@@ -291,7 +302,7 @@ public sealed class BackendHost : IDisposable
             _stopping = false;
         }
         return Start(device, model, vocabulary, startStopped, loopbackDevice, computeDevice,
-                     recordingsPath);
+                     recordingsPath, resumeRecording);
     }
 
     private void Record(string? line)

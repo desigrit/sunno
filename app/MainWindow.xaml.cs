@@ -296,7 +296,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex,
             computeDevice: _settings.ForceCpu ? "cpu" : "auto",
-            recordingsPath: _settings.RecordingsPath);
+            recordingsPath: _settings.RecordingsPath,
+            // Handed straight back so the restart continues the same recording instead of
+            // quietly ending it and beginning another. Changing microphone mid-meeting is a
+            // normal thing to do and must not cost the file.
+            resumeRecording: _recording ? _activeRecordingFolder : null);
         // Through the banner, not SetStatus. SetStatus writes to the small elapsed-time label in
         // the corner, which is sized for "1:08" - a failure sentence put there is invisible, so
         // an install missing its engine showed the loading text and nothing else, forever. The
@@ -1652,7 +1656,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex,
             computeDevice: _settings.ForceCpu ? "cpu" : "auto",
-            recordingsPath: _settings.RecordingsPath);
+            recordingsPath: _settings.RecordingsPath,
+            // Handed straight back so the restart continues the same recording instead of
+            // quietly ending it and beginning another. Changing microphone mid-meeting is a
+            // normal thing to do and must not cost the file.
+            resumeRecording: _recording ? _activeRecordingFolder : null);
 
         if (!string.IsNullOrEmpty(error))
         {
@@ -3063,7 +3071,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             startStopped: _startedPaused,
             loopbackDevice: device.Loopback ? device.Index : null,
             computeDevice: _settings.ForceCpu ? "cpu" : "auto",
-            recordingsPath: _settings.RecordingsPath);
+            recordingsPath: _settings.RecordingsPath,
+            // Handed straight back so the restart continues the same recording instead of
+            // quietly ending it and beginning another. Changing microphone mid-meeting is a
+            // normal thing to do and must not cost the file.
+            resumeRecording: _recording ? _activeRecordingFolder : null);
         if (!string.IsNullOrEmpty(error)) ShowFatalBackendError(error);
     }
 

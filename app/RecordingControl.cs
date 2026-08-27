@@ -29,10 +29,23 @@ public sealed partial class MainWindow
 {
     private DispatcherQueueTimer? _recordTimer;
     private DispatcherQueueTimer? _savedHold;
-    private Storyboard? _pulse;
     private double _recordElapsed;
     private string? _lastSavedFolder;
     private bool _recording;
+
+    /// <summary>
+    /// The folder the recording in progress is being written to.
+    ///
+    /// Handed back to the backend as `resume` when it restarts for a new microphone or
+    /// model, so the recording carries on into the same file instead of the restart quietly
+    /// ending it and starting another.
+    /// </summary>
+    private string? _activeRecordingFolder;
+
+    /// <summary>Whether a recording is running, for the paths that restart the backend.</summary>
+    internal bool IsRecording => _recording;
+
+    internal string? ActiveRecordingFolder => _activeRecordingFolder;
 
     /// <summary>Where the backend writes recordings. Empty means its own default.</summary>
     private string RecordingsPath => _settings.RecordingsPath ?? "";
@@ -119,6 +132,7 @@ public sealed partial class MainWindow
         {
             case "recording":
                 _recordElapsed = state.ElapsedSeconds;
+                _activeRecordingFolder = state.Folder ?? _activeRecordingFolder;
                 EnterRecording();
                 break;
             case "saving":
@@ -126,15 +140,18 @@ public sealed partial class MainWindow
                 break;
             case "saved":
                 _lastSavedFolder = state.Folder;
+                _activeRecordingFolder = null;
                 EnterSaved(state);
                 break;
             case "failed":
+                _activeRecordingFolder = null;
                 EnterIdle();
                 ShowDeviceNotice(string.IsNullOrEmpty(state.Message)
                     ? "Could not save the recording."
                     : $"Could not save the recording. {state.Message}");
                 break;
             default:
+                _activeRecordingFolder = null;
                 EnterIdle();
                 break;
         }
@@ -142,24 +159,26 @@ public sealed partial class MainWindow
 
     private void EnterRecording()
     {
-        if (_recording) return;
-        _recording = true;
         StopSavedHold();
-
         RecordIdleMark.Visibility = Visibility.Collapsed;
         RecordSavingRing.Visibility = Visibility.Collapsed;
         RecordSavingRing.IsActive = false;
         RecordSavedTick.Visibility = Visibility.Collapsed;
         RecordLiveDot.Visibility = Visibility.Visible;
+        RecordLiveDot.Opacity = 1;
         RecordElapsed.Visibility = Visibility.Visible;
+        // Fixed width, measured once for the longest ordinary reading. Without it the pill
+        // resized every time a digit changed and the two buttons beside it twitched.
+        RecordElapsed.Width = TimerWidth();
         RecordElapsed.Text = FormatRecordElapsed(_recordElapsed);
 
         AutomationProperties.SetName(RecordButton, "Stop recording");
         ToolTipService.SetToolTip(RecordButton, "Stop and save this recording");
 
+        var wasRecording = _recording;
+        _recording = true;
         FadePill(1.0);
-        GrowPill();
-        StartPulse();
+        AnimateWidth(DesiredPillWidth());
 
         _recordTimer ??= _ui.CreateTimer();
         _recordTimer.Interval = TimeSpan.FromSeconds(1);
@@ -167,24 +186,30 @@ public sealed partial class MainWindow
         _recordTimer.Tick += OnRecordTick;
         _recordTimer.Start();
 
-        // Said once, out loud, because the pill is a small target in the corner and someone
-        // using a screen reader should not have to go looking for it to know.
-        AnnounceRecording("Recording. Saving to your recordings folder.");
+        // Only on the way in. A restart for a new microphone re-enters this method with the
+        // recording already running, and repeating the announcement then would interrupt
+        // whatever is being read out at the time.
+        if (!wasRecording)
+            AnnounceRecording("Recording. Saving to your recordings folder.");
     }
 
     private void OnRecordTick(DispatcherQueueTimer sender, object args)
     {
         _recordElapsed += 1;
         RecordElapsed.Text = FormatRecordElapsed(_recordElapsed);
-        // Re-measure as the digits grow: 9:59 to 10:00 is a wider string, and a pill that
-        // stayed at its old width would clip it.
-        GrowPill();
+        // Only past an hour of recording does the string get wider, so this is a no-op for
+        // every ordinary meeting rather than a re-layout once a second.
+        var target = DesiredPillWidth();
+        if (Math.Abs(RecordVisual.Width - target) > 0.5)
+        {
+            RecordElapsed.Width = TimerWidth();
+            AnimateWidth(target);
+        }
     }
 
     private void EnterSaving()
     {
         _recording = false;
-        StopPulse();
         _recordTimer?.Stop();
 
         RecordLiveDot.Visibility = Visibility.Collapsed;
@@ -196,14 +221,13 @@ public sealed partial class MainWindow
 
         // No label. The state lasts about a second, and a word would be read after the
         // moment it describes had already passed.
-        ShrinkPill();
+        AnimateWidth(30);
         AutomationProperties.SetName(RecordButton, "Saving recording");
     }
 
     private void EnterSaved(RecordingState state)
     {
         _recording = false;
-        StopPulse();
         _recordTimer?.Stop();
 
         RecordSavingRing.IsActive = false;
@@ -221,7 +245,7 @@ public sealed partial class MainWindow
         RecordSavedTick.RenderTransform = scale;
 
         FadePill(1.0);
-        ShrinkPill();
+        AnimateWidth(30);
         DrawTick();
 
         AutomationProperties.SetName(RecordButton, "Recording saved");
@@ -253,7 +277,6 @@ public sealed partial class MainWindow
     private void EnterIdle()
     {
         _recording = false;
-        StopPulse();
         StopSavedHold();
         _recordTimer?.Stop();
         _recordElapsed = 0;
@@ -267,32 +290,52 @@ public sealed partial class MainWindow
         RecordIdleMark.Opacity = 1;
 
         FadePill(0.0);
-        ShrinkPill();
+        AnimateWidth(30);
         AutomationProperties.SetName(RecordButton, "Start recording");
-        ToolTipService.SetToolTip(RecordButton, "Save this conversation to a file");
+        ToolTipService.SetToolTip(RecordButton, "Record to file");
     }
 
-    // ---- animation -------------------------------------------------------------------
+    // ---- sizing and animation --------------------------------------------------------
+
+    private const double CollapsedSize = 30;
+    private const double PillPadding = 13;   // each side
+    private const double DotWidth = 10;
+    private const double ContentGap = 7;
+
+    /// <summary>
+    /// Width the timer text is pinned to.
+    ///
+    /// Measured for "59:59" and used for every reading below an hour, so the pill is one
+    /// size for an ordinary meeting. It grows once, past 1:00:00, and then holds again.
+    /// Pinning the text rather than the pill is what keeps the digits from shuffling inside
+    /// a fixed box as they change width.
+    /// </summary>
+    private double TimerWidth()
+    {
+        var probe = new TextBlock
+        {
+            FontSize = RecordElapsed.FontSize,
+            FontFamily = RecordElapsed.FontFamily,
+            Text = _recordElapsed >= 3600 ? "9:59:59" : "59:59",
+        };
+        probe.Measure(new Windows.Foundation.Size(
+            double.PositiveInfinity, double.PositiveInfinity));
+        return Math.Ceiling(probe.DesiredSize.Width);
+    }
 
     /// <summary>Width the pill needs for its current contents.</summary>
     private double DesiredPillWidth()
     {
-        if (!_recording) return 30;
-        RecordElapsed.Measure(new Windows.Foundation.Size(
-            double.PositiveInfinity, double.PositiveInfinity));
-        // text + left inset + gap + dot + right inset
-        return Math.Max(30, RecordElapsed.DesiredSize.Width + 16 + 8 + 10 + 9);
+        if (!_recording) return CollapsedSize;
+        return Math.Max(CollapsedSize,
+                        PillPadding * 2 + TimerWidth() + ContentGap + DotWidth);
     }
-
-    private void GrowPill() => AnimateWidth(DesiredPillWidth());
-
-    private void ShrinkPill() => AnimateWidth(30);
 
     private void AnimateWidth(double target)
     {
-        if (Math.Abs(RecordPill.Width - target) < 0.5 && RecordPill.Width > 0) return;
+        var from = double.IsNaN(RecordVisual.Width) ? CollapsedSize : RecordVisual.Width;
+        if (Math.Abs(from - target) < 0.5) return;
 
-        var from = double.IsNaN(RecordPill.Width) ? 30 : RecordPill.Width;
         var anim = new DoubleAnimation
         {
             From = from,
@@ -304,13 +347,11 @@ public sealed partial class MainWindow
             EnableDependentAnimation = true,
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
         };
-        Storyboard.SetTarget(anim, RecordPill);
+        Storyboard.SetTarget(anim, RecordVisual);
         Storyboard.SetTargetProperty(anim, "Width");
         var sb = new Storyboard();
         sb.Children.Add(anim);
         sb.Begin();
-
-        RecordVisual.MinWidth = target;
     }
 
     private void FadePill(double opacity)
@@ -325,33 +366,6 @@ public sealed partial class MainWindow
         var sb = new Storyboard();
         sb.Children.Add(anim);
         sb.Begin();
-    }
-
-    /// <summary>The recording dot, breathing rather than blinking.</summary>
-    private void StartPulse()
-    {
-        StopPulse();
-        var anim = new DoubleAnimation
-        {
-            From = 1.0,
-            To = 0.35,
-            Duration = new Duration(TimeSpan.FromMilliseconds(900)),
-            AutoReverse = true,
-            RepeatBehavior = RepeatBehavior.Forever,
-            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
-        };
-        Storyboard.SetTarget(anim, RecordLiveDot);
-        Storyboard.SetTargetProperty(anim, "Opacity");
-        _pulse = new Storyboard();
-        _pulse.Children.Add(anim);
-        _pulse.Begin();
-    }
-
-    private void StopPulse()
-    {
-        _pulse?.Stop();
-        _pulse = null;
-        RecordLiveDot.Opacity = 1;
     }
 
     /// <summary>The tick, drawn on rather than appearing.</summary>
@@ -400,10 +414,12 @@ public sealed partial class MainWindow
 
     private static string FormatRecordElapsed(double seconds)
     {
+        // No leading zero on the minutes: 3:20, not 03:20. Matches how a duration is written
+        // everywhere else and drops a digit that never carries information.
         var t = TimeSpan.FromSeconds(Math.Max(0, seconds));
         return t.TotalHours >= 1
             ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}"
-            : $"{t.Minutes:00}:{t.Seconds:00}";
+            : $"{t.Minutes}:{t.Seconds:00}";
     }
 
     // ---- settings --------------------------------------------------------------------

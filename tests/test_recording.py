@@ -87,18 +87,19 @@ with tempfile.TemporaryDirectory() as td:
           f"{saved.duration_s}")
     check("the line was kept", saved.lines == 1)
     check("an audio file exists", saved.audio is not None and saved.audio.exists())
-    check("it is m4a, not the working wav", saved.audio.suffix == ".m4a", str(saved.audio))
-    check("the working wav is gone", not (saved.folder / recorder.WAV_NAME).exists())
+    check("it is m4a, not the working audio", saved.audio.suffix == ".m4a", str(saved.audio))
+    check("the working audio is gone", not (saved.folder / recorder.PCM_NAME).exists())
     check("the append log is gone", not (saved.folder / recorder.JSONL_NAME).exists())
+    check("the in-progress marker is gone", not (saved.folder / recorder.META_NAME).exists())
     check("transcript.json exists", (saved.folder / recorder.TRANSCRIPT_JSON).exists())
     check("transcript.txt exists", (saved.folder / recorder.TRANSCRIPT_TXT).exists())
 
-    # Compression is the reason for the transcode: WAV at 16 kHz is 32 KB/s, and a long
-    # meeting at that rate is a surprise nobody asked for.
-    wav_bytes = 3.0 * 16000 * 2
-    check("the m4a is much smaller than the wav would be",
-          saved.audio.stat().st_size < wav_bytes * 0.5,
-          f"{saved.audio.stat().st_size} vs {wav_bytes:.0f}")
+    # Compression is the reason for the transcode: raw 16 kHz is 32 KB/s, and a long meeting
+    # at that rate is a surprise nobody asked for.
+    raw_bytes = 3.0 * 16000 * 2
+    check("the m4a is much smaller than the raw audio",
+          saved.audio.stat().st_size < raw_bytes * 0.5,
+          f"{saved.audio.stat().st_size} vs {raw_bytes:.0f}")
 
     data = json.loads((saved.folder / recorder.TRANSCRIPT_JSON).read_text(encoding="utf-8"))
     check("word timings survive to the file",
@@ -113,6 +114,47 @@ with tempfile.TemporaryDirectory() as td:
     second = recorder.Recorder(root)
     check("the next is Recording (2)", second.name == "Recording (2)", second.name)
     second.stop()
+
+
+# ------------------------------------------------- surviving a restart mid-recording
+section("a restart mid-recording")
+
+with tempfile.TemporaryDirectory() as td:
+    root = Path(td)
+    # Changing microphone or model restarts the whole backend. A recording must survive
+    # that as a gap in the audio, not as the end of the file: swapping headsets during a
+    # meeting is an ordinary thing to do and must not cost the recording.
+    first = recorder.Recorder(root)
+    first.add_audio(tone(3.0))
+    first.add_line({"started_at": first.started_at + 1, "speaker": "Priya",
+                    "text": "Before the switch."})
+    folder = first.folder
+    first.detach()
+
+    check("detaching leaves the recording unfinished", recorder.is_unfinished(folder))
+    check("detaching does not write a transcript",
+          not (folder / recorder.TRANSCRIPT_TXT).exists())
+
+    # The startup sweep must leave the folder alone when it is about to be resumed,
+    # otherwise it finalises the recording out from under the process taking over.
+    check("recovery skips the folder being resumed",
+          recorder.recover(root, skip=folder) == [])
+    check("and leaves it unfinished", recorder.is_unfinished(folder))
+
+    second = recorder.Recorder(root, resume=folder)
+    check("resuming reopens the same folder", second.folder == folder, str(second.folder))
+    check("resuming keeps the elapsed count", abs(second.elapsed_s - 3.0) < 0.05,
+          f"{second.elapsed_s}")
+    second.add_audio(tone(2.0))
+    second.add_line({"started_at": second.started_at + 4, "speaker": "Marco",
+                     "text": "After the switch."})
+    joined = second.stop()
+
+    check("the audio is one continuous file", abs(joined.duration_s - 5.0) < 0.1,
+          f"{joined.duration_s}")
+    check("both halves of the transcript are there", joined.lines == 2, str(joined.lines))
+    check("no second recording was created", len(list(root.iterdir())) == 1,
+          str([p.name for p in root.iterdir()]))
 
 
 # ------------------------------------------------------------- a line that straddles record
@@ -142,12 +184,12 @@ with tempfile.TemporaryDirectory() as td:
     rec = recorder.Recorder(root)
     rec.add_audio(tone(4.0))
     rec.add_line({"started_at": rec.started_at + 1, "speaker": "Sarah", "text": "Kept."})
-    rec._wav._file.flush()          # what the OS would have flushed before a kill
+    rec._pcm.flush()                 # what the OS would have flushed before a kill
     rec._jsonl.flush()
     folder = rec.folder
     del rec                          # process dies; stop() never runs
 
-    check("the working wav is still there", (folder / recorder.WAV_NAME).exists())
+    check("the working audio is still there", (folder / recorder.PCM_NAME).exists())
     check("nothing was finalised", not (folder / recorder.TRANSCRIPT_TXT).exists())
 
     # A line torn in half by the kill, which is what an append log looks like after one.
@@ -212,15 +254,29 @@ check("a failing recorder cannot kill captions",
       "except Exception:" in pipeline_py[tap:tap + 400])
 
 check("finished lines are written as they happen", "add_line(event)" in app_py)
-check("shutdown saves an open recording",
-      "stop_recording()" in app_py.split("finally:")[-1] or
-      "A recording open at shutdown" in app_py,
-      "closing the window, changing microphone or model must not lose the file")
+# A recording ends when the user stops it or closes Sunno. A restart for a new microphone or
+# model releases the files instead, so the next process can pick the same recording back up.
+check("a restart releases rather than finalises", "active.detach()" in app_py,
+      "changing microphone mid-meeting must not end the recording")
+check("a resumed recording is not treated as an orphan",
+      "skip=args.resume_recording" in app_py)
+check("the backend can resume on startup", "args.resume_recording" in app_py)
 check("startup recovers what a crash left", "rec_mod.recover(" in app_py)
 check("a reconnecting client learns a recording is running",
       "recording_frame()" in app_py)
+# The bug this guards: on a device change the old process saved and died, the app never saw
+# the frame, and stopping against the new process returned silently. The pill stayed on
+# screen and did nothing for the rest of the session.
+check("stopping always answers, even with nothing to stop",
+      '"state": "idle", "elapsed_s": 0.0})\n            return' in app_py
+      or app_py.count('"state": "idle"') >= 2,
+      "an early return here wedges the button permanently")
 # An accidental press must not litter the folder with empty recordings.
 check("an empty recording is discarded", "rec_mod.discard(" in app_py)
+
+host_cs = (REPO / "app" / "Services" / "BackendHost.cs").read_text(encoding="utf-8")
+check("the app can hand the recording to the new process",
+      "--resume-recording" in host_cs)
 
 client_cs = (REPO / "app" / "Services" / "CaptionClient.cs").read_text(encoding="utf-8")
 check("the client understands recording frames", 'case "recording":' in client_cs)
@@ -233,6 +289,17 @@ for state in ("EnterRecording", "EnterSaving", "EnterSaved", "EnterIdle"):
 check("saved does not become the resting state", "OnSavedHoldElapsed" in rec_cs)
 check("the elapsed label is driven by the backend's count",
       "state.ElapsedSeconds" in rec_cs)
+check("the app remembers which recording is running",
+      "_activeRecordingFolder" in rec_cs)
+# The timer is pinned to a measured width so the pill holds one size for an ordinary
+# meeting: without it every digit change resized the pill and nudged its neighbours.
+check("the timer has a fixed width", "TimerWidth()" in rec_cs)
+check("the pill only grows past an hour", '"9:59:59" : "59:59"' in rec_cs)
+check("minutes have no leading zero", "{t.Minutes}:{t.Seconds:00}" in rec_cs,
+      "3:20, not 03:20")
+# A dot pulsing in the corner is movement in the reader's peripheral vision for the whole
+# meeting, which is the last thing a captioning app should add.
+check("the recording dot does not blink", "StartPulse" not in rec_cs)
 
 xaml = (REPO / "app" / "MainWindow.xaml").read_text(encoding="utf-8")
 check("the record button is in the window commands",

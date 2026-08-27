@@ -6,17 +6,22 @@ implementation, so the way this writes matters:
 **Nothing is written until asked.** A Recorder is only constructed when the user presses
 record, and the directory is only created then. An install that never records leaves no trace.
 
-**A crash must not cost the meeting.** The scenario this feature exists for is a conversation
-that cannot be re-run, so nothing is buffered for the end. Audio streams to a WAV as it
-arrives and each finished line is appended to a JSONL file immediately. Both survive the
-process dying at any point: WAV is length-prefixed but a truncated one still decodes, and a
-JSONL file is valid up to its last complete line. AAC in an MP4 container is the opposite --
-it needs its index written on close, and a killed encoder leaves a file that will not play at
-all -- so the m4a is produced at the end, by transcoding, rather than written live.
+**A recording ends when the user says so, and not before.** Pausing, switching microphone,
+changing model and a dropped USB cable all stop capture, and none of them should end a
+recording: they should leave a gap in it. Pause and a transient failure keep the same process,
+so the Recorder simply stops being fed. Changing device or model restarts the backend
+entirely, so a recording has to be re-openable across processes -- which is why the audio is
+appended as raw PCM rather than written through a container that owns its own header.
 
-**A killed process leaves recoverable work.** ``recover`` finds any recording whose WAV was
-never finalised and completes it on the next launch, so the file appears rather than being
-silently lost.
+**A crash must not cost the meeting.** The scenario this exists for is a conversation that
+cannot be re-run, so nothing is buffered for the end. Audio is appended as it arrives and each
+finished line is appended immediately. Both survive the process dying at any point: raw PCM
+has nothing to corrupt, and a JSONL file is valid up to its last complete line. AAC in an MP4
+container is the opposite -- it needs its index written on close, and a killed encoder leaves
+a file that will not play at all -- so the m4a is produced at the end, by transcoding.
+
+**A killed process leaves recoverable work.** ``recover`` finds any recording that was never
+finalised and completes it on the next launch, so the file appears rather than being lost.
 
 The audio is the recogniser's own stream: 16 kHz mono, tapped ahead of ``preprocess`` so it is
 what the microphone heard rather than what the model was fed. Fine for speech, and it means
@@ -37,10 +42,14 @@ import numpy as np
 from .config import SAMPLE_RATE
 
 AUDIO_NAME = "audio.m4a"
-WAV_NAME = "audio.wav"
+PCM_NAME = "audio.pcm"
+WAV_NAME = "audio.wav"          # written by 1.0.78.0 only; still recovered
 JSONL_NAME = "lines.jsonl"
+META_NAME = "recording.json"
 TRANSCRIPT_JSON = "transcript.json"
 TRANSCRIPT_TXT = "transcript.txt"
+
+BYTES_PER_SAMPLE = 2
 
 
 @dataclass
@@ -74,42 +83,76 @@ def next_name(root: Path) -> str:
     return f"Recording ({n})"
 
 
-class Recorder:
-    """One recording, from the press of record to the file on disk."""
+def _count_lines(folder: Path) -> int:
+    path = folder / JSONL_NAME
+    if not path.exists():
+        return 0
+    return sum(1 for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip())
 
-    def __init__(self, root: Path) -> None:
+
+class Recorder:
+    """One recording, from the press of record to the file on disk.
+
+    Args:
+        root: the recordings folder.
+        resume: an existing recording folder to continue appending to, used when the backend
+            restarts for a new microphone or model part-way through a recording.
+    """
+
+    def __init__(self, root: Path, resume: Path | str | None = None) -> None:
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.name = next_name(self.root)
-        self.folder = self.root / self.name
-        self.folder.mkdir(parents=True, exist_ok=True)
-        self.started_at = time.time()
-        self._samples = 0
-        self._lines = 0
         self._closed = False
 
-        self._wav = wave.open(str(self.folder / WAV_NAME), "wb")
-        self._wav.setnchannels(1)
-        self._wav.setsampwidth(2)
-        self._wav.setframerate(SAMPLE_RATE)
+        if resume is not None and Path(resume).is_dir():
+            self.folder = Path(resume)
+            self.name = self.folder.name
+            self.started_at = self._read_started_at()
+        else:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self.name = next_name(self.root)
+            self.folder = self.root / self.name
+            self.folder.mkdir(parents=True, exist_ok=True)
+            self.started_at = time.time()
+            (self.folder / META_NAME).write_text(json.dumps({
+                "name": self.name,
+                "started_at": self.started_at,
+                "sample_rate": SAMPLE_RATE,
+            }), encoding="utf-8")
+
+        # Append, both of them. Reopening a folder therefore continues the same recording
+        # rather than starting a second one, and the gap where capture was stopped simply
+        # does not appear in the audio.
+        self._pcm = (self.folder / PCM_NAME).open("ab")
         self._jsonl = (self.folder / JSONL_NAME).open("a", encoding="utf-8")
+        self._lines = _count_lines(self.folder)
+
+    def _read_started_at(self) -> float:
+        try:
+            return float(json.loads(
+                (self.folder / META_NAME).read_text(encoding="utf-8"))["started_at"])
+        except Exception:
+            return self.folder.stat().st_mtime
 
     @property
     def elapsed_s(self) -> float:
         """Length of the audio written, not wall-clock time since the button was pressed.
 
         Those differ whenever capture stops and starts within one recording, and the audio
-        length is the one that matches the file the user ends up with.
+        length is the one that matches the file the user ends up with. Measured from the file
+        so a resumed recording continues counting from where it left off.
         """
-        return self._samples / SAMPLE_RATE
+        try:
+            self._pcm.flush()
+            return (self.folder / PCM_NAME).stat().st_size / BYTES_PER_SAMPLE / SAMPLE_RATE
+        except OSError:
+            return 0.0
 
     def add_audio(self, frame: np.ndarray) -> None:
         """Append one frame. Called from the capture thread, so it stays cheap."""
         if self._closed:
             return
         pcm = np.clip(frame, -1.0, 1.0)
-        self._wav.writeframes((pcm * 32767.0).astype("<i2").tobytes())
-        self._samples += len(frame)
+        self._pcm.write((pcm * 32767.0).astype("<i2").tobytes())
 
     def add_line(self, event: dict) -> None:
         """Record a finished caption. Written immediately, not held for the end."""
@@ -130,18 +173,23 @@ class Recorder:
         self._jsonl.flush()
         self._lines += 1
 
+    def detach(self) -> None:
+        """Let go of the files without finalising, so another process can take over.
+
+        Used when the backend restarts for a new microphone or model. The recording is not
+        over; this process is simply no longer the one writing it.
+        """
+        self._closed = True
+        for handle in (self._pcm, self._jsonl):
+            try:
+                handle.close()
+            except Exception:
+                pass
+
     def stop(self) -> Saved:
         """Finalise: close the streams, transcode, and write the readable transcript."""
         if not self._closed:
-            self._closed = True
-            try:
-                self._wav.close()
-            except Exception:
-                pass
-            try:
-                self._jsonl.close()
-            except Exception:
-                pass
+            self.detach()
         return finalise(self.folder, self.started_at)
 
 
@@ -169,14 +217,34 @@ def _clock(seconds: float) -> str:
         else f"{s // 60:02d}:{s % 60:02d}"
 
 
-def _transcode(folder: Path) -> Path | None:
-    """WAV to m4a. Returns None if it could not be done, leaving the WAV in place.
+def is_unfinished(folder: Path) -> bool:
+    """True when a folder holds a recording that was never finalised."""
+    folder = Path(folder)
+    return (folder / PCM_NAME).exists() or (folder / WAV_NAME).exists()
 
-    A failure here is not fatal and must not delete anything: a playable WAV is worth far
-    more than a tidy folder.
-    """
+
+def _raw_samples(folder: Path) -> np.ndarray:
+    """The audio, from whichever working form this recording used."""
+    pcm = folder / PCM_NAME
+    if pcm.exists():
+        return np.frombuffer(pcm.read_bytes(), dtype="<i2")
     wav = folder / WAV_NAME
-    if not wav.exists() or wav.stat().st_size <= 44:
+    if wav.exists():
+        try:
+            with wave.open(str(wav)) as w:
+                return np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
+        except Exception:
+            return np.empty(0, dtype="<i2")
+    return np.empty(0, dtype="<i2")
+
+
+def _encode(folder: Path, samples: np.ndarray) -> Path | None:
+    """Write the m4a. Returns None if it could not be done, leaving the raw audio in place.
+
+    A failure here must not delete anything: raw audio that can still be recovered is worth
+    far more than a tidy folder.
+    """
+    if samples.size == 0:
         return None
     try:
         import av
@@ -185,10 +253,16 @@ def _transcode(folder: Path) -> Path | None:
 
     out = folder / AUDIO_NAME
     try:
-        with av.open(str(wav)) as src, av.open(str(out), "w") as dst:
+        with av.open(str(out), "w") as dst:
             stream = dst.add_stream("aac", rate=SAMPLE_RATE)
             stream.layout = "mono"
-            for frame in src.decode(audio=0):
+            # In chunks, so an hour-long meeting is not handed to the encoder as one frame.
+            step = SAMPLE_RATE * 30
+            for start in range(0, samples.size, step):
+                chunk = np.ascontiguousarray(samples[start:start + step])
+                frame = av.AudioFrame.from_ndarray(
+                    chunk.reshape(1, -1), format="s16", layout="mono")
+                frame.rate = SAMPLE_RATE
                 frame.pts = None
                 for packet in stream.encode(frame):
                     dst.mux(packet)
@@ -198,7 +272,8 @@ def _transcode(folder: Path) -> Path | None:
         out.unlink(missing_ok=True)
         return None
 
-    wav.unlink(missing_ok=True)
+    (folder / PCM_NAME).unlink(missing_ok=True)
+    (folder / WAV_NAME).unlink(missing_ok=True)
     return out
 
 
@@ -210,24 +285,35 @@ def finalise(folder: Path, started_at: float | None = None) -> Saved:
     """
     folder = Path(folder)
     lines = _read_lines(folder)
+    samples = _raw_samples(folder)
+    duration = samples.size / SAMPLE_RATE
 
-    wav = folder / WAV_NAME
-    duration = 0.0
-    if wav.exists():
+    audio = _encode(folder, samples)
+    if audio is None and samples.size:
+        # Fall back to a real WAV so there is always something playable, even when the
+        # encoder is missing.
+        wav = folder / WAV_NAME
         try:
-            with wave.open(str(wav)) as w:
-                duration = w.getnframes() / float(w.getframerate() or SAMPLE_RATE)
+            with wave.open(str(wav), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(BYTES_PER_SAMPLE)
+                w.setframerate(SAMPLE_RATE)
+                w.writeframes(samples.tobytes())
+            (folder / PCM_NAME).unlink(missing_ok=True)
+            audio = wav
         except Exception:
-            duration = 0.0
+            audio = folder / PCM_NAME if (folder / PCM_NAME).exists() else None
 
-    audio = _transcode(folder)
-    if audio is None and wav.exists():
-        audio = wav
+    if started_at is None:
+        try:
+            started_at = float(json.loads(
+                (folder / META_NAME).read_text(encoding="utf-8"))["started_at"])
+        except Exception:
+            started_at = folder.stat().st_mtime
 
-    when = started_at or folder.stat().st_mtime
     (folder / TRANSCRIPT_JSON).write_text(json.dumps({
         "name": folder.name,
-        "started_at": when,
+        "started_at": started_at,
         "duration_s": round(duration, 2),
         "sample_rate": SAMPLE_RATE,
         "lines": lines,
@@ -235,8 +321,8 @@ def finalise(folder: Path, started_at: float | None = None) -> Saved:
 
     # Plain text as well, because a recording nobody can read without Sunno is not much of a
     # record. Timestamps are offsets into the audio, so a line can be found by scrubbing.
-    body = [f"{folder.name}",
-            time.strftime("%Y-%m-%d %H:%M", time.localtime(when)),
+    body = [folder.name,
+            time.strftime("%Y-%m-%d %H:%M", time.localtime(started_at)),
             f"Length {_clock(duration)}",
             ""]
     for ln in lines:
@@ -245,27 +331,33 @@ def finalise(folder: Path, started_at: float | None = None) -> Saved:
     (folder / TRANSCRIPT_TXT).write_text("\n".join(body) + "\n", encoding="utf-8")
 
     (folder / JSONL_NAME).unlink(missing_ok=True)
+    (folder / META_NAME).unlink(missing_ok=True)
 
     return Saved(folder.name, folder, round(duration, 2), len(lines), audio)
 
 
-def recover(root: Path) -> list[Saved]:
+def recover(root: Path, skip: Path | str | None = None) -> list[Saved]:
     """Finish any recording the last run did not.
 
-    A folder holding a WAV is one where the process died mid-recording: a normal stop
-    transcodes and removes it. Completing these on launch is the difference between losing a
-    meeting and finding it waiting.
+    Args:
+        skip: a folder that is about to be resumed rather than recovered. The backend passes
+            this when restarting mid-recording for a new microphone or model, so the
+            recording in progress is not finalised out from under itself.
     """
     root = Path(root)
     if not root.is_dir():
         return []
+    keep = Path(skip).resolve() if skip else None
     done: list[Saved] = []
     for folder in sorted(root.iterdir()):
-        if folder.is_dir() and (folder / WAV_NAME).exists():
-            try:
-                done.append(finalise(folder))
-            except Exception:
-                continue
+        if not folder.is_dir() or not is_unfinished(folder):
+            continue
+        if keep is not None and folder.resolve() == keep:
+            continue
+        try:
+            done.append(finalise(folder))
+        except Exception:
+            continue
     return done
 
 
