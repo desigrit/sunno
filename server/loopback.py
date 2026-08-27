@@ -223,7 +223,9 @@ class LoopbackStream:
             #
             # Now routed through resample.make_resampler so the quality choice stays in one
             # place and so a machine with no soxr wheel still gets a filter rather than an
-            # ImportError. swresample measures 81.2 dB on the same comparison.
+            # ImportError. The swresample fallback is pinned to 256 taps and measures
+            # 78.8 dB on the same corpus; see server/resample.py for what that does and does
+            # not establish.
             from .resample import make_resampler
 
             resampler = make_resampler(self.capture_rate, SAMPLE_RATE)

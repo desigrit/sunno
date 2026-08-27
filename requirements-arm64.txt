@@ -18,9 +18,15 @@
 #                                  not build one. Whisper runs through onnxruntime-genai
 #                                  instead; server/engine.py already selects between them.
 #   soxr                           no win_arm64 wheel. server/resample.py uses PyAV's
-#                                  swresample, measured at 81.2 dB against soxr HQ's 81.4.
-#   pyaudiowpatch                  no win_arm64 wheel. SoundCard's CFFI WASAPI binding
-#                                  provides loopback instead, and is pure Python over cffi.
+#                                  swresample, pinned to a 256-tap filter, which measures
+#                                  78.8 dB on the project corpus against soxr HQ's 74.6 and
+#                                  agrees with it to 0.00 dB across the speech band.
+#   pyaudiowpatch                  no win_arm64 wheel, so system-audio loopback is NOT
+#                                  available on ARM yet. server/app.py already treats
+#                                  loopback as optional, so the picker simply lists no
+#                                  output devices rather than failing. soundcard is pinned
+#                                  below as the intended CFFI WASAPI replacement, but
+#                                  nothing imports it yet - it is staged, not wired.
 #   nvidia-*                       there is no CUDA on a Snapdragon.
 #
 # What ARM does get that x64 does not: onnxruntime-genai (the Whisper engine) and soundcard.

@@ -185,9 +185,24 @@ if (Test-Path $msix) { Remove-Item $msix -Force }
 # asserted statically instead. This is the check that makes an ARM package defensible without
 # ARM hardware: a single x64 binary anywhere in the layout fails the build rather than
 # failing at launch on a machine the developer does not have.
+#
+# One intentional exception, and only for x64. The Windows App SDK ships
+# Microsoft.Windows.Workloads.Resources_ec.dll in its **x64** payload: an ARM64EC image, which
+# reports machine 0xAA64 like a plain ARM64 binary but is x64-compatible by construction. It
+# is resource-only and it is absent from the ARM layout entirely. Pinned by hash rather than
+# waved through by name, so a Windows App SDK update that changes this file stops the build
+# and gets a human look - which is the same bargain the CUDA manifest makes.
+$archArgs = @($staging, "--expected", $Architecture)
+if ($Architecture -eq "x64") {
+  $archArgs += @(
+    "--allow-cross-arch-file",
+    "Microsoft.Windows.Workloads.Resources_ec.dll",
+    "arm64",
+    "3dbefa883ea9dcbb0fee463afda0121e385bb678652ca2faa19cf2abf517091e"
+  )
+}
 Write-Host "Verifying every PE binary is $Architecture..." -ForegroundColor Cyan
-& (Join-Path $root ".venv\Scripts\python.exe") (Join-Path $PSScriptRoot "verify_pe_arch.py") `
-    $staging --expected $Architecture
+& (Join-Path $root ".venv\Scripts\python.exe") (Join-Path $PSScriptRoot "verify_pe_arch.py") @archArgs
 if ($LASTEXITCODE -ne 0) { throw "Mixed-architecture payload; refusing to pack." }
 
 # A second onnxruntime.dll at the package root hijacks sherpa-onnx's own copy and crashes the

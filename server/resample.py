@@ -17,10 +17,18 @@ already ships for recording, so ARM gains no new native dependency by using it.
 Quality is not assumed, and the default is not good enough. swresample's default polyphase
 filter is 32 taps; measured on the project's two-speaker corpus, downsampling 48 kHz to
 16 kHz, that reaches 58.0 dB against soxr HQ's 74.6 dB. Pinned at 256 taps it reaches
-78.8 dB - better than the soxr path it stands in for. ``tests/test_resample.py`` measures
-both on x64, where both libraries are installable, so the substitution is checked rather
-than trusted: the loopback path once shipped soxr at ``"QQ"``, its lowest setting, and
-nothing caught it until someone read the argument.
+78.8 dB, and the two filters then agree to 0.00 dB across 100-7500 Hz.
+
+What that harness does **not** measure is alias rejection, and the difference there is real:
+the corpus is 16 kHz, so upsampling it to make test input leaves nothing above 8 kHz for a
+stopband to reject. On a genuine out-of-band tone soxr is the better filter - a 9 kHz tone,
+which aliases to 7 kHz, comes back at -146.5 dB through soxr and -110.0 dB through this. So
+this is not "better than soxr"; it is close enough in the passband and far enough below a
+16-bit least-significant bit out of it to be inaudible either way.
+
+``tests/test_resample.py`` measures both on x64, where both libraries are installable, so
+the substitution is checked rather than trusted: the loopback path once shipped soxr at
+``"QQ"``, its lowest setting, and nothing caught it until someone read the argument.
 
 Selection is by availability, not by architecture. An x64 machine keeps soxr; ARM falls
 through to PyAV. Testing the import rather than the platform means a future soxr ARM64 wheel
@@ -46,6 +54,16 @@ class SoxrResampler:
     def resample_chunk(self, block: np.ndarray) -> np.ndarray:
         return self._stream.resample_chunk(block)
 
+    def flush(self) -> np.ndarray:
+        """Whatever the filter is still holding, at end of stream.
+
+        Present so both resamplers expose the same interface. They are chosen by which
+        library is installed, so an interface that differed by architecture would mean a
+        caller could work on ARM and raise AttributeError on x64 - the one class of bug this
+        module's "select by availability, not by platform" rule exists to keep testable here.
+        """
+        return self._stream.resample_chunk(np.empty(0, dtype=np.float32), last=True)
+
 
 class PyAvResampler:
     """FFmpeg's swresample through PyAV, for machines with no soxr wheel.
@@ -57,10 +75,15 @@ class PyAvResampler:
     signal feeding a speech recogniser is not a detail, and it is invisible on x64 because
     x64 keeps soxr.
 
-    At ``filter_size=256`` the same measurement gives **78.8 dB**, which is better than the
-    soxr path it replaces. ``tests/test_resample.py`` re-measures both and fails if this
-    regresses - the loopback path once shipped soxr at its lowest setting for months, and the
-    only reason anyone noticed was reading the argument.
+    At ``filter_size=256`` the same measurement gives **78.8 dB**, and the two filters agree
+    to 0.00 dB from 100-7500 Hz. That is not the same as being better than soxr: the harness
+    upsamples a 16 kHz corpus, so it has no out-of-band energy and cannot measure alias
+    rejection, where soxr genuinely wins (a 9 kHz tone aliasing to 7 kHz returns at
+    -146.5 dB through soxr against -110.0 dB here). Both are far below a 16-bit
+    least-significant bit, so the substitution is inaudible; the claim is "close enough",
+    not "better". ``tests/test_resample.py`` re-measures and fails if this regresses - the
+    loopback path once shipped soxr at its lowest setting for months, and the only reason
+    anyone noticed was reading the argument.
 
     The filter graph is also stateful across pushes, which is the property the streaming
     caller depends on: restarting per chunk would put a discontinuity at every seam.

@@ -97,10 +97,11 @@ print(f"\nsoxr installed: {soxr_available()}\n")
 
 print("-- both resamplers reconstruct a synthetic tone --")
 
-# Reported, not gated. A pure tone measures stopband rejection, where soxr's much steeper
-# filter wins by tens of dB - and none of that difference is in the speech band. Gating on
-# the gap here would fail a resampler that is inaudibly different on the only content this
-# app ever sees. The gate is the speech comparison below.
+# Reported, not gated. A pure tone measures passband fidelity, and soxr's steeper filter is
+# also more conservative about where the passband ends, so the two are not comparable this
+# way - the gap here says nothing about which is better on speech. The gate is the speech
+# comparison below. Neither figure measures alias rejection, where soxr is genuinely the
+# better filter; see server/resample.py.
 results: dict[str, float] = {}
 for rate in (44100, 48000):
     source = tone(rate)
@@ -188,6 +189,13 @@ out = PyAvResampler(48000, TARGET).resample_chunk(tone(48000, 0.1))
 check("output is float32", out.dtype == np.float32, str(out.dtype))
 
 print("\n-- selection --")
+
+check(
+    "both resamplers expose the same interface",
+    hasattr(SoxrResampler(48000, TARGET), "flush")
+    and hasattr(PyAvResampler(48000, TARGET), "flush"),
+    "an interface that differs by architecture works on ARM and raises on x64",
+)
 
 chosen = make_resampler(48000, TARGET)
 expected = SoxrResampler if soxr_available() else PyAvResampler

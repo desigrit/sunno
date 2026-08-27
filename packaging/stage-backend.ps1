@@ -94,6 +94,18 @@ if ($Architecture -eq "arm64") {
     Write-Host "Removed $launchers build-host launchers from site-packages\bin"
   }
 
+  # --target also drops a Scripts\ tree that a normal install would not: 22 MB of link-time
+  # .lib files and a SECOND copy of onnxruntime.dll and the sherpa-onnx DLLs. Nothing loads
+  # from there, but build-msix.ps1 already fails the build over duplicate onnxruntime copies
+  # hijacking sherpa-onnx's own, and a third copy sitting inside the payload is exactly the
+  # kind of thing that guard exists to prevent - it simply does not look here.
+  $scriptsDir = Join-Path $targetSite "Scripts"
+  if (Test-Path $scriptsDir) {
+    $mb = (Get-ChildItem $scriptsDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
+    Remove-Item $scriptsDir -Recurse -Force
+    Write-Host ("Removed {0:N0} MB of --target Scripts artifacts (duplicate onnxruntime + .lib)" -f $mb)
+  }
+
   # ONNX Runtime loads msvcp140.dll, which the embeddable archive does not carry (it ships
   # vcruntime140.dll only). It comes from the ARM64 VCLibs redistributable.
   $vclibsName = "Microsoft.VCLibs.arm64.14.00.Desktop.zip"
