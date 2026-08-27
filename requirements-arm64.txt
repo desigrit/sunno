@@ -1,0 +1,61 @@
+# Locked native Windows ARM64 runtime.
+#
+# Kept separate from requirements.txt because packaging resolves these wheels from an x64
+# build host, where environment markers would otherwise pick the wrong machine, and because
+# the two architectures genuinely need different packages rather than the same list with
+# different binaries.
+#
+# Fully resolved and transitive on purpose. `pip install --target` never runs setup.py, so
+# nothing here gets installed on a dependency's behalf: an omitted transitive package is a
+# missing module at runtime on a machine with no debugger attached. That is why entries like
+# pycparser, h11 and anyio appear even though nothing in server/ imports them directly.
+#
+# Hash-locked so a rebuild either produces the same tree or fails loudly.
+#
+# What ARM does not get, and why:
+#
+#   ctranslate2 / faster-whisper   no win_arm64 wheel exists and upstream has said it will
+#                                  not build one. Whisper runs through onnxruntime-genai
+#                                  instead; server/engine.py already selects between them.
+#   soxr                           no win_arm64 wheel. server/resample.py uses PyAV's
+#                                  swresample, measured at 81.2 dB against soxr HQ's 81.4.
+#   pyaudiowpatch                  no win_arm64 wheel. SoundCard's CFFI WASAPI binding
+#                                  provides loopback instead, and is pure Python over cffi.
+#   nvidia-*                       there is no CUDA on a Snapdragon.
+#
+# What ARM does get that x64 does not: onnxruntime-genai (the Whisper engine) and soundcard.
+#
+# sherpa-onnx publishes native win_arm64 wheels in two distributions - the pure-Python
+# wrapper and sherpa-onnx-core, which carries ARM64 onnxruntime.dll, sherpa-onnx-c-api.dll
+# and sherpa-onnx-cxx-api.dll. Both are pinned here, and between them they carry the
+# streaming transducer engine AND speaker labelling, so neither is lost on ARM.
+anyio==4.14.2 --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494
+av==18.1.0 --hash=sha256:5509ec12aaa19fd6601de13cfa6f4cdad450da07982118510592875d970454d6
+certifi==2026.7.22 --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775
+cffi==2.1.1 --hash=sha256:7bde5e4cc5c10140859842b9d383af292b22639a4dffb725314baf45968cef80
+click==8.4.2 --hash=sha256:e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76
+colorama==0.4.6 --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+filelock==3.32.3 --hash=sha256:7f0ca4bcc0e181c60dbbd8aa9ab5b120ebb99e4e064e83636340056f833a1f09
+flatbuffers==25.12.19 --hash=sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4
+fsspec==2026.7.0 --hash=sha256:b57ddbafedfaef7018c1ecab32aa200a9d7ca26b77965f64e48b70061249d279
+h11==0.16.0 --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
+hf_xet==1.6.0 --hash=sha256:3dc3e35441ba395006af5aaacc40ef2e603c51ef46c3530b9156185f00935ea3
+httpcore==1.0.9 --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55
+httpx==0.28.1 --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
+huggingface_hub==1.28.0 --hash=sha256:58a8bacb03072edfc38067065e9dc24bbb34805410fcd36a1632de0b329660bb
+idna==3.19 --hash=sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4
+numpy==2.5.2 --hash=sha256:27650bb0e7140fa3d37b9923b4803645e0b125d190f326eecfd3f4dad8e8ade1
+onnxruntime_genai==0.15.2 --hash=sha256:cb721a38ec3742b54dc816d534272a8da05bbabffbb4b977716fb321a4b9a092
+onnxruntime==1.29.0 --hash=sha256:dc61a79cb39afd66ab3f01fd2c23591a7f01de89c1668e1fb6315067fc279164
+packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+protobuf==7.35.1 --hash=sha256:4bc97768d8fe4ad6743c8a19403e314511ed9f6d13205b687e52421c023ac1b9
+pycparser==3.0 --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+pyyaml==6.0.3 --hash=sha256:64386e5e707d03a7e172c0701abfb7e10f0fb753ee1d773128192742712a98fd
+sherpa_onnx_core==1.13.6 --hash=sha256:36ce28bbcab720627e53befa1adc4573ffb966d9c9ce7d78e260cd8a5edb9103
+sherpa_onnx==1.13.6 --hash=sha256:9832c2dfbd667bcf426d611e691f87803cafcfd6c3c63230a608f8f0eacafe3a
+soundcard==0.4.6 --hash=sha256:ab44b8c1033ac6ec49c5d618ce096dab9b60c7d7a427c92bef15856e5ebb3e09
+sounddevice==0.5.5 --hash=sha256:3861901ddd8230d2e0e8ae62ac320cdd4c688d81df89da036dcb812f757bb3e6
+tqdm==4.70.0 --hash=sha256:7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953
+typing_extensions==4.16.0 --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+websockets==17.0.1 --hash=sha256:41d6aa06b5ab832aee72fedf47a149535b121ac900b6bb4d3fe14712afac9a79
+

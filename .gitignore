@@ -53,3 +53,8 @@ bench/latency_table.json
 # Built CUDA release assets. 477 MB of binaries that are published to a GitHub
 # release, never committed; cublasLt alone is 388 MB, past GitHub's 100 MB limit.
 packaging/cuda-assets/
+
+# Build-time downloads for ARM64 staging: the embeddable interpreter and the VCLibs
+# redistributable that carries msvcp140.dll. Fetched by packaging/stage-backend.ps1 and
+# re-fetched if absent, so they are a cache rather than an input.
+packaging/cache/
