@@ -12,6 +12,12 @@
 param(
   [switch]$SkipStage,
   [switch]$SkipPublish,
+  # x64 is the Store SKU. arm64 produces a separate, sideload-only package for Snapdragon
+  # testing: it carries a different Identity/Name so it installs alongside the Store build
+  # instead of replacing it, which also means it cannot burn version space on the Store
+  # channel. Same Publisher, so the same development certificate signs both.
+  [ValidateSet("x64", "arm64")]
+  [string]$Architecture = "x64",
   # Must equal Package/Identity/Publisher in app/Package.appxmanifest or signtool refuses the
   # package with a publisher mismatch. That value is assigned by Partner Center and is not a
   # human-readable name. This certificate is self-signed and only exists so the package can be
@@ -21,9 +27,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root     = Split-Path -Parent $PSScriptRoot
-$staging  = Join-Path $PSScriptRoot "staging\package"
+# Separate staging roots so an ARM layout can never be packed with x64 leftovers, and so
+# building one does not destroy the other.
+$staging  = Join-Path $PSScriptRoot "staging\package$(if ($Architecture -eq 'arm64') { '-arm64' })"
 $out      = Join-Path $PSScriptRoot "out"
 $appProj  = Join-Path $root "app\Sunno.csproj"
+$rid      = if ($Architecture -eq "arm64") { "win-arm64" } else { "win-x64" }
+
+# The sideload-only ARM identity. Only Name changes: a different Name is a different package
+# family, so this installs beside the Store build rather than over it, while an unchanged
+# Publisher keeps the existing dev certificate valid.
+$armIdentityName = "DesigritLabs.SunnoArm64Preview"
+$armVersion      = "1.1.0.0"
 
 function Find-SdkTool([string]$name) {
   $pkg = Get-ChildItem "$env:USERPROFILE\.nuget\packages\microsoft.windows.sdk.buildtools" `
@@ -67,9 +82,10 @@ if (-not $SkipPublish) {
   # identity (which is what enables the per-app microphone toggle and AppCapability) comes
   # from being installed as an MSIX with EntryPoint="Windows.FullTrustApplication", not
   # from a build flag.
-  dotnet publish $appProj -c Release -r win-x64 `
+  dotnet publish $appProj -c Release -r $rid `
     -p:PackageForMsix=true `
     -p:PublishReadyToRun=false `
+    -p:Platform=$(if ($Architecture -eq "arm64") { "ARM64" } else { "x64" }) `
     -o "$staging" 2>&1 | Where-Object { $_ -match 'error|Error' }
   if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 
@@ -91,7 +107,7 @@ if (-not $SkipPublish) {
 if (-not $SkipStage) {
   Write-Host "Staging the Python backend..." -ForegroundColor Cyan
   & (Join-Path $PSScriptRoot "stage-backend.ps1") `
-      -Destination (Join-Path $staging "backend") -Clean
+      -Destination (Join-Path $staging "backend") -Architecture $Architecture -Clean
 } else {
   $existing = Join-Path $staging "backend"
   if (-not (Test-Path $existing)) { throw "-SkipStage given but $existing does not exist." }
@@ -118,7 +134,25 @@ if (-not $SkipStage) {
 }
 
 # ---------------------------------------------------------------- manifest + assets
-Copy-Item (Join-Path $root "app\Package.appxmanifest") (Join-Path $staging "AppxManifest.xml") -Force
+$manifestDst = Join-Path $staging "AppxManifest.xml"
+Copy-Item (Join-Path $root "app\Package.appxmanifest") $manifestDst -Force
+
+if ($Architecture -eq "arm64") {
+  # Rewritten rather than kept as a second checked-in manifest, so the ARM package cannot
+  # drift from the real one: everything except identity, architecture and display name is
+  # whatever app/Package.appxmanifest says today.
+  [xml]$mx = Get-Content $manifestDst
+  $identity = $mx.Package.Identity
+  $identity.Name = $armIdentityName
+  $identity.ProcessorArchitecture = "arm64"
+  $identity.Version = $armVersion
+  # Distinguishable in Start and in the installed-apps list, because both builds can be
+  # present at once and telling them apart is the whole point of testing them side by side.
+  $mx.Package.Properties.DisplayName = "Sunno (ARM64 preview)"
+  $mx.Package.Applications.Application.VisualElements.DisplayName = "Sunno (ARM64 preview)"
+  $mx.Save($manifestDst)
+  Write-Host "  ARM64 identity: $armIdentityName $armVersion (installs beside the Store build)" -ForegroundColor DarkGray
+}
 
 $assetsSrc = Join-Path $root "app\Assets"
 $assetsDst = Join-Path $staging "Assets"
@@ -144,8 +178,17 @@ $size = (Get-ChildItem $staging -Recurse -File | Measure-Object Length -Sum).Sum
 Write-Host ("Payload staged: {0:N0} MB" -f $size)
 
 # ---------------------------------------------------------------- pack
-$msix = Join-Path $out "Sunno.msix"
+$msix = Join-Path $out "$(if ($Architecture -eq 'arm64') { 'Sunno-arm64' } else { 'Sunno' }).msix"
 if (Test-Path $msix) { Remove-Item $msix -Force }
+
+# Nothing here can be run on the target machine from this build host, so architecture is
+# asserted statically instead. This is the check that makes an ARM package defensible without
+# ARM hardware: a single x64 binary anywhere in the layout fails the build rather than
+# failing at launch on a machine the developer does not have.
+Write-Host "Verifying every PE binary is $Architecture..." -ForegroundColor Cyan
+& (Join-Path $root ".venv\Scripts\python.exe") (Join-Path $PSScriptRoot "verify_pe_arch.py") `
+    $staging --expected $Architecture
+if ($LASTEXITCODE -ne 0) { throw "Mixed-architecture payload; refusing to pack." }
 
 # A second onnxruntime.dll at the package root hijacks sherpa-onnx's own copy and crashes the
 # backend with an access violation only once installed — never in the staged tree. Fail the
@@ -186,8 +229,20 @@ $pwd = ConvertTo-SecureString -String "Sunno-dev" -Force -AsPlainText
 Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pwd | Out-Null
 Export-Certificate  -Cert $cert -FilePath $cer | Out-Null
 
-& $signtool sign /fd SHA256 /a /f $pfx /p "Sunno-dev" $msix
-if ($LASTEXITCODE -ne 0) { throw "signtool failed ($LASTEXITCODE)" }
+# Retried rather than failed on first attempt. signtool opens the package for write, and on
+# a freshly packed 200 MB file the on-access virus scanner is often still holding it - which
+# surfaces as "The file is being used by another process" and throws away an otherwise
+# complete build. Observed on the first ARM64 build.
+$signed = $false
+foreach ($attempt in 1..4) {
+  & $signtool sign /fd SHA256 /a /f $pfx /p "Sunno-dev" $msix
+  if ($LASTEXITCODE -eq 0) { $signed = $true; break }
+  if ($attempt -lt 4) {
+    Write-Host "  signtool busy, retrying in $($attempt * 5)s..." -ForegroundColor DarkGray
+    Start-Sleep -Seconds ($attempt * 5)
+  }
+}
+if (-not $signed) { throw "signtool failed after 4 attempts ($LASTEXITCODE)" }
 
 $mb = (Get-Item $msix).Length / 1MB
 Write-Host ""
