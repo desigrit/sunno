@@ -15,6 +15,7 @@ import numpy as np
 
 from .capture_target import AudioTarget
 from .config import FRAME_SAMPLES
+from .coreaudio import CaptureError
 
 
 class CaptureProcess:
@@ -287,6 +288,9 @@ class CaptureManager:
                     self.candidate = self.factory(self.target, probe=not wanted, clock=self.clock)
                     self._candidate_revision = self.revision
                     self._announce("switching" if self.active else "recovering")
+                except CaptureError as exc:
+                    self._failed({"code": exc.code, "retryable": exc.retryable, "message": str(exc)})
+                    return
                 except Exception:
                     self._failed({"code": "capture_spawn", "retryable": True,
                                   "message": "Sunno could not start audio capture. It will try again."})

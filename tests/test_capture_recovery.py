@@ -251,6 +251,23 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.manager.snapshot()["code"], "capture_spawn")
         self.assertTrue(self.controller.is_running)
 
+    def test_missing_capture_service_is_blocked_until_explicit_retry(self):
+        attempts = []
+        def missing(*args, **kwargs):
+            attempts.append(1)
+            raise CaptureError("capture_dependency", "The audio service is missing.", False)
+        self.manager.factory = missing
+        self.manager.step()
+        self.assertEqual(self.manager.snapshot()["state"], "blocked")
+        self.assertEqual(self.manager.snapshot()["code"], "capture_dependency")
+        self.clock.advance(100)
+        self.manager.devices_changed()
+        self.manager.step()
+        self.assertEqual(len(attempts), 1)
+        self.manager.retry()
+        self.manager.step()
+        self.assertEqual(len(attempts), 2)
+
     def test_pause_releases_capture_without_stream_reopening(self):
         old = self.start()
         self.controller.pause()
@@ -344,6 +361,17 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.manager.committed.endpoint_id, "new-default")
         self.assertIsNone(self.manager.active)
         self.assertFalse(self.manager.snapshot()["wanted"])
+
+    def test_failed_default_query_keeps_healthy_capture(self):
+        self.manager.target = target(follow=True)
+        old = self.start()
+        self.manager.default_id = lambda _: (_ for _ in ()).throw(
+            CaptureError("device_unavailable", "The device list is temporarily unavailable."))
+        self.manager.devices_changed()
+        self.manager.step()
+        self.assertIs(self.manager.active, old)
+        self.assertIsNone(self.manager.candidate)
+        self.assertEqual(len(self.workers), 1)
 
     def test_failed_default_change_keeps_retrying_with_old_capture(self):
         self.manager.target = target(follow=True)
