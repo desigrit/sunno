@@ -22,7 +22,7 @@ namespace Sunno;
 
 /// <summary>A microphone the backend can capture from.</summary>
 public sealed record AudioDevice(int Index, string Name, string HostApi, bool Loopback = false,
-                                 bool IsDefault = false);
+                                 bool IsDefault = false, string? EndpointId = null, bool FollowDefault = false);
 
 /// <summary>A model shown in first-run setup.</summary>
 public sealed record ModelChoice(string Id, string Name, string Detail, int ApproxMb, bool Available,
@@ -91,6 +91,15 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private CaptionLine? _provisional;
     private int _currentUtterance = -1;
     private bool _running = true;
+    private bool _captureWanted = true;
+    private bool _captureIntentPending;
+    private int _minimumClientSession;
+    private string? _inputRequestId;
+    private AudioInputTarget? _pendingInputTarget, _failedInputTarget;
+    private bool _inputSwitching, _inputNoticeVisible, _inputRecoveryAction, _deviceRefreshPending;
+    private AudioEndpointWatcher? _endpointWatcher;
+    private readonly DispatcherQueueTimer _deviceRefreshTimer;
+    private readonly System.Threading.CancellationTokenSource _windowLifetime = new();
     private bool _suppressDeviceEvent;
     private bool _backendLoading = true;
     /// <summary>Set while a microphone failure is unresolved, so transient status updates
@@ -234,22 +243,41 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _client.Final += ev => _ui.TryEnqueue(() => OnFinal(ev));
         _client.Discarded += id => _ui.TryEnqueue(() => OnDiscarded(id));
         _client.Level += lv => _ui.TryEnqueue(() => OnLevel(lv));
-        _client.Status += st => _ui.TryEnqueue(() => OnStatus(st));
+        _client.Status += st => QueueCurrentClientEvent(() => OnStatus(st));
         _client.Roster += r => _ui.TryEnqueue(() => OnRoster(r));
         // Subscribed and enqueued ahead of the roster it precedes. TryEnqueue preserves order
         // on the dispatcher queue, so the remap always runs before the relabel that depends
         // on it.
         _client.SpeakersMerged += (from, into) => _ui.TryEnqueue(() => OnSpeakersMerged(from, into));
         _client.SpeakerDeleted += (id, label) => _ui.TryEnqueue(() => OnSpeakerDeleted(id, label));
-        _client.ConnectionChanged += ok => _ui.TryEnqueue(() => OnConnection(ok));
+        _client.ConnectionChanged += ok => QueueCurrentClientEvent(() => OnConnection(ok));
         _client.ModelRequired += (device, m, gpu) => _ui.TryEnqueue(() => OnModelRequired(device, m, gpu));
         _client.DownloadProgress += p => _ui.TryEnqueue(() => OnDownloadProgress(p));
         _client.DownloadComplete += _ => _ui.TryEnqueue(OnDownloadComplete);
         _client.DownloadFailed += msg => _ui.TryEnqueue(() => OnDownloadFailed(msg));
         _client.ModelCatalog += (current, device, list, gpu) =>
             _ui.TryEnqueue(() => OnModelCatalog(current, device, list, gpu));
-        _client.Recording += state => _ui.TryEnqueue(() => OnRecordingState(state));
-        _backend.Crashed += (reason, detail) => _ui.TryEnqueue(() => OnBackendCrashed(reason, detail));
+        _client.Recording += state => QueueCurrentClientEvent(() => OnRecordingState(state));
+        _client.Input += state => QueueCurrentClientEvent(() => OnInputState(state));
+        _backend.Crashed += (generation, reason, detail) => _ui.TryEnqueue(() =>
+        {
+            if (generation == _backend.Generation) OnBackendCrashed(reason, detail);
+        });
+        _deviceRefreshTimer = _ui.CreateTimer();
+        _deviceRefreshTimer.Interval = TimeSpan.FromMilliseconds(400);
+        _deviceRefreshTimer.Tick += OnDeviceRefreshTick;
+        DevicePicker.DropDownClosed += async (_, _) =>
+        {
+            if (!_deviceRefreshPending) return;
+            _deviceRefreshPending = false;
+            await LoadDevicesAsync(fresh: true);
+        };
+        try
+        {
+            _endpointWatcher = new AudioEndpointWatcher();
+            _endpointWatcher.Changed += () => _ui.TryEnqueue(ScheduleDeviceRefresh);
+        }
+        catch (Exception ex) { App.Trace($"audio notifications unavailable: {ex.GetType().Name}"); }
 
         Activated += (_, _) => _windowActivated = true;
 
@@ -262,6 +290,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             SaveWindowGeometry();
             _settings.Save();
             MicrophoneAccess.Changed -= OnMicAccessChanged;
+            _windowLifetime.Cancel();
+            _deviceRefreshTimer.Stop();
+            _endpointWatcher?.Dispose();
             _elapsedTimer.Stop();
             _ = _client.DisposeAsync();
             _backend.Dispose();
@@ -287,7 +318,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _micGranted = micStatus is null
                           or AppCapabilityAccessStatus.Allowed
                           or AppCapabilityAccessStatus.UserPromptRequired;
-        _startedPaused = !_micGranted;
+        _startedPaused = !_micGranted && !_settings.IsLoopback;
 
         var error = _backend.Start(
             device: _settings.DeviceIndex?.ToString(),
@@ -300,7 +331,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // Handed straight back so the restart continues the same recording instead of
             // quietly ending it and beginning another. Changing microphone mid-meeting is a
             // normal thing to do and must not cost the file.
-            resumeRecording: _recording ? _activeRecordingFolder : null);
+            resumeRecording: _recording ? _activeRecordingFolder : null,
+            input: _settings.InputTarget);
         // Through the banner, not SetStatus. SetStatus writes to the small elapsed-time label in
         // the corner, which is sized for "1:08" - a failure sentence put there is invisible, so
         // an install missing its engine showed the loading text and nothing else, forever. The
@@ -661,7 +693,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // backend does send "stopped" a frame later, which would clear this anyway, but
             // one frame of "microphone unavailable" beside a spinner saying the microphone is
             // coming up is the exact mixed message this indicator exists to remove.
-            SetDeviceBusy(false);
+            if (!_inputSwitching) SetDeviceBusy(false);
             // And stop the centre promising the same thing. ShowActionableError sets
             // _micProblem, which makes the "stopped" frame arriving next return early to keep
             // the real reason on screen — so nothing downstream ever retires the loading panel,
@@ -690,8 +722,13 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // finished loading and the pipeline is up. "stopped" counts — a switch onto a device
             // while capture is paused still completed, and waiting for "listening" would leave
             // the ring turning until the user pressed play.
-            SetDeviceBusy(false);
+            if (!_inputSwitching) SetDeviceBusy(false);
             CompleteSwitchIfPending();
+        }
+        if (st.State is "recovering" or "waiting" or "switching" or "blocked")
+        {
+            ClearStatus();
+            return;
         }
 
         if (st.State == "listening")
@@ -1098,6 +1135,19 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     private async void OnMicAction(object sender, RoutedEventArgs e)
     {
+        if (_inputRecoveryAction && !_backendFatal)
+        {
+            if (_failedInputTarget is { } failed)
+            {
+                _pendingInputTarget = failed;
+                _inputRequestId = Guid.NewGuid().ToString("N");
+                SetDeviceBusy(true);
+                await SubmitPendingInputAsync();
+            }
+            else if (_captureWanted) await _client.StartCaptureAsync();
+            else await _client.NotifyDevicesChangedAsync();
+            return;
+        }
         // The same button means different things depending on whether Windows will still
         // prompt: asking again is useless once the answer has been recorded.
         if (_crashDetail is not null)
@@ -1206,6 +1256,13 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             return;
         }
 
+        _micGranted = false;
+        if ((_pendingInputTarget ?? _settings.InputTarget).Kind == "loopback")
+        {
+            _micProblem = false;
+            TryStartCapture();
+            return;
+        }
         _micProblem = true;
         // A dead engine outranks a microphone problem, and the state above is still worth
         // recording — the bar just must not be repainted. Two things go wrong otherwise: the
@@ -1297,7 +1354,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // The real gate is _micGranted, which is false for every status Windows records as a
         // refusal. _micDeclined is carried along for symmetry with the two other places that
         // test the pair, but nothing assigns it true any more, so it contributes nothing here.
-        var loopback = _settings.LoopbackDeviceIndex is not null;
+        var loopback = (_pendingInputTarget ?? _settings.InputTarget).Kind == "loopback";
+        if (!_captureWanted) return;
         if (!loopback && (!_micGranted || _micDeclined)) return;
         if (!_startedPaused || _captureRequested || !_connected) return;
         _captureRequested = true;
@@ -1314,6 +1372,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void CompleteSwitchIfPending()
     {
         if (!_awaitingSwitchReconnect || _switchingTo is not { } finished) return;
+        if (_activeModel != finished) return;
 
         // Captured before reset: a recovery's own completion must not dismiss the notice that
         // explains the recovery, or the demotion becomes silent again.
@@ -1634,7 +1693,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _captureRequested = false;
         _connected = false;
         _engineReadyThisSession = false;
-        _startedPaused = !_micGranted || _micDeclined;
+        _minimumClientSession = _client.SessionId + 1;
+        _startedPaused = !_captureWanted ||
+            ((_pendingInputTarget ?? _settings.InputTarget).Kind == "microphone" && (!_micGranted || _micDeclined));
         _awaitingSwitchReconnect = true;
         // Deliberately reviving the engine, so it is no longer dead. Left set, this would
         // outlive the failure it described: the new process's own status frames are ignored
@@ -1649,7 +1710,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // Deliberately NOT persisted yet. A model that downloads but fails to load would
         // otherwise become the choice reloaded on every future launch, turning one bad switch
         // into a crash loop with no way out from inside the app.
-        var error = _backend.Restart(
+        var error = await _backend.RestartAsync(
             device: _settings.DeviceIndex?.ToString(),
             model: id,
             vocabulary: _settings.Vocabulary,
@@ -1660,7 +1721,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // Handed straight back so the restart continues the same recording instead of
             // quietly ending it and beginning another. Changing microphone mid-meeting is a
             // normal thing to do and must not cost the file.
-            resumeRecording: _recording ? _activeRecordingFolder : null);
+            resumeRecording: _recording ? _activeRecordingFolder : null,
+            input: _pendingInputTarget ?? _settings.InputTarget);
 
         if (!string.IsNullOrEmpty(error))
         {
@@ -1779,6 +1841,15 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         EmptyDetail.Text = "The message above explains what happened.";
     }
 
+    private void QueueCurrentClientEvent(Action update)
+    {
+        var session = _client.SessionId;
+        _ui.TryEnqueue(() =>
+        {
+            if (session >= _minimumClientSession && !_windowLifetime.IsCancellationRequested) update();
+        });
+    }
+
     private void OnConnection(bool connected)
     {
         _connected = connected;
@@ -1788,6 +1859,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // Consent may have been granted while the model was still loading; sends are
             // dropped on a closed socket, so this is the other half of that handshake.
             TryStartCapture();
+            _ = SubmitPendingInputAsync();
+            if (_captureIntentPending && _captureWanted) _ = _client.StartCaptureAsync();
+            else if (!_captureWanted) _ = _client.StopCaptureAsync();
 
             // Deliberately NOT where a switch is completed. The backend accepts WebSocket
             // connections before it loads the engine, so "connected" arrives roughly half a
@@ -1798,16 +1872,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 // The picker is always visible now, so it needs its contents up front.
                 _ = _client.RequestModelsAsync();
             }
-            if (DevicePicker.Items.Count == 0)
-            {
-                // Same idea for the microphone list, and for a sharper reason: the device list
-                // is fetched over HTTP once from the constructor, and it gives up after twenty
-                // seconds. A backend that fails to start - a port conflict, say - outlasts that,
-                // so the picker ends up empty. Recovering the engine afterwards brought captions
-                // back but left the user unable to change microphone for the rest of the
-                // session, with an empty dropdown and no explanation.
-                _ = LoadDevicesAsync();
-            }
+            // A reconnect can outlast hardware changes even when the picker is nonempty.
+            _ = LoadDevicesAsync(fresh: DevicePicker.Items.Count > 0);
             return;
         }
         // A dead backend also looks "disconnected", and its reconnect attempts would otherwise
@@ -1960,11 +2026,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void SetRunning(bool running)
     {
         _running = running;
-        ToggleGlyph.Glyph = running ? "\uE769" : "\uE720";   // pause bars / microphone
+        ToggleGlyph.Glyph = _captureWanted ? "\uE769" : "\uE720";
         ToggleButton.SetValue(AutomationProperties.NameProperty,
-            running ? "Pause transcribing and release the microphone" : "Start transcribing");
+            _captureWanted ? "Pause transcribing and release the audio input" : "Start transcribing");
         ToolTipService.SetToolTip(ToggleButton,
-            running ? "Pause transcribing (Space)" : "Start transcribing (Space)");
+            _captureWanted ? "Pause transcribing (Space)" : "Start transcribing (Space)");
 
         if (!running)
         {
@@ -1972,9 +2038,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // frozen, not cleared — resuming continues the same conversation.
             PauseCaptureClock();
             LevelFill.Height = 0;
-            if (_provisional is not null) Lines.Remove(_provisional);
-            _provisional = null;
-            _currentUtterance = -1;
+            if (!_captureWanted)
+            {
+                if (_provisional is not null) Lines.Remove(_provisional);
+                _provisional = null;
+                _currentUtterance = -1;
+            }
         }
     }
 
@@ -2363,11 +2432,16 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     private async Task LoadDevicesAsync(bool fresh = false)
     {
+        if (_windowLifetime.IsCancellationRequested) return;
         // One at a time. The constructor starts a fetch and the reconnect path starts another
         // when the picker is still empty, which on a normal cold start is simply because the
         // first is still polling — two loops then poll the same endpoint every 500 ms and both
         // populate. Harmless but wasteful, and it makes the trace hard to read.
-        if (_loadingDevices) return;
+        if (_loadingDevices)
+        {
+            if (fresh) _deviceRefreshPending = true;
+            return;
+        }
         _loadingDevices = true;
         try
         {
@@ -2378,33 +2452,41 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 List<AudioDevice>? devices = null;
                 try
                 {
-                    // fresh=1 makes the backend re-read the hardware in a child process
-                    // rather than serving what PortAudio cached when it started. It costs
-                    // about half a second, which is why it is only ever asked for by the
-                    // refresh button and never on the startup path.
+                    // Notifications and the refresh button request a new, bounded child
+                    // enumeration. An ordinary startup request can reuse the last good list.
                     var url = "http://127.0.0.1:8765/devices.json" + (fresh ? "?fresh=1" : "");
-                    var json = await _http.GetStringAsync(url);
+                    var json = await _http.GetStringAsync(url, _windowLifetime.Token);
                     devices = ParseDevices(json);
-                    if (fresh && StaleFlagSet(json))
+                    if (StaleFlagSet(json))
                     {
                         // The backend could not re-read and served its cached list instead.
                         // Not surfaced: a slightly out-of-date picker is not worth a warning
                         // bar, and the user can press the button again.
                         App.Trace("device refresh fell back to the cached list");
+                        if (DevicePicker.Items.Count == 0)
+                        {
+                            await Task.Delay(500, _windowLifetime.Token);
+                            continue;
+                        }
+                        return; // A failed refresh cannot erase the current picker.
                     }
                 }
+                catch (OperationCanceledException) when (_windowLifetime.IsCancellationRequested) { return; }
                 catch
                 {
-                    await Task.Delay(500);
+                    try { await Task.Delay(500, _windowLifetime.Token); }
+                    catch (OperationCanceledException) { return; }
                     continue;
                 }
 
-                // isRefresh carries one rule into PopulateDevices: a refresh may change what
-                // the picker shows and what settings record, but must never change what is
-                // being captured. Only the startup path is allowed to correct the selection,
-                // because only there does correcting it mean anything but a restart.
-                if (devices is { Count: > 0 })
-                    _ui.TryEnqueue(() => PopulateDevices(devices, isRefresh: fresh));
+                // Refresh the picker only. The supervisor resolves and confirms selections.
+                if (devices is not null)
+                    _ui.TryEnqueue(() =>
+                    {
+                        if (_windowLifetime.IsCancellationRequested) return;
+                        if (DevicePicker.IsDropDownOpen) _deviceRefreshPending = true;
+                        else PopulateDevices(devices, isRefresh: fresh);
+                    });
                 return;
             }
         }
@@ -2413,6 +2495,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             // Cleared even on the give-up path, so a later reconnect can try again — that is
             // the whole point of the retry from OnConnection.
             _loadingDevices = false;
+            if (_deviceRefreshPending && !DevicePicker.IsDropDownOpen && !_windowLifetime.IsCancellationRequested)
+            {
+                _deviceRefreshPending = false;
+                _ = LoadDevicesAsync(fresh: true);
+            }
         }
     }
 
@@ -2433,8 +2520,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// <summary>
     /// Show that the input device is being changed, in the slot the refresh button occupies.
     ///
-    /// Changing device restarts the backend and reloads the model, which is seconds of no
-    /// captions. The centre panel cannot carry this: it is suppressed whenever a transcript is
+    /// Capture switches independently of the loaded model. The centre panel cannot carry this:
+    /// it is suppressed whenever a transcript is
     /// on screen, which is precisely when someone changes microphone mid-conversation, and
     /// showing it would cover the captions they already have. So the indicator lives beside the
     /// picker that started the wait.
@@ -2504,7 +2591,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 (d.TryGetProperty("is_default_input", out var di) && di.ValueKind == JsonValueKind.True)
                 || (d.TryGetProperty("is_default_output", out var dof) && dof.ValueKind == JsonValueKind.True);
             if (index >= 0 && !string.IsNullOrEmpty(name))
-                result.Add(new AudioDevice(index, name!, api ?? string.Empty, loopback, isDefault));
+                result.Add(new AudioDevice(index, name!, api ?? string.Empty, loopback, isDefault,
+                    d.TryGetProperty("endpoint_id", out var endpoint) ? endpoint.GetString() : null));
         }
         return result;
     }
@@ -2535,11 +2623,13 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             {
                 var label = CleanDeviceName(d.Name);
                 var key = DeviceKey(label);
-                if (key.Length == 0) continue;
+                if (key.Length == 0 && d.EndpointId is null) continue;
                 if (IsDefaultAlias(label)) continue;
 
                 var group = d.Loopback ? speakers : mics;
-                var match = group.FirstOrDefault(e => IsSameDevice(e, key, d.Name.Length));
+                var match = group.FirstOrDefault(e => d.EndpointId is not null
+                    ? e.Device.EndpointId == d.EndpointId
+                    : IsSameDevice(e, key, d.Name.Length));
                 if (match is not null)
                 {
                     // Remember the index anyway: the saved device may be one of the duplicates
@@ -2552,7 +2642,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             }
 
             AddDeviceGroup("Input Device - Microphone", mics);
-            AddDeviceGroup("Input Device - System Audio", speakers);
+            AddDeviceGroup("Input Device - System Audio", speakers, loopback: true);
             SelectActiveDevice();
         }
         finally
@@ -2560,202 +2650,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             _suppressDeviceEvent = false;
         }
 
-        // Only now, with the event no longer suppressed, so that correcting the picker below
-        // runs through the ordinary selection handler — on the startup path. A refresh passes
-        // isRefresh so that correction stays suppressed, because there it would restart a
-        // backend that is already captioning.
-        ValidateRememberedDevice(isRefresh);
     }
 
-    /// <summary>
-    /// Check that the device index we launched on still means the device the user chose.
-    ///
-    /// PortAudio numbers devices by enumeration order, so the numbers move whenever the set of
-    /// audio devices changes. Measured on one machine across two launches: the same Umik-1 went
-    /// from index 30 to 27, and index 26 stopped meaning "Microphone (2- Logitech BRIO)" and
-    /// started meaning "Headset (R-Phonak hearing aid)". Nothing errored. The app simply
-    /// captioned a different microphone than the one on the table, which is the failure this
-    /// product can least afford: it does not look broken, it just gets quietly worse.
-    ///
-    /// Validate rather than resolve. Capture has to start before the device list exists, because
-    /// the list is served by the very process being started, so the index stays the fast path
-    /// and this runs once the list arrives. When it matches, which is the overwhelmingly common
-    /// case, nothing happens at all.
-    ///
-    /// <paramref name="isRefresh"/> carries the one rule a refresh must obey: it may change what
-    /// the picker shows and what settings record, but never what is being captured. At startup
-    /// correcting a rotted index means restarting a backend that has not begun captioning, which
-    /// is right. On a refresh the backend is already holding an open stream on a real device —
-    /// its capture cannot have moved just because an index did — so the same correction would
-    /// buy nothing and cost a model reload, which is captions stopping mid-conversation.
-    /// </summary>
-    private void ValidateRememberedDevice(bool isRefresh = false)
-    {
-        var loopback = _settings.LoopbackDeviceIndex is not null;
-        var wantedIndex = _settings.LoopbackDeviceIndex ?? _settings.DeviceIndex;
-        var wantedName = loopback ? _settings.LoopbackDeviceName : _settings.DeviceName;
-
-        // No remembered device: the system default is in use and there is nothing to check.
-        if (wantedIndex is null) return;
-
-        // Entries for the right kind of device only. /devices.json is a single flat array
-        // holding two different index spaces — microphones are numbered by sounddevice and
-        // loopback endpoints by pyaudiowpatch — and the ranges overlap, so index 27 exists in
-        // both. Comparing across them would measure a microphone against a speaker.
-        var candidates = DevicePicker.Items.OfType<ComboBoxItem>()
-            .Select(i => new { Item = i, Entry = i.Tag as DeviceEntry })
-            .Where(x => x.Entry is not null && x.Entry.Device.Loopback == loopback)
-            .ToList();
-        if (candidates.Count == 0) return;
-
-        var atIndex = candidates.FirstOrDefault(x => x.Entry!.Aliases.Contains(wantedIndex.Value));
-
-        // Upgrading from a build that only stored the index. An absent name is not evidence of
-        // rot, it is evidence of an older settings file, so adopt whatever is there now and
-        // start checking from the next launch. Warning here would fire on every existing
-        // install, about a device that is working perfectly.
-        if (string.IsNullOrEmpty(wantedName))
-        {
-            if (atIndex?.Entry is null) return;
-            if (loopback) _settings.LoopbackDeviceName = atIndex.Entry.Device.Name;
-            else _settings.DeviceName = atIndex.Entry.Device.Name;
-            _settings.Save();
-            // Index and outcome only. The device name is the string Diagnostics refuses to emit,
-            // because "Headset (R-Phonak hearing aid)" discloses that someone wears a hearing
-            // aid, and startup-trace.log survives on disk for the next launch.
-            App.Trace($"device name adopted for existing setting at index {wantedIndex}");
-            return;
-        }
-
-        var wantedKey = DeviceKey(CleanDeviceName(wantedName!));
-        if (wantedKey.Length == 0) return;
-
-        // Exact key comparison, deliberately not IsSameDevice.
-        //
-        // IsSameDevice tolerates a prefix match when the shorter name sits exactly on MME's
-        // 31-character truncation boundary, and it decides that from the *raw* PortAudio name
-        // length. The name stored here has already been cleaned and whitespace-collapsed, so its
-        // length says nothing about truncation: passing it in would let any stored name that
-        // happens to be 31 characters — "Microphone (HD Pro Webcam C920)" is exactly 31 — match
-        // a longer device by prefix. That would silently select a different microphone, which is
-        // the failure this whole change exists to remove.
-        //
-        // The keys being compared were both built by DeviceKey from cleaned names, so equality
-        // is the right test and the truncation tolerance is neither needed nor safe.
-        if (atIndex?.Entry is not null && atIndex.Entry.Key == wantedKey)
-        {
-            // The device is present and the index still means it. On a refresh that may be
-            // news: the notice on screen could be a startup one saying this very device was
-            // missing, and the button they just pressed is what fixed it. Leaving it up would
-            // have the app insisting a device is unavailable while showing it selected — and
-            // the "choose a microphone below" wording is unfollowable in that state, because
-            // the device is already the selected item and re-selecting it raises no event.
-            if (isRefresh) ClearDeviceNotice();
-            return;   // index still means the right device, which is the usual case
-        }
-
-        var correct = candidates.FirstOrDefault(x => x.Entry!.Key == wantedKey);
-
-        if (correct is null)
-        {
-            // The remembered device is not present at all: unplugged, powered off, or renamed by
-            // a driver update. Do not silently substitute another one, which is the behaviour
-            // being fixed here.
-            App.Trace($"remembered device (index {wantedIndex}) not present in this enumeration");
-
-            if (isRefresh)
-            {
-                // Both messages below describe what capture is doing, and both are written from
-                // the startup path where the backend has just opened on the index it was given.
-                // On a refresh the backend has been running for a while and this code cannot see
-                // what it managed to open, so either sentence would be a guess. Telling a deaf
-                // user captions are running when they are not is the single worst thing this
-                // notice can do, so on this path it states only the part that is known.
-                ShowDeviceNotice($"{wantedName} is not available. Choose a device below if you "
-                                 + "want to switch.");
-            }
-            else if (atIndex?.Entry is not null)
-            {
-                // The index still resolves to a real device, so capture is running on that one.
-                ShowDeviceNotice($"{wantedName} is not available, so Sunno is using "
-                                 + $"{atIndex.Entry.Device.Name} instead.");
-            }
-            else
-            {
-                // The index resolves to nothing. Capture is not quietly falling back: the
-                // backend tries every format against the stale index and then raises
-                // MicrophoneOpenError, so nothing is being captured at all. Saying "Sunno is
-                // listening to the default microphone" here would tell a deaf user captioning
-                // was running when it was not, on the one path whose entire purpose is to stop
-                // silent capture failures.
-                ShowDeviceNotice($"{wantedName} is not available. Choose a microphone below to "
-                                 + "start captioning.");
-            }
-            return;
-        }
-
-        App.Trace($"device index {wantedIndex} rotted; correcting to index {correct.Entry!.Device.Index}");
-
-        if (isRefresh)
-        {
-            // Same correction, without the restart.
-            //
-            // The backend is already captioning from an open stream, which an index moving
-            // underneath it cannot change — so there is nothing to restart it for, and doing so
-            // would reload the model and stop captions mid-conversation for the crime of
-            // plugging in an unrelated device.
-            //
-            // Both index/name pairs are updated, not just the microphone one. Someone captioning
-            // system audio has their device recorded in LoopbackDeviceIndex, and leaving that to
-            // rot while fixing only DeviceIndex would protect the path they are not using.
-            //
-            // Known gap, left deliberately: if the captured device is unplugged and a device with
-            // an identical cleaned name appears in the same refresh, this rewrites the index to
-            // the new one while the backend still holds the dead one, and says nothing because
-            // the name matched. It needs two identically named devices and a swap between two
-            // presses of the button. The honest fix is recovering capture when the active device
-            // disappears, which is a larger change than a picker refresh.
-            var newIndex = correct.Entry!.Device.Index;
-            if (loopback)
-            {
-                _settings.LoopbackDeviceIndex = newIndex;
-                _settings.LoopbackDeviceName = correct.Entry.Device.Name;
-            }
-            else
-            {
-                _settings.DeviceIndex = newIndex;
-                _settings.DeviceName = correct.Entry.Device.Name;
-            }
-            // Without this the rewrite is decoration: the next launch would read the stale index
-            // out of settings.json and hand it to the backend, which is the divergence this is
-            // supposed to prevent, just deferred by one restart.
-            _settings.Save();
-
-            _suppressDeviceEvent = true;
-            try
-            {
-                DevicePicker.SelectedItem = correct.Item;
-            }
-            finally
-            {
-                _suppressDeviceEvent = false;
-            }
-
-            // The device was found, so retire any notice claiming it was missing — including
-            // the one this same method may have raised at startup, which is the case the
-            // refresh button exists to resolve.
-            ClearDeviceNotice();
-            return;
-        }
-
-        // Hand this to the ordinary selection handler rather than restarting the backend here.
-        // OnDeviceChanged does six things before it restarts — clears status, pauses the capture
-        // clock, and resets _captureRequested, _connected, _engineReadyThisSession and
-        // _startedPaused. Restarting directly at this point, which is seconds after launch and
-        // after consent has already latched _captureRequested, would bring the backend up paused
-        // with nothing left to un-pause it: no error on screen and no captions, ever.
-        DevicePicker.SelectedItem = correct.Item;
-    }
 
     /// <summary>
     /// Tell the user their remembered microphone is gone, without implying something broke.
@@ -2849,62 +2745,31 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// </summary>
     private void SelectActiveDevice()
     {
-        var wanted = _settings.LoopbackDeviceIndex ?? _settings.DeviceIndex;
-        var loopback = _settings.LoopbackDeviceIndex is not null;
-        if (wanted is null)
-        {
-            SelectSystemDefaultDevice();
-            return;
-        }
-
-        foreach (var item in DevicePicker.Items.OfType<ComboBoxItem>())
-        {
-            if (item.Tag is not DeviceEntry entry) continue;
-            if (entry.Device.Loopback != loopback) continue;
-            if (!entry.Aliases.Contains(wanted.Value)) continue;
-            DevicePicker.SelectedItem = item;
-            // The closed picker truncates; the full name is only otherwise visible with the
-            // list open, and the status line no longer carries it.
-            ToolTipService.SetToolTip(DevicePicker, entry.Device.Loopback
-                ? $"Captioning system audio from {entry.Device.Name}"
-                : $"Captioning the microphone {entry.Device.Name}");
-            return;
-        }
+        var target = _pendingInputTarget ?? _settings.InputTarget;
+        var items = DevicePicker.Items.OfType<ComboBoxItem>()
+            .Where(item => item.Tag is DeviceEntry entry
+                && entry.Device.Loopback == (target.Kind == "loopback")).ToList();
+        var selected = items.FirstOrDefault(item => item.Tag is DeviceEntry entry &&
+            (target.FollowDefault ? entry.Device.FollowDefault
+                : target.EndpointId is not null ? entry.Device.EndpointId == target.EndpointId
+                : target.Name is not null && DeviceKey(entry.Device.Name) == DeviceKey(target.Name)));
+        DevicePicker.SelectedItem = selected;
+        ToolTipService.SetToolTip(DevicePicker, target.FollowDefault
+            ? (target.Kind == "loopback" ? "Windows default (Output)" : "Windows default (Input)")
+                + (target.Name is null ? "" : $": {CleanDeviceName(target.Name)}")
+            : selected is ComboBoxItem { Tag: DeviceEntry entry } ? entry.Device.Name
+            : "The selected input is unavailable. Sunno will reconnect when it returns.");
     }
 
-    /// <summary>
-    /// Name the microphone nobody chose.
-    ///
-    /// On a first run there is no saved device, so the picker used to sit on its placeholder
-    /// while the backend quietly captured whatever Windows had set as the default. The app
-    /// was working and unable to say so — for someone who cannot hear the room, "which
-    /// microphone is this actually listening to" is not a curiosity, it is the difference
-    /// between trusting a blank transcript and not.
-    ///
-    /// Selected under the existing event suppression, since this describes the device the
-    /// backend already opened. Assigning it unsuppressed would hand it to OnDeviceChanged,
-    /// which persists a choice the user never made and restarts a backend that is mid-launch.
-    /// </summary>
-    private void SelectSystemDefaultDevice()
+    private void SelectActiveDeviceSafely()
     {
-        foreach (var item in DevicePicker.Items.OfType<ComboBoxItem>())
-        {
-            if (item.Tag is not DeviceEntry entry) continue;
-            // Microphones only. An output endpoint can be flagged as the default place sound
-            // is played to, which is a different question from what to capture, and starting
-            // a new user on their speakers would caption the room's silence.
-            if (entry.Device.Loopback || !entry.Device.IsDefault) continue;
-            DevicePicker.SelectedItem = item;
-            ToolTipService.SetToolTip(DevicePicker,
-                $"Captioning the microphone {entry.Device.Name}, your Windows default");
-            return;
-        }
+        _suppressDeviceEvent = true;
+        try { SelectActiveDevice(); }
+        finally { _suppressDeviceEvent = false; }
     }
 
-    private void AddDeviceGroup(string header, List<DeviceEntry> group)
+    private void AddDeviceGroup(string header, List<DeviceEntry> group, bool loopback = false)
     {
-        if (group.Count == 0) return;
-
         // A disabled item is the only way to get a non-selectable header into a ComboBox;
         // it is skipped by keyboard navigation as well as by pointer.
         DevicePicker.Items.Add(new ComboBoxItem
@@ -2914,16 +2779,34 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             FontSize = 11,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
         });
+        DevicePicker.Items.Add(new ComboBoxItem
+        {
+            Content = loopback ? "Windows default (Output)" : "Windows default (Input)",
+            Tag = new DeviceEntry(new AudioDevice(-1,
+                loopback ? "Windows default (Output)" : "Windows default (Input)",
+                "Windows WASAPI", loopback, true, null, true), "", 0),
+        });
 
+        var duplicates = group.GroupBy(entry => entry.Device.Name, StringComparer.OrdinalIgnoreCase)
+            .Where(entries => entries.Count() > 1).Select(entries => entries.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ordinals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in group)
         {
             var d = entry.Device;
+            var label = d.Name;
+            if (duplicates.Contains(label))
+            {
+                ordinals.TryGetValue(label, out var ordinal);
+                ordinals[label] = ++ordinal;
+                label = $"{label} ({ordinal})";
+            }
             // Marked in the label rather than only in the tooltip. This is the entry someone
             // lands on without choosing anything, and the one to come back to after trying
             // others, so it has to be findable with the list open and no pointer hovering.
             var item = new ComboBoxItem
             {
-                Content = d.IsDefault ? $"{d.Name}  ·  Windows default" : d.Name,
+                Content = d.IsDefault ? $"{label}  ·  Windows default" : label,
                 Tag = entry,
             };
             DevicePicker.Items.Add(item);
@@ -3014,71 +2897,161 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         name.StartsWith("Primary Sound Capture Driver", StringComparison.OrdinalIgnoreCase) ||
         name.StartsWith("Primary Sound Driver", StringComparison.OrdinalIgnoreCase);
 
-    private void OnDeviceChanged(object sender, SelectionChangedEventArgs e)
+    private async void OnDeviceChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressDeviceEvent) return;
         if (DevicePicker.SelectedItem is not ComboBoxItem { Tag: DeviceEntry entry }) return;
         var device = entry.Device;
-
-        // Choosing a device is the remedy the device notice asks for, so retire it here.
-        // Otherwise it would survive its own instruction and keep naming a device that is no
-        // longer the one being captured.
         ClearDeviceNotice();
-
-        ToolTipService.SetToolTip(DevicePicker, device.Loopback
-            ? $"Captioning system audio from {device.Name}"
-            : $"Captioning the microphone {device.Name}");
-
-        _settings.DeviceIndex = device.Loopback ? null : device.Index;
-        _settings.LoopbackDeviceIndex = device.Loopback ? device.Index : null;
-        // Record the name as well as the index. The index is what gets passed to the backend at
-        // launch, but it is only valid for as long as the machine's device set is unchanged;
-        // the name is what lets the next launch tell whether that index still means this device.
-        // Taken from entry.Device.Name, which is the cleaned label the picker itself shows, so
-        // it can be compared later with the same matching rules that built this list.
-        _settings.DeviceName = device.Loopback ? null : device.Name;
-        _settings.LoopbackDeviceName = device.Loopback ? device.Name : null;
-        _settings.Save();
-
-        // Switching capture device means restarting the backend; the model reload is the slow
-        // part, so say so rather than appear hung.
-        //
-        // Restart, never Dispose+Start. Dispose tears down the job object permanently and
-        // latches _stopping, so a Start afterwards leaves the new capture process untied to
-        // kill-on-close (it would outlive a killed UI still holding the microphone) and with
-        // crash reporting silently dead for the rest of the session.
-        //
-        // Two indicators, because neither covers both cases. The centre panel carries the
-        // wait when there is no transcript yet, and is deliberately suppressed once there is
-        // one, so it cannot cover captions the user already has. The ring by the picker
-        // covers the case the centre panel will not: a device changed in the middle of a
-        // conversation, where the only other feedback is the transcript stopping.
-        ClearStatus();
-        PauseCaptureClock();
-        ShowLoadingState($"Switching to {device.Name}");
+        ClearInputNotice();
+        _failedInputTarget = null;
+        _pendingInputTarget = new AudioInputTarget(device.Loopback ? "loopback" : "microphone",
+            device.EndpointId, device.FollowDefault ? null : device.Name,
+            device.FollowDefault ? null : device.Index, device.FollowDefault);
+        _inputRequestId = Guid.NewGuid().ToString("N");
+        _inputSwitching = true;
         SetDeviceBusy(true);
-
-        _captureRequested = false;
-        _connected = false;
-        _engineReadyThisSession = false;
-        _startedPaused = !_micGranted || _micDeclined;
-        ClearBackendFatal();   // see SwitchModelAsync: a deliberate restart un-kills the engine
-
-        var error = _backend.Restart(
-            device: device.Loopback ? null : device.Index.ToString(),
-            model: _settings.Model,
-            vocabulary: _settings.Vocabulary,
-            startStopped: _startedPaused,
-            loopbackDevice: device.Loopback ? device.Index : null,
-            computeDevice: _settings.ForceCpu ? "cpu" : "auto",
-            recordingsPath: _settings.RecordingsPath,
-            // Handed straight back so the restart continues the same recording instead of
-            // quietly ending it and beginning another. Changing microphone mid-meeting is a
-            // normal thing to do and must not cost the file.
-            resumeRecording: _recording ? _activeRecordingFolder : null);
-        if (!string.IsNullOrEmpty(error)) ShowFatalBackendError(error);
+        ShowLoadingState("Switching input");
+        await SubmitPendingInputAsync();
+        TryStartCapture();
     }
 
+    private async Task SubmitPendingInputAsync()
+    {
+        if (_pendingInputTarget is not { } target || _inputRequestId is not { } requestId) return;
+        var sent = await _client.SetInputAsync(target, requestId);
+        if (!sent && _inputRequestId == requestId && !_backendFatal)
+            ShowInputNotice("Waiting for the speech engine",
+                "Your input change will be applied when the connection returns.", false);
+    }
+
+    private void OnInputState(InputStateEvent state)
+    {
+        if (_backendFatal) return;
+        if (_inputRequestId is not null && state.RequestId != _inputRequestId) return;
+        if (state.State == "rejected")
+        {
+            _failedInputTarget = _pendingInputTarget;
+            _pendingInputTarget = null;
+            _inputRequestId = null;
+            _inputSwitching = false;
+            SetDeviceBusy(false);
+            SelectActiveDeviceSafely();
+            ShowInputNotice("Input change could not be applied",
+                state.Message ?? "Choose another input or try again.", true);
+            return;
+        }
+        _engineReadyThisSession = true;
+        CompleteSwitchIfPending();
+
+        if (_captureIntentPending)
+        {
+            if (_captureWanted == state.Wanted) _captureIntentPending = false;
+        }
+        else if (!_startedPaused || _captureRequested) _captureWanted = state.Wanted;
+        SetRunning(state.Running);
+        if (state.Committed && state.Target is { } target)
+        {
+            if (state.State == "failed") _failedInputTarget = _pendingInputTarget;
+            if (_settings.InputTarget != target)
+            {
+                _settings.RememberInput(target);
+                _settings.Save();
+            }
+            _pendingInputTarget = null;
+            _inputRequestId = null;
+            SelectActiveDeviceSafely();
+        }
+        _inputSwitching = state.State is "switching" or "recovering" or "waiting";
+        SetDeviceBusy(_inputSwitching);
+        if (!state.Wanted && _captureWanted && !_micGranted && state.Target?.Kind == "microphone"
+            && _micStatus is AppCapabilityAccessStatus.DeniedByUser or AppCapabilityAccessStatus.DeniedBySystem
+                or AppCapabilityAccessStatus.NotDeclaredByApp)
+        {
+            _inputSwitching = false;
+            SetDeviceBusy(false);
+            ApplyMicrophoneStatus(_micStatus);
+            return;
+        }
+        switch (state.State)
+        {
+            case "ready":
+            case "selected":
+            case "paused":
+                _micProblem = false;
+                ClearInputNotice();
+                if (state.Running) { ShowReadyState(); ShowElapsed(); }
+                else ShowIdleState();
+                break;
+            case "switching":
+            case "recovering":
+            case "waiting":
+                if (!state.Running) ShowLoadingState(state.Wanted ? "Reconnecting audio" : "Checking input");
+                ShowInputNotice(!state.Wanted ? "Checking input"
+                    : state.State == "switching" ? "Switching input" : "Reconnecting audio",
+                    state.Message ?? (state.Running
+                        ? "The current input stays active until the new one is ready."
+                        : state.Wanted ? "Sunno will resume automatically when this input is available."
+                        : "Capture stays paused while Sunno checks this input."), false);
+                break;
+            case "blocked":
+                if (!state.Running) ShowFailedState();
+                ShowInputNotice("Audio needs your attention",
+                    state.Message ?? "Choose another input or try again.", true);
+                if (state.Code == "capture_denied" && state.Target?.Kind == "microphone")
+                {
+                    _inputRecoveryAction = false;
+                    _micProblem = true;
+                    _captureRequested = false;
+                    _startedPaused = true;
+                    MicActionLink.Content = "Open Settings";
+                    MicActionLink.Visibility = Visibility.Visible;
+                }
+                break;
+            case "failed":
+                ShowInputNotice("Input change did not complete",
+                    state.Message ?? "The previous input is still running.", true);
+                break;
+        }
+    }
+
+    private void ShowInputNotice(string title, string message, bool retry)
+    {
+        _inputNoticeVisible = true;
+        _inputRecoveryAction = retry;
+        _infoSticky = true;
+        MicInfoBar.Severity = retry ? InfoBarSeverity.Warning : InfoBarSeverity.Informational;
+        MicInfoBar.Title = title;
+        MicInfoBar.Message = message;
+        MicActionLink.Content = "Try again";
+        MicActionLink.Visibility = retry ? Visibility.Visible : Visibility.Collapsed;
+        MicInfoBar.IsOpen = true;
+    }
+
+    private void ClearInputNotice()
+    {
+        if (!_inputNoticeVisible) return;
+        _inputNoticeVisible = false;
+        _inputRecoveryAction = false;
+        _infoSticky = false;
+        MicInfoBar.IsOpen = false;
+    }
+
+    private void ScheduleDeviceRefresh()
+    {
+        if (_windowLifetime.IsCancellationRequested) return;
+        _deviceRefreshTimer.Stop();
+        _deviceRefreshTimer.Start();
+    }
+
+    private async void OnDeviceRefreshTick(DispatcherQueueTimer sender, object args)
+    {
+        sender.Stop();
+        await _client.NotifyDevicesChangedAsync();
+        if (_windowLifetime.IsCancellationRequested) return;
+        if (DevicePicker.IsDropDownOpen) _deviceRefreshPending = true;
+        else await LoadDevicesAsync(fresh: true);
+    }
     // ---------- compact mode ----------
 
     private bool _compact;
@@ -3341,7 +3314,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     /// </summary>
     private async void OnToggleCapture(object sender, RoutedEventArgs e)
     {
-        if (!_running)
+        _captureWanted = !_captureWanted;
+        _captureIntentPending = true;
+        if (_captureWanted)
         {
             _micDeclined = false;
             _micGranted = true;
@@ -3351,7 +3326,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 MicInfoBar.IsOpen = false;
             }
         }
-        await _client.ToggleAsync();
+        SetRunning(_running);
+        if (_captureWanted) await _client.StartCaptureAsync();
+        else await _client.StopCaptureAsync();
     }
 
     private void OnBigger(object sender, RoutedEventArgs e) => SetFontSize(CaptionSize + 3);

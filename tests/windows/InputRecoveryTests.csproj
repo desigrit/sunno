@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Compile Include="../../app/Services/CaptionClient.cs" Link="CaptionClient.cs" />
+    <Compile Include="../../app/Services/AppSettings.cs" Link="AppSettings.cs" />
+    <Compile Include="../../app/Services/AudioEndpointWatcher.cs" Link="AudioEndpointWatcher.cs" />
+    <Compile Include="../../app/Models/CaptionLine.cs" Link="CaptionLine.cs" />
+  </ItemGroup>
+</Project>

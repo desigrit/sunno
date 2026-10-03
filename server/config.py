@@ -99,6 +99,10 @@ class Settings:
     # A WASAPI loopback endpoint index. When set it replaces the microphone, so what is
     # played through that output gets captioned instead of what is spoken.
     loopback_device: int | None = None
+    input_kind: str | None = None
+    input_endpoint_id: str | None = None
+    input_device_name: str | None = None
+    follow_default_input: bool = False
 
     # Where a recording is written when the user presses record. None means the default in
     # recorder.default_root(). Nothing is created until a recording actually starts, so an

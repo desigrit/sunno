@@ -9,8 +9,8 @@ record, and the directory is only created then. An install that never records le
 **A recording ends when the user says so, and not before.** Pausing, switching microphone,
 changing model and a dropped USB cable all stop capture, and none of them should end a
 recording: they should leave a gap in it. Pause and a transient failure keep the same process,
-so the Recorder simply stops being fed. Changing device or model restarts the backend
-entirely, so a recording has to be re-openable across processes -- which is why the audio is
+so the Recorder simply stops being fed. Changing device keeps this Recorder alive. Changing
+model restarts the backend, so a recording has to be re-openable across processes, which is why the audio is
 appended as raw PCM rather than written through a container that owns its own header.
 
 **A crash must not cost the meeting.** The scenario this exists for is a conversation that

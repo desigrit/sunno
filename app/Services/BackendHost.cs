@@ -12,6 +12,9 @@ namespace Sunno.Services;
 public sealed class BackendHost : IDisposable
 {
     private Process? _process;
+    private readonly SemaphoreSlim _restartLock = new(1, 1);
+    private int _generation;
+    public int Generation => _generation;
     private readonly ChildProcessJob _job = new();
     private readonly List<string> _log = new();
     private readonly object _logLock = new();
@@ -32,12 +35,19 @@ public sealed class BackendHost : IDisposable
     /// on "Starting the speech engine…" forever.
     /// </summary>
     /// <summary>Fired when the backend exits unexpectedly: a human reason, and the detail.</summary>
-    public event Action<string, string>? Crashed;
+    public event Action<int, string, string>? Crashed;
 
     /// <summary>Set during Dispose so a deliberate shutdown isn't reported as a crash.</summary>
     private bool _stopping;
 
-    public bool IsRunning => _process is { HasExited: false };
+    public bool IsRunning
+    {
+        get
+        {
+            try { return _process is { HasExited: false }; }
+            catch (InvalidOperationException) { return false; }
+        }
+    }
 
     /// <summary>Where the app is installed. Read-only when packaged as MSIX.</summary>
     private static string InstallRoot => AppContext.BaseDirectory;
@@ -120,7 +130,7 @@ public sealed class BackendHost : IDisposable
     public string Start(string? device = null, string model = "large-v3", string? vocabulary = null,
                         bool startStopped = false, int? loopbackDevice = null,
                         string? computeDevice = null, string? recordingsPath = null,
-                        string? resumeRecording = null)
+                        string? resumeRecording = null, AudioInputTarget? input = null)
     {
         if (IsRunning) return "already running";
 
@@ -160,6 +170,13 @@ public sealed class BackendHost : IDisposable
         }
 
         var args = new List<string> { "-m", "server.app", "--model", model };
+        if (input is not null)
+        {
+            args.Add("--input-kind"); args.Add(input.Kind);
+            if (input.FollowDefault) args.Add("--follow-default");
+            if (!string.IsNullOrWhiteSpace(input.EndpointId)) { args.Add("--endpoint-id"); args.Add(input.EndpointId); }
+            if (!string.IsNullOrWhiteSpace(input.Name)) { args.Add("--device-name"); args.Add(input.Name); }
+        }
         if (!string.IsNullOrWhiteSpace(device)) { args.Add("--device"); args.Add(device); }
         // Only so the backend can finish a recording the last run was killed during. Every
         // recording that starts normally carries its own destination on the command that
@@ -169,8 +186,8 @@ public sealed class BackendHost : IDisposable
             args.Add("--recordings-path");
             args.Add(recordingsPath);
         }
-        // A recording that was running when the backend was restarted for a new microphone
-        // or model. The new process reopens that folder and appends, so the restart shows up
+        // A recording that was running when the backend was restarted for a new model.
+        // The new process reopens that folder and appends, so the restart shows up
         // as a gap in the audio rather than as the end of the recording. It also tells the
         // backend not to treat that folder as an orphan to be finalised on startup.
         if (!string.IsNullOrWhiteSpace(resumeRecording))
@@ -215,24 +232,25 @@ public sealed class BackendHost : IDisposable
             psi.Environment["MSIX_PACKAGE_ROOT"] = InstallRoot;
         }
 
-        _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        _process.OutputDataReceived += (_, e) => Record(e.Data);
-        _process.ErrorDataReceived += (_, e) => Record(e.Data);
-        _process.Exited += (_, _) =>
+        var generation = Interlocked.Increment(ref _generation);
+        var launched = _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        launched.OutputDataReceived += (_, e) => { if (ReferenceEquals(_process, launched)) Record(e.Data); };
+        launched.ErrorDataReceived += (_, e) => { if (ReferenceEquals(_process, launched)) Record(e.Data); };
+        launched.Exited += (_, _) =>
         {
-            if (_stopping) return;
+            if (_stopping || !ReferenceEquals(_process, launched)) return;
             var code = -1;
-            try { code = _process?.ExitCode ?? -1; } catch { /* raced with disposal */ }
+            try { code = launched.ExitCode; } catch { /* raced with disposal */ }
             var (reason, detail) = DescribeExit(code);
-            Crashed?.Invoke(reason, detail);
+            Crashed?.Invoke(generation, reason, detail);
         };
 
         try
         {
-            _process.Start();
+            launched.Start();
             // Tie the child to this process at the kernel level, so the microphone is
             // released even if the UI is killed rather than closed cleanly.
-            if (!_job.Assign(_process))
+            if (!_job.Assign(launched))
             {
                 // Never leave an unsupervised capture process behind: a backend outside the
                 // job survives a killed UI still holding the microphone open. Suppress the
@@ -245,12 +263,15 @@ public sealed class BackendHost : IDisposable
                 _stopping = false;
                 return "Could not supervise the speech engine; not starting it.";
             }
-            _process.BeginOutputReadLine();
-            _process.BeginErrorReadLine();
+            launched.BeginOutputReadLine();
+            launched.BeginErrorReadLine();
         }
         catch (Exception ex)
         {
-            _process = null;
+            if (ReferenceEquals(_process, launched)) _process = null;
+            try { if (!launched.HasExited) launched.Kill(entireProcessTree: true); }
+            catch { /* no child started, or it already exited */ }
+            launched.Dispose();
             // Same split as DescribeExit: a friendly sentence on screen, the exception text kept
             // for whoever reads the bug report. It goes to App.Trace, not Record, because this
             // failure means no process ever started - nothing will call DescribeExit, so the
@@ -277,7 +298,7 @@ public sealed class BackendHost : IDisposable
     public string Restart(string? device, string model, string? vocabulary,
                           bool startStopped = false, int? loopbackDevice = null,
                           string? computeDevice = null, string? recordingsPath = null,
-                        string? resumeRecording = null)
+                          string? resumeRecording = null, AudioInputTarget? input = null)
     {
         _stopping = true;
         try
@@ -302,7 +323,20 @@ public sealed class BackendHost : IDisposable
             _stopping = false;
         }
         return Start(device, model, vocabulary, startStopped, loopbackDevice, computeDevice,
-                     recordingsPath, resumeRecording);
+                     recordingsPath, resumeRecording, input);
+    }
+
+    public async Task<string> RestartAsync(string? device, string model, string? vocabulary,
+        bool startStopped = false, int? loopbackDevice = null, string? computeDevice = null,
+        string? recordingsPath = null, string? resumeRecording = null, AudioInputTarget? input = null)
+    {
+        await _restartLock.WaitAsync();
+        try
+        {
+            return await Task.Run(() => Restart(device, model, vocabulary, startStopped,
+                loopbackDevice, computeDevice, recordingsPath, resumeRecording, input));
+        }
+        finally { _restartLock.Release(); }
     }
 
     private void Record(string? line)

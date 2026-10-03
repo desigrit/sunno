@@ -87,6 +87,49 @@ out of the shipped payload; `stage-backend.ps1` fails the build if they appear i
 speech-plus-rumble signal, and checks that filter state does not leak between utterances. It
 reports how many signals it ran; the count is higher when `testdata/verify.wav` is present.
 
+## Input switching and recovery
+
+On Windows, capture runs in a disposable child process using native WASAPI shared mode.
+Microphones and system audio are identified by persistent endpoint IDs, not enumeration
+indices. A legacy saved name is resolved before its index; an ambiguous name requires a new
+selection. Each group offers a separate option to follow the Windows default.
+
+The backend keeps one speech engine, ASR worker, speaker roster and recorder alive across input
+changes. A healthy input remains active until its replacement produces its first frame. A
+failed manual switch keeps the previous healthy input and leaves the saved selection intact.
+Rapid changes cancel superseded candidates, and reconnects replay the same request without
+opening another stream. Paused selections only inspect metadata, never open capture.
+
+An opening worker has a six-second deadline and an active worker a three-second heartbeat.
+Transient failures retry after 0.25, 0.5, 1, 2 and then 5 seconds, with hardware notifications
+bypassing the delay. Access denial and unsupported formats wait for user action. Idle system
+audio produces healthy silence while checking for endpoint invalidation. Pinned inputs wait
+for that input to return instead of silently capturing a different microphone. Default mode
+checks Windows every two seconds and reacts sooner to native endpoint notifications.
+
+Workers use the endpoint's native mix format, then downmix and resample to 16 kHz. This avoids
+repeated format probes. Shared-mode buffer capacity is not the capture delay; samples are
+consumed as they arrive. See Microsoft's [shared-mode initialization documentation](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-initialize)
+and [loopback recording documentation](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording).
+Worker audio stays in bounded memory queues. Device names and IDs appear only in local settings
+and UI frames, never in capture diagnostics.
+
+Verification:
+
+```powershell
+python tests/test_capture_recovery.py
+dotnet run --project tests/windows/InputRecoveryTests.csproj
+node tests/test_browser_recovery.js
+# Optional Windows smoke test: enumeration plus loopback audio in memory, no microphone capture.
+$env:SUNNO_TEST_NATIVE_AUDIO = "1"
+python tests/test_capture_recovery.py
+```
+
+The automated checks cover capture hangs, malformed IPC, retry limits, rollback, rapid changes,
+pause safety, default following, Unicode WebSocket frames, reconnect replay and recording
+continuity. Physical USB and Bluetooth disconnects, sample-rate changes, permission revocation
+and sleep/wake still need testing with the affected hardware.
+
 ## Usage
 
 | Command | Effect |

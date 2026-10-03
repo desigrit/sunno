@@ -12,6 +12,8 @@ models/speakers.json
 # Build output
 app/bin/
 app/obj/
+tests/windows/bin/
+tests/windows/obj/
 packaging/staging/
 packaging/out/
 *.msix

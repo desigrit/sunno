@@ -37,6 +37,7 @@ let currentId = null;
 let socket = null;
 let reconnectDelay = 500;
 let running = true;
+let inputState = null;
 
 /* ---------- caption rendering ---------- */
 
@@ -153,20 +154,22 @@ function setState(state, label) {
   els.state.textContent = label || state;
 }
 
-function setRunning(next) {
+function setRunning(next, wanted = next) {
   running = next;
-  els.toggle.dataset.running = String(running);
-  els.toggleLabel.textContent = running ? 'Pause' : 'Start';
-  els.toggle.title = running
-    ? 'Pause transcribing and release the microphone (Space)'
+  els.toggle.dataset.running = String(wanted);
+  els.toggleLabel.textContent = wanted ? 'Pause' : 'Start';
+  els.toggle.title = wanted
+    ? 'Pause transcribing and release the audio input (Space)'
     : 'Start transcribing (Space)';
   els.captions.classList.toggle('stopped', !running);
   els.meter.classList.toggle('stopped', !running);
   if (!running) {
-    // Drop the in-progress line: that audio is deliberately discarded server-side.
-    if (provisionalEl) provisionalEl.remove();
-    provisionalEl = null;
-    currentId = null;
+    if (!wanted) {
+      // A user pause discards audio. A device interruption still finalizes its utterance.
+      if (provisionalEl) provisionalEl.remove();
+      provisionalEl = null;
+      currentId = null;
+    }
     els.meterFill.style.width = '0%';
     els.latency.textContent = '';
   }
@@ -215,11 +218,23 @@ function handle(msg) {
       updateMeter(msg.db, msg.speaking);
       break;
     case 'status':
-      if (typeof msg.running === 'boolean') setRunning(msg.running);
+      if (msg.state === 'starting' || msg.state === 'loading') inputState = null;
+      if (typeof msg.running === 'boolean') setRunning(msg.running, msg.wanted ?? msg.running);
+      if (inputState && ['switching', 'recovering', 'waiting', 'blocked', 'failed'].includes(inputState.state)) break;
       if (msg.state === 'loading') setState('loading', `loading ${msg.model || ''}`.trim());
-      else if (msg.state === 'stopped') setState('stopped', 'paused — mic released');
+      else if (msg.state === 'stopped') setState('stopped', 'paused, input released');
       else if (msg.state === 'listening') setState('listening', msg.device || 'listening');
       else setState(msg.state, msg.state);
+      break;
+    case 'input':
+      if (msg.state === 'rejected') break;
+      inputState = msg;
+      setRunning(msg.running, msg.wanted);
+      setState(msg.running ? 'listening' : msg.wanted ? 'loading' : 'stopped',
+        msg.state === 'ready' ? (msg.active?.name || 'listening')
+        : ['selected', 'paused'].includes(msg.state) ? 'paused, input released'
+        : msg.message || (msg.running ? 'switching input'
+        : msg.wanted ? 'reconnecting audio' : 'checking input, capture stays paused'));
       break;
     case 'error':
       if (typeof msg.running === 'boolean') setRunning(msg.running);

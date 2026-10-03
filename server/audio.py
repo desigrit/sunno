@@ -259,6 +259,8 @@ class MicrophoneStream:
         self.dropped_blocks = 0
         self.capture_rate: int = SAMPLE_RATE
         self.capture_channels: int = 1
+        self._closed = False
+        self._last_callback = time.monotonic()
 
     def _device_info(self) -> dict:
         try:
@@ -295,6 +297,9 @@ class MicrophoneStream:
         return ordered
 
     def _callback(self, indata, frames, time_info, status) -> None:  # noqa: ANN001
+        if self._closed:
+            return
+        self._last_callback = time.monotonic()
         if status:
             print(f"[audio] {status}", file=sys.stderr)
         # Copy: PortAudio reuses the buffer after the callback returns.
@@ -343,11 +348,17 @@ class MicrophoneStream:
         raise MicrophoneOpenError(self.device, failures)
 
     def __exit__(self, *exc) -> None:
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
-        self._queue.put(None)
+        self._closed = True
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            try:
+                stream.abort()
+            finally:
+                stream.close()
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass  # The consumer observes _closed; shutdown must not wait for it.
 
     def frames(self, should_continue: Callable[[], bool] | None = None) -> Iterator[np.ndarray]:
         resampler = None
@@ -360,6 +371,8 @@ class MicrophoneStream:
 
         pending = np.zeros(0, dtype=np.float32)
         while True:
+            if self._closed:
+                return
             try:
                 # Time out rather than block forever, so a stalled or unplugged device
                 # can't wedge a pause request.
@@ -367,6 +380,9 @@ class MicrophoneStream:
             except queue.Empty:
                 if should_continue is not None and not should_continue():
                     return
+                if self._stream is not None and (not self._stream.active or
+                                                time.monotonic() - self._last_callback > 2):
+                    raise RuntimeError("The microphone stopped sending audio.")
                 continue
             if block is None:
                 return

@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Sunno.Models;
 
 namespace Sunno.Services;
@@ -14,6 +15,16 @@ public sealed record StatusEvent(string State, bool? Running, string? Model, str
                                  string? Message, string? Code = null);
 
 public sealed record LevelEvent(double Db, bool Speaking);
+
+public sealed record AudioInputTarget(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("endpoint_id")] string? EndpointId,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("index")] int? Index,
+    [property: JsonPropertyName("follow_default")] bool FollowDefault);
+
+public sealed record InputStateEvent(string State, string? RequestId, AudioInputTarget? Target,
+    AudioInputTarget? Active, bool Wanted, bool Running, bool Committed, string? Message, string? Code);
 
 /// <summary>A model offered during first-run setup.</summary>
 public sealed record ModelOption(
@@ -54,6 +65,8 @@ public sealed class CaptionClient : IAsyncDisposable
     private ClientWebSocket? _socket;
     private CancellationTokenSource? _cts;
     private Task? _pump;
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private int _sessionId;
 
     public CaptionClient(string host = "127.0.0.1", int port = 8766)
         => _uri = new Uri($"ws://{host}:{port}");
@@ -95,13 +108,16 @@ public sealed class CaptionClient : IAsyncDisposable
     public event Action<string>? DownloadFailed;
     /// <summary>Recording started, stopped, saved or failed.</summary>
     public event Action<RecordingState>? Recording;
+    public event Action<InputStateEvent>? Input;
 
     public bool IsConnected => _socket?.State == WebSocketState.Open;
+    public int SessionId => Volatile.Read(ref _sessionId);
 
     public void Start()
     {
-        _cts = new CancellationTokenSource();
-        _pump = Task.Run(() => RunAsync(_cts.Token));
+        if (_cts is not null) return;
+        var lifetime = _cts = new CancellationTokenSource();
+        _pump = Task.Run(() => RunAsync(lifetime.Token));
     }
 
     /// <summary>Reconnects with backoff, so the UI survives a backend restart.</summary>
@@ -110,13 +126,15 @@ public sealed class CaptionClient : IAsyncDisposable
         var delay = TimeSpan.FromMilliseconds(400);
         while (!token.IsCancellationRequested)
         {
+            using var socket = new ClientWebSocket();
+            Interlocked.Increment(ref _sessionId);
             try
             {
-                _socket = new ClientWebSocket();
-                await _socket.ConnectAsync(_uri, token);
+                _socket = socket;
+                await socket.ConnectAsync(_uri, token);
                 ConnectionChanged?.Invoke(true);
                 delay = TimeSpan.FromMilliseconds(400);
-                await ReceiveLoopAsync(_socket, token);
+                await ReceiveLoopAsync(socket, token);
             }
             catch (OperationCanceledException)
             {
@@ -125,6 +143,10 @@ public sealed class CaptionClient : IAsyncDisposable
             catch
             {
                 // Backend not up yet, or it dropped. Fall through and retry.
+            }
+            finally
+            {
+                if (ReferenceEquals(_socket, socket)) _socket = null;
             }
 
             ConnectionChanged?.Invoke(false);
@@ -137,21 +159,23 @@ public sealed class CaptionClient : IAsyncDisposable
     private async Task ReceiveLoopAsync(ClientWebSocket socket, CancellationToken token)
     {
         var buffer = new byte[64 * 1024];
-        var builder = new StringBuilder();
+        using var message = new MemoryStream();
 
         while (socket.State == WebSocketState.Open && !token.IsCancellationRequested)
         {
-            builder.Clear();
+            message.SetLength(0);
             WebSocketReceiveResult result;
             do
             {
                 result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), token);
                 if (result.MessageType == WebSocketMessageType.Close) return;
-                builder.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+                message.Write(buffer, 0, result.Count);
+                if (message.Length > 1024 * 1024) throw new WebSocketException("Caption message is too large.");
             }
             while (!result.EndOfMessage);
 
-            try { Dispatch(builder.ToString()); }
+            if (result.MessageType != WebSocketMessageType.Text) continue;
+            try { Dispatch(Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length)); }
             catch (JsonException) { /* skip a malformed frame rather than drop the socket */ }
         }
     }
@@ -160,10 +184,19 @@ public sealed class CaptionClient : IAsyncDisposable
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        var type = root.GetProperty("type").GetString();
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("type", out var typeValue)
+            || typeValue.ValueKind != JsonValueKind.String) return;
+        var type = typeValue.GetString();
 
         switch (type)
         {
+            case "input":
+                Input?.Invoke(new InputStateEvent(GetString(root, "state") ?? "unknown",
+                    GetString(root, "request_id"), ParseInputTarget(root, "target"),
+                    ParseInputTarget(root, "active"), GetBool(root, "wanted") ?? false,
+                    GetBool(root, "running") ?? false, GetBool(root, "committed") ?? false,
+                    GetString(root, "message"), GetString(root, "code")));
+                break;
             case "partial":
             case "final":
             {
@@ -340,6 +373,17 @@ public sealed class CaptionClient : IAsyncDisposable
     public Task ToggleAsync() => SendAsync(new { cmd = "toggle" });
     public Task StartCaptureAsync() => SendAsync(new { cmd = "start" });
     public Task StopCaptureAsync() => SendAsync(new { cmd = "stop" });
+    public Task<bool> SetInputAsync(AudioInputTarget target, string requestId) =>
+        SendAsync(new { cmd = "set_input", target, request_id = requestId });
+    public Task NotifyDevicesChangedAsync() => SendAsync(new { cmd = "devices_changed" });
+
+    private static AudioInputTarget? ParseInputTarget(JsonElement root, string key)
+    {
+        if (!root.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.Object) return null;
+        return new AudioInputTarget(GetString(value, "kind") ?? "microphone",
+            GetString(value, "endpoint_id"), GetString(value, "name"), GetInt(value, "index"),
+            GetBool(value, "follow_default") ?? false);
+    }
 
     public Task RenameSpeakerAsync(int id, string name) =>
         SendAsync(new { cmd = "rename_speaker", id, name });
@@ -353,11 +397,23 @@ public sealed class CaptionClient : IAsyncDisposable
     public Task DeleteSpeakerAsync(int id) =>
         SendAsync(new { cmd = "delete_speaker", id });
 
-    private async Task SendAsync(object payload)
+    private async Task<bool> SendAsync(object payload)
     {
-        if (_socket is not { State: WebSocketState.Open }) return;
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload);
-        await _socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+        await _sendLock.WaitAsync();
+        try
+        {
+            if (_socket is not { State: WebSocketState.Open } socket) return false;
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(payload);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            await socket.SendAsync(bytes, WebSocketMessageType.Text, true, timeout.Token);
+            return true;
+        }
+        catch (Exception ex) when (ex is WebSocketException or OperationCanceledException
+                                      or ObjectDisposedException or InvalidOperationException)
+        {
+            return false;
+        }
+        finally { _sendLock.Release(); }
     }
 
     private static string? GetString(JsonElement e, string name) =>
@@ -378,12 +434,14 @@ public sealed class CaptionClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _cts?.Cancel();
+        var lifetime = Interlocked.Exchange(ref _cts, null);
+        if (lifetime is null) return;
+        lifetime.Cancel();
         if (_pump is not null)
         {
             try { await _pump; } catch { /* shutting down */ }
         }
         _socket?.Dispose();
-        _cts?.Dispose();
+        lifetime.Dispose();
     }
 }

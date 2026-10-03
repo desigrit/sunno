@@ -137,6 +137,13 @@ class LoopbackStream:
         self._lock = threading.Lock()
 
     def __enter__(self) -> "LoopbackStream":
+        try:
+            return self._open()
+        except BaseException:
+            self.__exit__()
+            raise
+
+    def _open(self) -> "LoopbackStream":
         pa = _pyaudio()
         self._audio = pa.PyAudio()
         info = self._audio.get_device_info_by_index(self.device_index)
@@ -175,6 +182,9 @@ class LoopbackStream:
             if self._stream is not None:
                 try:
                     self._stream.stop_stream()
+                except Exception:
+                    pass
+                try:
                     self._stream.close()
                 except Exception:
                     pass
@@ -185,7 +195,10 @@ class LoopbackStream:
                 except Exception:
                     pass
                 self._audio = None
-        self._queue.put(None)
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
 
     @property
     def device_name(self) -> str:

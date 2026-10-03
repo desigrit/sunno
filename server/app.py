@@ -19,12 +19,6 @@ from pathlib import Path
 # enters the handler, so this costs nothing.
 try:
     from . import cuda_setup  # noqa: F401  (must precede ctranslate2 import)
-    from .audio import (
-        MicrophoneOpenError,
-        MicrophoneStream,
-        WavFileStream,
-        print_input_devices,
-    )
 except Exception:
     # The traceback is captured and printed by the reporter rather than left to a bare
     # re-raise: the frontend keeps only the last three diagnostic lines, so anything
@@ -85,13 +79,14 @@ def _fresh_devices() -> list[dict] | None:
     # than assigned so an interpreter that needs its own entries keeps them.
     env = dict(os.environ)
     env["PYTHONPATH"] = root + os.pathsep + env.get("PYTHONPATH", "")
+    env["SUNNO_AUDIO_CHILD"] = "1"
 
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "server.enum_devices"],
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=4,
             cwd=root,
             env=env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -123,6 +118,8 @@ def _fresh_devices() -> list[dict] | None:
 
 class _UiRequestHandler(http.server.SimpleHTTPRequestHandler):
     ws_port: int = 8766
+    _devices_cache: list[dict] | None = None
+    _devices_lock = threading.Lock()
 
     def end_headers(self) -> None:
         # The UI is served from disk and edited in place; browser caching would silently
@@ -136,15 +133,15 @@ class _UiRequestHandler(http.server.SimpleHTTPRequestHandler):
             self._json({"wsPort": self.ws_port})
             return
         if path == "/devices.json":
-            # Lets the UI populate a microphone picker without shelling out to the CLI.
-            from .audio import list_input_devices
-
-            # ?fresh=1 is the refresh button. Without it this serves what PortAudio cached at
-            # startup, which is right for the startup call and wrong for every later one.
+            # Fresh enumeration is bounded and isolated from capture and inference.
             fresh = "fresh=1" in self.path.partition("?")[2].split("&")
-            if fresh:
+            with self._devices_lock:
+                cached = self._devices_cache
+            if fresh or cached is None:
                 devices = _fresh_devices()
                 if devices is not None:
+                    with self._devices_lock:
+                        type(self)._devices_cache = devices
                     self._json({"devices": devices})
                     return
                 # Falling through to the cached list rather than erroring: a slightly stale
@@ -152,33 +149,8 @@ class _UiRequestHandler(http.server.SimpleHTTPRequestHandler):
                 # Flagged so the UI can say so in its log instead of quietly believing this
                 # was a real refresh.
 
-            try:
-                devices = list_input_devices()
-                for d in devices:
-                    d["loopback"] = False
-            except Exception as exc:
-                self._json({"error": str(exc), "devices": []})
-                return
-            # One entry per connected device by the time it gets here: list_input_devices
-            # narrows to the WASAPI enumeration, which is where the legacy host APIs' stale
-            # and duplicate entries were coming from. Plain alphabetical order is all that
-            # is left to do. Sorting WASAPI first, as this did, is now either a no-op or,
-            # on the fallback path, a sort by an API that returned nothing.
-            devices.sort(key=lambda d: d["name"])
-
-            # Output endpoints, so what is being played can be captioned too. Appended after
-            # the microphones and flagged, so the UI can group them rather than mixing two
-            # very different things in one flat list.
-            try:
-                from .loopback import list_loopback_devices
-
-                devices.extend(list_loopback_devices())
-            except Exception:
-                # Loopback is an enhancement; its absence must not break the picker.
-                pass
-
-            payload = {"devices": devices}
-            if fresh:
+            payload = {"devices": cached or []}
+            if fresh or cached is None:
                 payload["stale"] = True
             self._json(payload)
             return
@@ -207,6 +179,10 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     parser = argparse.ArgumentParser(description="Offline live captioning server")
     parser.add_argument("--list-devices", action="store_true", help="list input devices and exit")
     parser.add_argument("--device", default=None, help="input device index or name substring")
+    parser.add_argument("--input-kind", choices=("microphone", "loopback"), default=None)
+    parser.add_argument("--endpoint-id", default=None, help="stable Windows audio endpoint ID")
+    parser.add_argument("--device-name", default=None, help="remembered input name for migration")
+    parser.add_argument("--follow-default", action="store_true", help="follow the Windows default input or output")
     parser.add_argument(
         "--loopback-device", type=int, default=None,
         help="WASAPI output endpoint index to capture instead of the microphone, so system "
@@ -282,6 +258,10 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
         ws_port=args.ws_port,
         input_device=device,
         loopback_device=args.loopback_device,
+        input_kind=args.input_kind,
+        input_endpoint_id=args.endpoint_id,
+        input_device_name=args.device_name,
+        follow_default_input=args.follow_default,
         recordings_path=args.recordings_path,
         end_silence_ms=args.end_silence_ms,
         partial_interval_ms=args.partial_interval_ms,
@@ -296,8 +276,9 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     loop = asyncio.get_running_loop()
     clients: set = set()
     events: asyncio.Queue[dict] = asyncio.Queue()
-    latest_status: dict = {"type": "status", "state": "starting", "running": False}
     controller = SessionController(running=not args.start_stopped)
+    latest_status: dict = {"type": "status", "state": "starting", "running": False,
+                           "wanted": controller.is_running}
 
     speaker = None
     if settings.enable_speakers and not args.no_speakers:
@@ -331,6 +312,9 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     # One recording at a time, held in a dict so the closures below and the audio tap all see
     # the same object without a nonlocal chain through several nested functions.
     recorder: dict = {"active": None}
+    from .capture import CaptureManager
+    from .capture_target import AudioTarget
+    capture = CaptureManager(AudioTarget.from_settings(settings), controller, emit, settings.model_size)
 
     def recordings_root() -> "Path":
         from pathlib import Path
@@ -413,6 +397,8 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     async def handler(ws) -> None:  # noqa: ANN001
         clients.add(ws)
         await ws.send(json.dumps(latest_status))
+        if capture.snapshot() is not None:
+            await ws.send(json.dumps(capture.snapshot()))
         # A client that reconnects mid-recording must not show an idle button over a running
         # recording. Sent after the status frame so it cannot be overwritten by the replay.
         if recorder["active"] is not None:
@@ -425,13 +411,29 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                     msg = json.loads(raw)
                 except (TypeError, ValueError):
                     continue
+                if not isinstance(msg, dict):
+                    continue
                 cmd = msg.get("cmd")
                 if cmd == "start":
+                    capture.retry()
                     controller.start()
                 elif cmd == "stop":
                     controller.pause()
                 elif cmd == "toggle":
                     controller.toggle()
+                    if controller.is_running:
+                        capture.retry()
+                elif cmd == "set_input":
+                    request_id = msg.get("request_id")
+                    try:
+                        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 80:
+                            raise ValueError("Invalid input request.")
+                        capture.select(AudioTarget.from_dict(msg.get("target")), request_id)
+                    except ValueError as exc:
+                        await ws.send(json.dumps({"type": "input", "state": "rejected",
+                                                 "request_id": request_id, "message": str(exc)}))
+                elif cmd == "devices_changed":
+                    capture.devices_changed()
                 elif cmd == "start_recording":
                     start_recording(msg.get("path"), msg.get("resume"))
                 elif cmd == "stop_recording":
@@ -865,87 +867,29 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
             ),
         )
 
-        def make_source():
-            if args.wav:
-                return WavFileStream(args.wav, realtime=not args.fast)
-            # A loopback endpoint captures what is being played rather than what is being
-            # said. Selected by index like any other device, so the UI needs no separate
-            # control — it just marks which entries are outputs.
-            if settings.loopback_device is not None:
-                from .loopback import LoopbackStream
-
-                return LoopbackStream(settings.loopback_device)
-            return MicrophoneStream(settings.input_device)
-
         def pump() -> None:
-            """One capture session per start/stop cycle.
-
-            The microphone is opened on start and closed on stop, so Windows' mic-in-use
-            indicator reflects reality. The model and ASR worker persist across cycles.
-            """
-            announced_idle = False
+            """Recognition survives switches, stalled drivers, and missing endpoints."""
             try:
-                while not controller.is_shutdown:
-                    if not controller.is_running:
-                        if not announced_idle:
-                            emit({"type": "status", "state": "stopped", "running": False})
-                            print("Stopped. Microphone released.", flush=True)
-                            announced_idle = True
-                        controller.wait_for_start(timeout=0.25)
-                        continue
-
-                    announced_idle = False
-                    try:
-                        with make_source() as stream:
-                            emit(
-                                {
-                                    "type": "status",
-                                    "state": "listening",
-                                    "running": True,
-                                    "model": settings.model_size,
-                                    "device": stream.device_name,
-                                }
-                            )
-                            print("Listening.", flush=True)
+                capture.model = settings.model_size
+                if not args.wav:
+                    capture.run(pipeline)
+                else:
+                    from .audio import WavFileStream
+                    while not controller.is_shutdown:
+                        if not controller.is_running:
+                            controller.wait_for_start(timeout=0.25)
+                            continue
+                        with WavFileStream(args.wav, realtime=not args.fast) as stream:
+                            emit({"type": "status", "state": "listening", "running": True,
+                                  "model": settings.model_size, "device": stream.device_name})
                             pipeline.run(stream.frames(lambda: controller.is_running))
-                    except MicrophoneOpenError as exc:
-                        # Surface a distinguishable code so the UI can offer the right fix
-                        # rather than showing a wall of PortAudio diagnostics.
-                        emit({
-                            "type": "error",
-                            "code": "mic_denied" if exc.access_denied else "mic_unavailable",
-                            "message": str(exc),
-                            "detail": exc.detail(),
-                            "running": False,
-                        })
-                        print(f"[error] {exc}\n  {exc.detail()}", flush=True)
-                        controller.pause()
-                        continue
-                    except Exception as exc:
-                        # Carries a code and a human sentence, like MicrophoneOpenError above.
-                        # This used to emit str(exc) as the message, which put raw PortAudio
-                        # text on the user's screen - "[Errno -9996] Invalid device info" was
-                        # the banner a user actually saw. Nearly everything that lands here is
-                        # a capture device that could not be opened, and the remedy is the
-                        # same, so say that and keep the diagnostics in detail.
-                        emit({
-                            "type": "error",
-                            "code": "capture_failed",
-                            "message": "Sunno could not start listening on this microphone.",
-                            "detail": str(exc),
-                            "running": False,
-                        })
-                        print(f"[error] {exc}", flush=True)
-                        controller.pause()
-                        continue
-
-                    if args.wav and controller.is_running:
-                        pipeline.drain()  # let in-flight transcriptions finish
-                        break  # file exhausted
+                        if controller.is_running:
+                            pipeline.drain()
+                            break
             finally:
                 # Let go of the files without finalising. This process is ending, but the
-                # recording may not be: changing microphone or model restarts the backend,
-                # and the next process reopens the same folder and carries on. A recording
+                # recording may not be: changing model restarts the backend, and the next
+                # process reopens the same folder and carries on. Input switches stay here. A recording
                 # ends when the user stops it or closes Sunno, and closing Sunno finalises it
                 # on the next launch through recover().
                 active = recorder["active"]
@@ -970,6 +914,8 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
 def main() -> None:
     settings, args = parse_args()
     if args.list_devices:
+        from .audio import print_input_devices
+
         print_input_devices()
         return
     try:

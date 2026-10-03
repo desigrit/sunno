@@ -435,17 +435,16 @@
                         <Button x:Name="RefreshDevicesButton" Click="OnRefreshDevices"
                                 Width="32" Height="32" Padding="0"
                                 Background="Transparent" BorderThickness="0"
-                                ToolTipService.ToolTip="Look for devices plugged in since Sunno started"
+                                ToolTipService.ToolTip="Check for connected audio devices"
                                 AutomationProperties.Name="Refresh device list">
                             <FontIcon x:Name="RefreshDevicesIcon" Glyph="&#xE72C;" FontSize="14"
                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </Button>
-                        <!-- Changing device restarts the engine, which takes seconds. Without
-                             something here the transcript simply stops, and a frozen transcript
-                             is what this app looks like when it is broken. -->
+                        <!-- Capture can switch or recover without reloading the model.
+                             Keep that progress visible beside the input being changed. -->
                         <ProgressRing x:Name="DeviceBusyRing" Width="18" Height="18"
                                       IsActive="False" Visibility="Collapsed"
-                                      AutomationProperties.Name="Switching input device" />
+                                      AutomationProperties.Name="Switching or reconnecting input device" />
                     </Grid>
                 </StackPanel>
 

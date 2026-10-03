@@ -16,23 +16,34 @@ public sealed class AppSettings
     public int? DeviceIndex { get; set; }
     /// <summary>A WASAPI output endpoint to caption instead of a microphone.</summary>
     public int? LoopbackDeviceIndex { get; set; }
+    public string? InputKind { get; set; }
+    public string? InputEndpointId { get; set; }
+    public bool? FollowWindowsDefault { get; set; }
+
+    [JsonIgnore]
+    public bool IsLoopback => InputKind == "loopback" || (InputKind is null && LoopbackDeviceIndex is not null);
+
+    [JsonIgnore]
+    public AudioInputTarget InputTarget => new(IsLoopback ? "loopback" : "microphone",
+        InputEndpointId, IsLoopback ? LoopbackDeviceName : DeviceName,
+        IsLoopback ? LoopbackDeviceIndex : DeviceIndex,
+        FollowWindowsDefault ?? (DeviceIndex is null && LoopbackDeviceIndex is null && InputEndpointId is null));
+
+    public void RememberInput(AudioInputTarget target)
+    {
+        InputKind = target.Kind;
+        InputEndpointId = target.EndpointId;
+        FollowWindowsDefault = target.FollowDefault;
+        DeviceIndex = target.Kind == "microphone" && !target.FollowDefault ? target.Index : null;
+        LoopbackDeviceIndex = target.Kind == "loopback" && !target.FollowDefault ? target.Index : null;
+        DeviceName = target.Kind == "microphone" ? target.Name : null;
+        LoopbackDeviceName = target.Kind == "loopback" ? target.Name : null;
+    }
 
     /// <summary>
-    /// The name of the chosen capture device, and what makes the choice survive a restart.
-    ///
-    /// The index above cannot be trusted on its own. PortAudio numbers devices by enumeration
-    /// order, so the numbers move whenever the set of audio devices changes: a Bluetooth headset
-    /// connecting, a monitor waking, a USB mic being plugged in. Measured on one machine across
-    /// two launches, the same Umik-1 moved from index 30 to 27, and index 26 stopped meaning
-    /// "Microphone (2- Logitech BRIO)" and started meaning "Headset (R-Phonak hearing aid)".
-    ///
-    /// So the index is a fast path and the name is the truth. The app still launches on the
-    /// index, because capture has to start before the device list can be fetched from the
-    /// backend that serves it, and then checks the name once the list arrives. See
-    /// MainWindow.ValidateRememberedDevice.
-    ///
-    /// Stored as the cleaned display name, the same string the picker shows, so it can be
-    /// compared with the picker's own matching rules rather than raw PortAudio spelling.
+    /// The local display name and the migration hint for settings from before endpoint IDs.
+    /// New selections resolve by InputEndpointId. Legacy names precede legacy indices, and
+    /// ambiguous names require a new selection instead of silently opening another device.
     /// </summary>
     public string? DeviceName { get; set; }
 

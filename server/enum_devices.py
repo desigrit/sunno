@@ -39,6 +39,13 @@ def collect() -> list[dict]:
     Mirrors what the /devices.json handler builds in-process, including the sort, so that a
     refreshed list and a startup list differ only in how recently they were read.
     """
+    if sys.platform == "win32":
+        from .coreaudio import list_endpoints
+
+        microphones = list_endpoints("microphone")
+        microphones.sort(key=lambda d: d["name"])
+        return microphones + list_endpoints("loopback")
+
     from .audio import list_input_devices
 
     # list_input_devices prints a diagnostic count line, and stdout here belongs to the JSON
