@@ -4,13 +4,14 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:models="using:Sunno.Models"
+    xmlns:controls="using:Sunno.Controls"
     xmlns:local="using:Sunno"
     xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
     mc:Ignorable="d"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
 
-    <Grid>
+    <Grid x:Name="AppRoot" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -53,7 +54,8 @@
                     Background="{ThemeResource LayerFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="0,1,1,0">
-                <Grid Padding="0,14,0,0">
+                <Grid x:Name="SpeakerPaneLayout" Padding="0,14,0,0"
+                      SizeChanged="OnSpeakerPaneSizeChanged">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
@@ -129,7 +131,7 @@
                          drives the height, and the star row follows it frame by frame.
                          The list stays in the tree at zero height, so its items are already
                          realised before the section opens. -->
-                    <StackPanel Grid.Row="2" Margin="0,2,0,6">
+                    <StackPanel x:Name="ModelSection" Grid.Row="2" Margin="0,2,0,6">
                         <Button x:Name="ModelToggle" Click="OnToggleModelSection"
                                 Margin="8,0,8,0" Padding="8,6"
                                 HorizontalAlignment="Stretch"
@@ -163,18 +165,16 @@
                             </Grid>
                         </Button>
 
-                        <!-- A ScrollViewer purely because it clips: a Border or Grid with a
-                             constrained Height still paints its overflowing children.
-                             Horizontal must be Disabled rather than Hidden — Hidden still
-                             measures the content at infinite width, so TextTrimming never
-                             engages and long names hard-clip at the pane edge instead of
-                             ellipsing. Vertical stays Hidden so content can exceed the
-                             animated height and simply be clipped. -->
+                        <!-- Keep native wheel, touch, and keyboard scrolling. The native
+                             slim scrollbar appears when the list is hovered.
+                             Horizontal scrolling stays disabled so long names still trim. -->
                         <ScrollViewer x:Name="ModelPanel" Height="0"
-                                      VerticalScrollMode="Disabled"
+                                      VerticalScrollMode="Enabled"
                                       VerticalScrollBarVisibility="Hidden"
                                       HorizontalScrollMode="Disabled"
-                                      HorizontalScrollBarVisibility="Disabled">
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      PointerEntered="OnModelPanelPointerEntered"
+                                      PointerExited="OnModelPanelPointerExited">
                             <ItemsControl x:Name="ModelOptions" ItemsSource="{x:Bind Models}"
                                           Margin="12,6,18,12"
                                           VerticalAlignment="Top"
@@ -298,14 +298,15 @@
                            AutomationProperties.LiveSetting="Polite" />
                 <!-- Top padding clears the overflow button that floats at this corner, so
                      a caption can never slide underneath it. -->
-                <ScrollViewer x:Name="CaptionScroller" VerticalScrollBarVisibility="Auto"
-                              Padding="24,40,24,16">
+                <controls:CaptionScrollViewer x:Name="CaptionScroller" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" VerticalAnchorRatio="0"
+                              ScrollPadding="24,40,24,16" AutomationProperties.Name="Transcript">
                     <ItemsControl x:Name="CaptionItems" ItemsSource="{x:Bind Lines}"
                                   FontSize="{x:Bind CaptionSize, Mode=OneWay}"
                                   AutomationProperties.Name="Live transcript">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="models:CaptionLine">
-                                <StackPanel Margin="0,0,0,14">
+                                <StackPanel Margin="0,0,0,14" CanBeScrollAnchor="True">
                                     <StackPanel Orientation="Horizontal" Spacing="8"
                                                 Margin="0,0,0,3"
                                                 Visibility="{x:Bind local:MainWindow.BoolToVisible(ShowMeta), Mode=OneWay}">
@@ -355,7 +356,11 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                </ScrollViewer>
+                </controls:CaptionScrollViewer>
+
+                <controls:SkipToCurrentButton x:Name="SkipToCurrent" Visibility="Collapsed"
+                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,12"
+                    Click="OnSkipToCurrent" />
 
                 <StackPanel x:Name="EmptyState" VerticalAlignment="Center"
                             HorizontalAlignment="Center" Spacing="6">
@@ -831,8 +836,13 @@
 
                     <StackPanel Grid.Column="0" Spacing="18">
 
+                        <controls:AppearancePicker x:Name="AppearancePicker"
+                                                   PreferenceChanged="OnAppearancePreferenceChanged" />
+
                         <TextBlock Text="Captions" Style="{StaticResource BodyStrongTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />
+                        <controls:SpeakerLabelsPicker x:Name="SpeakerLabelsPicker"
+                                                      PreferenceChanged="OnSpeakerLabelsPreferenceChanged" />
                         <Border Style="{StaticResource SettingsCard}">
                             <Grid ColumnSpacing="16">
                                 <Grid.ColumnDefinitions>
@@ -913,9 +923,9 @@
                             </Grid>
                         </Border>
 
-                        <TextBlock Text="Speakers" Style="{StaticResource BodyStrongTextBlockStyle}"
+                        <TextBlock x:Name="SpeakerProfilesHeading" Text="Speakers" Style="{StaticResource BodyStrongTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />
-                        <Border Style="{StaticResource SettingsCard}" Padding="16,10">
+                        <Border x:Name="SpeakerProfilesCard" Style="{StaticResource SettingsCard}" Padding="16,10">
                             <StackPanel Spacing="4">
                                 <TextBlock x:Name="NoSpeakersInSettings"
                                            Text="Nobody has been recognised yet."
@@ -988,6 +998,11 @@
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,4"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                    Text="Open source. Runs entirely on this PC." />
+                        <controls:AppUpdatePanel x:Name="AppUpdatePanel" Margin="0,6,0,10"
+                                                ActionRequested="OnUpdateAction"
+                                                CancelRequested="OnCancelAppUpdate"
+                                                CheckRequested="OnCheckAppUpdates"
+                                                ReleasesRequested="OnViewAppReleases" />
                         <HyperlinkButton Content="Privacy policy" Padding="0"
                                          NavigateUri="https://github.com/desigrit/sunno/blob/master/PRIVACY.md" />
                         <HyperlinkButton Content="Source code" Padding="0"

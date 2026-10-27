@@ -55,6 +55,7 @@ class Settings:
 
     # --- Speaker labelling ---
     enable_speakers: bool = True
+    speaker_labels: bool = True
     # WeSpeaker CAM++ trained on VoxCeleb. Renamed from the upstream filename, which contains
     # "++" — MakeAppx percent-encodes those into the MSIX part name, and relying on the
     # installer to decode them back is a needless hazard for a path resolved by literal name.

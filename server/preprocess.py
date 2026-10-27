@@ -96,3 +96,57 @@ class AudioConditioner:
 
         np.clip(out, -1.0, 1.0, out=out)
         return out
+
+
+class StreamingAudioConditioner:
+    """Condition new frames once, without ever changing audio already decoded.
+
+    Filter and gain state survive utterance boundaries, but not a capture restart.
+    The high-pass also removes DC. Gain follows a short running energy estimate,
+    rises slowly, and falls quickly when a louder speaker arrives. Raw recording
+    and VAD still receive the original samples.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self._coeffs = butterworth_highpass_biquad(
+            max(10.0, settings.highpass_hz), SAMPLE_RATE
+        )
+        self.reset()
+
+    def reset(self) -> None:
+        self._s1 = self._s2 = self._energy = 0.0
+        self._gain = 1.0
+
+    def __call__(self, audio: np.ndarray) -> np.ndarray:
+        data = np.asarray(audio, dtype=np.float32)
+        if data.ndim != 1 or not np.isfinite(data).all():
+            raise ValueError("Audio must contain finite mono samples")
+        if not data.size:
+            return data.copy()
+        b0, b1, b2, a1, a2 = self._coeffs
+        s1, s2 = self._s1, self._s2
+        out = np.empty(data.size, dtype=np.float32)
+        for i, sample in enumerate(data.tolist()):
+            value = b0 * sample + s1
+            s1 = b1 * sample - a1 * value + s2
+            s2 = b2 * sample - a2 * value
+            out[i] = value
+        self._s1, self._s2 = s1, s2
+
+        seconds = data.size / SAMPLE_RATE
+        energy = float(np.mean(np.square(out)))
+        weight = 1.0 - np.exp(-seconds / 0.25)
+        self._energy += weight * (energy - self._energy)
+        rms = max(float(np.sqrt(self._energy)), float(np.sqrt(energy)))
+        desired = 1.0
+        if self.settings.target_rms > 0 and rms > 1e-4:
+            desired = max(1.0, min(self.settings.max_gain, self.settings.target_rms / rms))
+        tau = 0.03 if desired < self._gain else 0.5
+        next_gain = self._gain + (1.0 - np.exp(-seconds / tau)) * (desired - self._gain)
+        out *= np.linspace(self._gain, next_gain, data.size, dtype=np.float32)
+        self._gain = float(next_gain)
+        np.clip(out, -1.0, 1.0, out=out)
+        # Job snapshots share these frames. Enforce their immutability at the seam.
+        out.flags.writeable = False
+        return out

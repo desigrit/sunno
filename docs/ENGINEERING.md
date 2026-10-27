@@ -17,8 +17,9 @@ Two things to know while reading:
 
 ---
 
-Offline, real-time speech-to-text captioning. Audio never leaves the machine: no network
-calls, no API keys, no per-minute cost.
+Offline, real-time speech-to-text captioning. Recognition makes no network calls and needs
+no API keys or per-minute payments. Model downloads and user-requested app update checks
+use the network; audio never leaves the machine.
 
 Built for live captioning of in-person conversation: a room microphone feeds Whisper
 large-v3 on the local GPU, and captions appear in a small always-on-top window.
@@ -150,6 +151,22 @@ In the caption window:
 | `A+` / `A−` (or Ctrl `+` / Ctrl `−`) | Change text size, remembered between runs |
 | `Clear` | Clear the transcript |
 
+In the Windows app, upward reader navigation pauses automatic scrolling. Scrolling down again
+within 80 DIPs of the bottom resumes it. **Skip to current** appears above the bottom edge
+while reading history; selecting it immediately jumps to the latest captions and resumes
+following. Clearing the transcript also resets live following.
+
+`CaptionScrollFollower` stores following as reader intent. `CaptionScrollViewer` wraps the
+native WinUI ScrollViewer and reports scrollbar and accessibility navigation; the follower
+also handles wheel, keyboard and direct manipulation. Offset changes alone never pause
+following: final word rendering rebuilds text blocks, and trimming the 200-line history can
+move WinUI's anchor even when the content height is unchanged. Treating either adjustment
+as a gesture caused following to stop unexpectedly after finalization or a speech pause.
+Follow requests are coalesced after layout, recheck reader intent, and settle asynchronous
+anchor adjustments without animated scrolling. While paused, native scroll anchors preserve
+the visible caption through reflow and history trimming. Real WinUI regression checks in
+`tests/windows-ui` cover these transitions and the floating button.
+
 **Stop genuinely releases the microphone**: it closes the audio device rather than quietly
 discarding audio, so Windows' microphone-in-use indicator switches off and people in the room
 can see that capture has stopped. The Whisper model stays loaded on the GPU, so resuming takes
@@ -158,29 +175,39 @@ transcribed. Launch with `--start-stopped` to begin paused.
 
 ### Speaker labels
 
-Every finished utterance is matched against the voices heard so far, and lines are prefixed
-with a colour-coded speaker chip. Click any chip to:
+Settings > Captions > Speaker labels offers Off and Automatic (Experimental). Off skips new
+speaker inference and hides speaker metadata without restarting capture or the speech model.
+An in-flight native embedding can finish, but its result is discarded.
+Automatic assigns provisional labels alongside the first words and corrects them in place.
+Click a speaker to:
 
-- **Name the speaker**: names persist across sessions, and a named profile stops drifting, so
-  recognition of that person gets more reliable.
+- **Name the speaker**: optionally persist an identified voice across sessions. This is not
+  required for unfamiliar presenters in videos. Naming pins the current reference; it does
+  not guarantee that a poor initial voice sample becomes more accurate.
 - **Mark them as you**: your own lines then render fainter, labelled *You*, and on a Whisper
   model they also carry a **clarity score**. Your speech is still transcribed; the score is
   there so you can read back how clearly you came across. The streaming models do not produce
   one, which is why the setting and both speaker dialogs name Whisper explicitly.
 - **Merge two speakers**: use this when one person gets split across two labels.
 
-**Accuracy expectations.** On a two-speaker recording this correctly finds two speakers and gets
-roughly two thirds of the turns right. It is genuinely useful for following who-said-what, but
-it is not reliable enough to trust blindly. Two reasons, both inherent:
+The speaker worker is separate from ASR. It uses VAD-selected speech, not silence padding,
+and receives at most eight seconds per snapshot with an eight-job backlog limit. Partial
+snapshots are sampled at roughly 1.3-second voiced intervals; completed turns can update a
+small in-memory reference bank. Short or ambiguous samples keep a provisional assignment.
+There is no user confirmation or wait-for-confirmation stage before showing a label.
 
-- Speaker embeddings need ~2–3 s of speech to be dependable; short conversational turns
-  ("yeah", "okay, fine") often score no better than chance. Such turns are left unlabelled
-  rather than guessed at.
-- If two people talk without a pause between them, the VAD produces one segment and it gets a
-  single label. Lowering `end_silence_ms` reduces how often this happens.
+Recent completed assignments can be revised after a stronger reference arrives. Strongly
+matching, established anonymous profiles can be consolidated; named profiles are not
+automatically merged. Corrections carry an utterance ID and speech timestamp, and caption
+events are annotated with the latest assignment when emitted, so late ASR jobs cannot undo
+a correction. A session token prevents ID reuse after an engine restart from renaming old
+captions. Recording journals retain amendments for export and crash recovery.
 
-Naming the people you talk to most is the single biggest improvement, because matching then
-happens against a deliberately-chosen reference instead of a noisy first guess.
+**Accuracy expectations.** This is experimental, not a verified diarization accuracy claim.
+The regression tests cover state, timing, persistence and corrections using controlled
+embeddings. Similar voices, very short turns, overlap and rapid changes without a pause can
+still be wrong. Each caption utterance currently receives one label, even if it contains
+multiple speakers. A representative real-audio benchmark is still needed.
 
 ### Clarity score
 
@@ -322,6 +349,34 @@ own bundled `cudnn64_9.dll` is vestigial. Confirmed empirically too, transcripts
 byte-identical with the cuDNN tree removed. Regenerate the allow-list with
 `packaging/cuda_decide.py` if dependencies change.
 
+### Publishing Windows app updates
+
+Settings checks `desigrit/sunno` releases only when the user requests it. The updater looks
+through the latest 100 releases, excludes drafts and prereleases, and compares numeric
+package versions. CUDA releases and releases without compatible installer assets are ignored.
+It does not check local folders or GitHub Actions artifacts.
+
+The packaging script emits both `Sunno.msix` and `Sunno_<version>_<architecture>.msix`.
+For example, a stable release tagged `v1.0.90.0` must attach `Sunno_1.0.90.0_x64.msix`.
+The tag, filename and package manifest version must agree. Publish the release against the
+commit used to build it. Upload only the signed MSIX, never the development PFX or its password.
+GitHub supplies the asset's SHA-256 digest, which Sunno requires and verifies after download
+and again before installation. The package identity, publisher and architecture must match
+the app; only a strictly newer version can be offered. On ARM Windows the current shell is
+x64, so it still selects the x64 installer.
+
+Windows App Installer owns installation, signature trust and any app-in-use prompts. Sunno
+does not import certificates or claim success just because the installer opened. A recording
+must be stopped before handoff. The installed version shown on the next launch is the result.
+Self-signed development builds require the publisher certificate to be trusted on that PC;
+the updater does not bypass that requirement. The existing model and settings locations are
+unchanged. A newer source commit or unpublished build is not a downloadable release.
+
+Run `dotnet run --project tests/updates/UpdateTests.csproj -c Release` for release selection,
+download verification, cancellation, redirect and package identity checks. Pass `-- --live`
+to also read the public GitHub release feed. The native UI harness supports
+`SUNNO_UPDATE_TEST_ONLY=1` for the production update panel's light/dark and action states.
+
 ## Tuning
 
 Endpointing lives in `server/config.py`:
@@ -339,14 +394,14 @@ Endpointing lives in `server/config.py`:
 
 ## Known limitations
 
-- **Speaker labels are best-effort.** ~2/3 of turns correct on two-speaker audio; short turns
-  are left unlabelled rather than guessed. Naming people improves this markedly. See above.
+- **Speaker labels are experimental.** Immediate assignments can be corrected later. Off
+  disables inference; saved voice profiles are optional. See above for known limitations.
 - **Overlapping speech.** When two people talk at once, single-channel ASR degrades badly
   (50–80% WER is typical for any model). Separation models fast enough for real time aren't
   practical yet on this hardware.
 - Utterances longer than `max_utterance_s` are split mid-sentence.
-- Provisional lines carry no speaker chip, identification happens when the utterance ends, 
-  so the chip appears at commit time.
+- Provisional lines carry a provisional speaker chip in Automatic mode. The label can change
+  independently of the words as more evidence arrives.
 
 ## Requirements
 

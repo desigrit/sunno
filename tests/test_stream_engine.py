@@ -2,13 +2,10 @@
 
 Two things here are worth a test rather than a reading.
 
-The engine is used statelessly on purpose, because the pipeline hands over the whole
-utterance every time and ``AudioConditioner`` renormalises gain over whatever it is given.
-Measured, one loud word changes already-decoded samples by 67 percent, so an engine that
-kept state across partials would be splicing two different gains together with nothing to
-catch it. The test below pins that property of the conditioner, so that if someone later
-makes the conditioner streaming-stable, this fails and points at the engine that could
-then be made stateful.
+The legacy batch conditioner must not be used to generate tails for a stateful
+decoder: a loud word changes earlier samples. The live pipeline uses a separate,
+incremental conditioner, tested in test_streaming_pipeline.py. Keep the negative
+control here so a future refactor cannot silently restore the batch conditioner.
 
 The other is that asking for a streaming model has to select the streaming engine. Model
 and engine are not independent here: a transducer cannot be loaded by CTranslate2, so a
@@ -83,9 +80,9 @@ if have.get("ct2"):
 check("an unknown id is not treated as streaming", not is_stream_model("no-such-model"))
 
 
-# --- the reason the engine is stateless ------------------------------------
+# --- negative control for the old batch conditioner ------------------------
 
-# Cumulative audio through the conditioner, the way pipeline._maybe_partial does it, with
+# Cumulative audio through the old conditioner, as the former pipeline did it, with
 # one loud word arriving partway through.
 rng = np.random.default_rng(0)
 audio = (rng.standard_normal(SAMPLE_RATE * 12) * 0.02).astype(np.float32)
@@ -102,7 +99,7 @@ for end in range(int(SAMPLE_RATE * 0.7), len(audio), int(SAMPLE_RATE * 0.45)):
         worst = max(worst, drift / max(float(np.abs(previous).max()), 1e-9))
     previous = current
 
-check("the conditioned prefix is not stable, so the engine must stay stateless",
+check("the legacy batch conditioner is unsafe for incremental recognition",
       worst > 0.1, f"worst drift only {worst:.1%}, the engine could now hold state")
 
 
@@ -261,9 +258,12 @@ check("every catalogue entry tells the frontend whether it may be auto-selected"
       "OnModelRequired defaults a missing flag to true, so an unlicensed model would be "
       "preselectable again with nothing failing here")
 flagged = {e["id"] for e in payload if not e.get("auto_select", True)}
-check("and the flag marks exactly the models the notices say are never chosen",
-      flagged == set(AUTO_SELECT_EXCLUDED),
-      f"payload marks {sorted(flagged)}, AUTO_SELECT_EXCLUDED is {sorted(AUTO_SELECT_EXCLUDED)}")
+from server.experimental_models import MODEL_IDS as EXPERIMENTAL_IDS  # noqa: E402
+
+excluded = set(AUTO_SELECT_EXCLUDED) | (EXPERIMENTAL_IDS & {e["id"] for e in payload})
+check("and the flag excludes unlicensed and unbenchmarked models",
+      flagged == excluded,
+      f"payload marks {sorted(flagged)}, expected {sorted(excluded)}")
 
 # The fastest-first branch is the one that bites: it ignores catalogue order entirely, so an
 # excluded model that is also the quickest would win it outright. Replays that branch over
@@ -290,7 +290,7 @@ _CSHARP_CONTRACT = [
     (_app / "Services" / "CaptionClient.cs", ['"auto_select"'],
      "the frontend would stop reading the flag and default every model to selectable"),
     (_app / "MainWindow.xaml.cs",
-     ["choices.Where(m => m.AutoSelect)",
+     ["choices.Where(m => m.AutoSelect && m.Supported)",
       "var preferred = selectable",
       "?? selectable.FirstOrDefault(m => m.Available)",
       "?? selectable.OrderBy("],

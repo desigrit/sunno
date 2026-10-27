@@ -46,9 +46,10 @@ public sealed class ModelRow : INotifyPropertyChanged
     /// card is.
     /// </summary>
     public bool UsesGpu { get; set; } = true;
+    public bool Supported { get; set; } = true;
 
     private string LagPrefix => LagMs <= 0
-        ? string.Empty
+        ? "(Delay not measured) "
         : LagMs < 1000 ? $"(~{LagMs / 1000.0:0.0}s delay) " : $"(~{LagMs / 1000.0:0}s delay) ";
 
     /// <summary>Already downloaded.</summary>
@@ -130,7 +131,7 @@ public sealed class ModelRow : INotifyPropertyChanged
     public Visibility InUseVisibility => _inUse ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>e.g. "1.5 GB" — shown on the right only when a download is needed.</summary>
-    public string SizeLabel => FormatSize(TotalMb > 0 ? TotalMb : ApproxMb);
+    public string SizeLabel => ApproxMb == 0 ? "System model" : FormatSize(TotalMb > 0 ? TotalMb : ApproxMb);
 
     /// <summary>
     /// Megabytes choosing this row would actually transfer, GPU libraries included.
@@ -151,10 +152,10 @@ public sealed class ModelRow : INotifyPropertyChanged
 
     /// <summary>Size and download glyph: only when something would actually transfer.</summary>
     public Visibility DownloadHintVisibility =>
-        TotalMb > 0 && !_isBusy ? Visibility.Visible : Visibility.Collapsed;
+        Supported && (TotalMb > 0 || !Available) && !_isBusy ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>A model mid-download can't be chosen again without confusing the backend.</summary>
-    public bool IsEnabled => !_isBusy;
+    public bool IsEnabled => !_isBusy && Supported;
 
     /// <summary>Full text for hover, since the pane is 240px and lines trim.</summary>
     public string Tooltip
@@ -168,6 +169,7 @@ public sealed class ModelRow : INotifyPropertyChanged
                 if (!Responsive)
                     text += ", which is too slow to follow a live conversation";
             }
+            else text += "\nCaption delay has not been measured on this PC";
             if (TotalMb <= 0) return text;
             // Named separately when the model is already here, so the number is not mistaken
             // for the model's own size.

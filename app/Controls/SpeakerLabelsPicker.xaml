@@ -1,0 +1,78 @@
+<UserControl
+    x:Class="Sunno.Controls.SpeakerLabelsPicker"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="ControlFillColorDefaultBrush" />
+                    <StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="ControlFillColorSecondaryBrush" />
+                    <StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="AccentTextFillColorPrimaryBrush" />
+                    <StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="AccentTextFillColorSecondaryBrush" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Light">
+                    <StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="ControlFillColorDefaultBrush" />
+                    <StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="ControlFillColorSecondaryBrush" />
+                    <StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="AccentTextFillColorPrimaryBrush" />
+                    <StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="AccentTextFillColorSecondaryBrush" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="SystemControlHighlightAccentBrush" />
+                    <StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="SystemColorButtonTextColorBrush" />
+                    <StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="SystemControlHighlightAltChromeWhiteBrush" />
+                    <StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="SystemColorButtonFaceColorBrush" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+            <Style x:Key="SpeakerLabelOption" TargetType="RadioButton"
+                   BasedOn="{StaticResource DefaultToggleButtonStyle}">
+                <Setter Property="Background" Value="{ThemeResource SubtleFillColorTransparentBrush}" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="10,0" />
+                <Setter Property="MinHeight" Value="32" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+            </Style>
+        </ResourceDictionary>
+    </UserControl.Resources>
+    <Grid ColumnSpacing="16" SizeChanged="OnLayoutSizeChanged">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TextBlock x:Name="LabelsLabel" Text="Speaker labels" VerticalAlignment="Center"
+                   Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap" />
+        <Border x:Name="OptionsContainer" Grid.Column="1" HorizontalAlignment="Right"
+                Padding="1" CornerRadius="6" BorderThickness="1"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                Background="{ThemeResource ControlAltFillColorSecondaryBrush}">
+            <StackPanel Orientation="Horizontal" Spacing="2">
+                <RadioButton x:Name="OffOption" Content="Off" MinWidth="56"
+                             GroupName="SpeakerLabels" Checked="OnOptionChecked"
+                             Style="{StaticResource SpeakerLabelOption}"
+                             AutomationProperties.PositionInSet="1" AutomationProperties.SizeOfSet="2"
+                             AutomationProperties.Name="Speaker labels Off" />
+                <RadioButton x:Name="AutomaticOption" GroupName="SpeakerLabels"
+                             Checked="OnOptionChecked" Style="{StaticResource SpeakerLabelOption}"
+                             AutomationProperties.PositionInSet="2" AutomationProperties.SizeOfSet="2"
+                             AutomationProperties.Name="Speaker labels Automatic, experimental"
+                             AutomationProperties.HelpText="Labels may change as Sunno hears more speech."
+                             ToolTipService.ToolTip="Labels may change as Sunno hears more speech.">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Automatic" VerticalAlignment="Center" />
+                        <Border CornerRadius="8" Padding="6,1" VerticalAlignment="Center"
+                                BorderThickness="1" BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                                Background="{ThemeResource LayerFillColorDefaultBrush}">
+                            <TextBlock Text="Experimental" FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </Border>
+                    </StackPanel>
+                </RadioButton>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

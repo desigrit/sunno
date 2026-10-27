@@ -54,8 +54,19 @@ public sealed class AppSettings
     public double CaptionFontSize { get; set; } = 26;
     public bool AlwaysOnTop { get; set; } = true;
 
+    private string _appearance = AppearancePreference.System;
+    /// <summary>Unknown or old values fall back to System without resetting other choices.</summary>
+    public string Appearance
+    {
+        get => _appearance;
+        set => _appearance = AppearancePreference.Normalize(value);
+    }
+
     /// <summary>Whether the clarity badge appears on the user's own lines.</summary>
     public bool ShowClarity { get; set; } = true;
+
+    /// <summary>Automatic labels are experimental and opt-in on a fresh install.</summary>
+    public bool SpeakerLabelsEnabled { get; set; }
 
     /// <summary>
     /// Pin the engine to the processor. Off means "let it choose", which prefers the graphics
@@ -129,6 +140,17 @@ public sealed class AppSettings
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Sunno", "settings.json");
 
+    internal static AppSettings? FromJson(string json)
+    {
+        var loaded = JsonSerializer.Deserialize<AppSettings>(json);
+        if (loaded is null) return null;
+        // Preserve the previous always-on behavior for existing installations.
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty(nameof(SpeakerLabelsEnabled), out _))
+            loaded.SpeakerLabelsEnabled = true;
+        return loaded;
+    }
+
     public static AppSettings Load()
     {
         try
@@ -139,7 +161,7 @@ public sealed class AppSettings
             }
 
             var json = File.ReadAllText(FilePath);
-            var loaded = JsonSerializer.Deserialize<AppSettings>(json);
+            var loaded = FromJson(json);
             if (loaded is not null) return loaded;
 
             App.Trace("settings.json deserialised to null; using defaults");

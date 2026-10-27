@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.18362.0</TargetPlatformMinVersion>
+    <RootNamespace>Sunno</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260710003" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.8249" />
+    <ApplicationDefinition Include="../../app/App.xaml" Link="App.xaml" />
+    <Page Include="../../app/Controls/AppearancePicker.xaml" Link="Controls/AppearancePicker.xaml" />
+    <Compile Include="../../app/Controls/AppearancePicker.xaml.cs" Link="Controls/AppearancePicker.xaml.cs" />
+    <Page Include="../../app/Controls/SpeakerLabelsPicker.xaml" Link="Controls/SpeakerLabelsPicker.xaml" />
+    <Compile Include="../../app/Controls/SpeakerLabelsPicker.xaml.cs" Link="Controls/SpeakerLabelsPicker.xaml.cs" />
+    <Compile Include="../../app/Services/AppearanceController.cs" Link="Services/AppearanceController.cs" />
+    <Compile Include="../../app/Services/CaptionScrollFollower.cs" Link="Services/CaptionScrollFollower.cs" />
+    <Compile Include="../../app/Controls/CaptionScrollViewer.cs" Link="Controls/CaptionScrollViewer.cs" />
+    <Page Include="../../app/Controls/SkipToCurrentButton.xaml" Link="Controls/SkipToCurrentButton.xaml" />
+    <Compile Include="../../app/Controls/SkipToCurrentButton.xaml.cs" Link="Controls/SkipToCurrentButton.xaml.cs" />
+    <Compile Include="../../app/Services/AppearancePreference.cs" Link="Services/AppearancePreference.cs" />
+    <Compile Include="../../app/Models/CaptionLine.cs" Link="Models/CaptionLine.cs" />
+    <Compile Include="../../app/WordInlines.cs" Link="WordInlines.cs" />
+    <Page Include="../../app/Controls/AppUpdatePanel.xaml" Link="Controls/AppUpdatePanel.xaml" />
+    <Compile Include="../../app/Controls/AppUpdatePanel.xaml.cs" Link="Controls/AppUpdatePanel.xaml.cs" />
+  </ItemGroup>
+</Project>

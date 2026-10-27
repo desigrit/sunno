@@ -1,0 +1,1979 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "benchmark": "Sunno Moonshine caption-processing delay",
+  "method": {
+    "pipeline": "Production CaptionPipeline, StreamingSileroVAD, StreamingAudioConditioner, AsrWorker and MoonshineEngine",
+    "input": "Prerecorded speech, paced in real time as 512-sample frames at 16 kHz; two seconds of silence appended",
+    "first_caption": "First nonempty partial or final event, relative to the first frame in the confirmed VAD speech-start run",
+    "final_caption": "Nonempty final event, relative to the last frame meeting the VAD speech-end threshold",
+    "timing_boundary": "Backend caption emission, before WebSocket transport and UI painting",
+    "warmup": "One discarded real-time pipeline replay per model before nine measured clips",
+    "summary": "Median and observed minimum/maximum across three clips, each repeated three times",
+    "speaker_identification": false,
+    "unchanged_production_code": true,
+    "excluded": [
+      "Microphone/device buffering",
+      "WebSocket delivery",
+      "UI rendering",
+      "Speaker labeling",
+      "Cold model load"
+    ],
+    "cautions": [
+      "VAD-estimated boundaries, not human phonetic annotations; 32 ms resolution",
+      "One clean English reader, no accented/noisy/conversational latency generalization",
+      "In-use machines; no background applications were paused",
+      "Platform, runtime, hardware and workload effects have not been isolated",
+      "Requested thread environment does not prove the native Moonshine thread count",
+      "No older Intel or Snapdragon laptop measured"
+    ]
+  },
+  "corpus": {
+    "source": "https://huggingface.co/datasets/hf-internal-testing/librispeech_asr_dummy",
+    "parquet_sha256": "4e69a06fa5edc90921e5e7e39a7084881f8b3ed9c805c574f4f39c6fde27c603",
+    "selection": "First three ID-sorted clips from the prepared fixture",
+    "unique_audio_s": 23.155,
+    "speakers": 1,
+    "identical_wav_hashes_and_vad_anchors_verified": true
+  },
+  "machines": [
+    {
+      "id": "windows-i9-14900k",
+      "cpu": "Intel Core i9-14900K",
+      "ram_gib": 64,
+      "stack": "Windows development checkout, current preview speech pipeline",
+      "moonshine_provider": "CPU"
+    },
+    {
+      "id": "mac-m1-max",
+      "cpu": "Apple M1 Max",
+      "ram_gib": 32,
+      "stack": "Mac preview source and bundled Python runtime",
+      "moonshine_provider": "CPU"
+    }
+  ],
+  "source_sha256": [
+    {
+      "path": "bench/bench_caption_delay.py",
+      "sha256": "93134b70c0026614054358ee143ae9a631578a0c80cd50789448c5372ac91da2"
+    },
+    {
+      "path": "bench/bench_engines.py",
+      "sha256": "34b2aae97c9ddc036765447569746da124e07b2daac69b3aff9eea185287d6d1"
+    },
+    {
+      "path": "server/pipeline.py",
+      "sha256": "475220aa63de324e7990c07a0752c971868aa402ac021437a781d3df68ece0dc"
+    },
+    {
+      "path": "server/preprocess.py",
+      "sha256": "af9e9dd115d3287c9d1bf1aa8c9b4f8d01c21d8689902da198b2134536183d07"
+    },
+    {
+      "path": "server/vad.py",
+      "sha256": "bfdf86e25ac9fbfd3b74d07bbb2bf1ef516e30e5cca31c3a25ff8f037373ef49"
+    },
+    {
+      "path": "server/asr_moonshine.py",
+      "sha256": "d3d80eae41609826e8b4cb3250f722dabd21279030cd83c0b0827c8fab93881d"
+    }
+  ],
+  "measurements": [
+    {
+      "timestamp_utc": "2026-10-05T20:34:54.561634-07:00",
+      "machine": "windows-i9-14900k",
+      "platform": "Windows-10.0.26200",
+      "python": "3.12.10",
+      "versions": {
+        "moonshine-voice": "0.1.5",
+        "numpy": "2.5.1",
+        "onnxruntime": "1.28.0"
+      },
+      "model": "moonshine-tiny",
+      "provider": "CPU",
+      "threads_requested": 4,
+      "load_ms": 235.00000010244548,
+      "clips": 3,
+      "repeats": 3,
+      "settings": {
+        "frame_ms": 32,
+        "end_silence_ms": 520,
+        "effective_end_silence_ms": 512,
+        "min_partial_ms": 700,
+        "partial_interval_ms": 450,
+        "speaker_identification": false
+      },
+      "summary": {
+        "utterances": 9,
+        "failures": 0,
+        "first_caption": {
+          "n": 9,
+          "median_ms": 642.9999998081475,
+          "min_ms": 564.9999999385327,
+          "max_ms": 783.0000000614673
+        },
+        "final_caption": {
+          "n": 9,
+          "median_ms": 1640.000000020489,
+          "min_ms": 801.000000191852,
+          "max_ms": 1910.0000001713636
+        },
+        "final_decode": {
+          "n": 9,
+          "median_ms": 548.2,
+          "min_ms": 30.7,
+          "max_ms": 1000.3
+        },
+        "final_queue": {
+          "n": 9,
+          "median_ms": 359,
+          "min_ms": 0,
+          "max_ms": 1078
+        },
+        "final_only": 0,
+        "non_silence_endpoints": 0
+      },
+      "limits": [
+        "VAD-estimated boundaries, not human phonetic annotations; 32 ms frames.",
+        "Caption emission before WebSocket transport and UI painting.",
+        "No microphone buffering, speaker identification or cold model load in caption delay.",
+        "In-use host; background applications are not paused.",
+        "Requested thread environment does not prove native ONNX thread count."
+      ],
+      "runs": [
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 1,
+          "audio_s": 5.855,
+          "replay_s": 7.890999999828637,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 14.999999897554517,
+            "min_ms": 0,
+            "max_ms": 40.99999996833503
+          },
+          "utterances": [
+            {
+              "id": 2,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 642.9999998081475,
+              "final_caption_delay_ms": 1785.999999869615,
+              "final_decode_ms": 817.9,
+              "final_queue_ms": 453,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 1,
+          "audio_s": 4.815,
+          "replay_s": 6.827999999979511,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 13.999999966472387,
+            "min_ms": 0,
+            "max_ms": 43.000000063329935
+          },
+          "utterances": [
+            {
+              "id": 3,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 612.0000001918525,
+              "final_caption_delay_ms": 801.000000191852,
+              "final_decode_ms": 180.8,
+              "final_queue_ms": 78,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 1,
+          "audio_s": 12.485,
+          "replay_s": 14.516000000061467,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 16.00000006146729,
+            "min_ms": 0,
+            "max_ms": 87.99999998882413
+          },
+          "utterances": [
+            {
+              "id": 4,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 673.0000001918525,
+              "final_caption_delay_ms": 1640.000000020489,
+              "final_decode_ms": 30.7,
+              "final_queue_ms": 1078,
+              "changed_partial_updates": 14
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 2,
+          "audio_s": 5.855,
+          "replay_s": 7.890000000130385,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 15.00000013038516,
+            "min_ms": 0,
+            "max_ms": 48.00000018440187
+          },
+          "utterances": [
+            {
+              "id": 5,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 674,
+              "final_caption_delay_ms": 1831.999999959022,
+              "final_decode_ms": 613.6,
+              "final_queue_ms": 672,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 2,
+          "audio_s": 4.815,
+          "replay_s": 6.812999999849126,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 13.999999966472387,
+            "min_ms": 0,
+            "max_ms": 34.99999991618097
+          },
+          "utterances": [
+            {
+              "id": 6,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 628.0000000204891,
+              "final_caption_delay_ms": 1285.9999998286362,
+              "final_decode_ms": 548.2,
+              "final_queue_ms": 203,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 2,
+          "audio_s": 12.485,
+          "replay_s": 14.5,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 15.00000013038516,
+            "min_ms": 0,
+            "max_ms": 60.000000055879354
+          },
+          "utterances": [
+            {
+              "id": 7,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 783.0000000614673,
+              "final_caption_delay_ms": 1873.9999999590218,
+              "final_decode_ms": 1000.3,
+              "final_queue_ms": 359,
+              "changed_partial_updates": 15
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 3,
+          "audio_s": 5.855,
+          "replay_s": 7.922000000020489,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 61.50000006891787,
+            "min_ms": 0,
+            "max_ms": 236.0000000335276
+          },
+          "utterances": [
+            {
+              "id": 8,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 565.0000000614673,
+              "final_caption_delay_ms": 1910.0000001713636,
+              "final_decode_ms": 931,
+              "final_queue_ms": 266,
+              "changed_partial_updates": 7
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 3,
+          "audio_s": 4.815,
+          "replay_s": 6.812000000150874,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 15.00000013038516,
+            "min_ms": 0,
+            "max_ms": 340.00000008381903
+          },
+          "utterances": [
+            {
+              "id": 9,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 564.9999999385327,
+              "final_caption_delay_ms": 878.9999999385323,
+              "final_decode_ms": 354.7,
+              "final_queue_ms": 0,
+              "changed_partial_updates": 4
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 3,
+          "audio_s": 12.485,
+          "replay_s": 14.484999999869615,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 14.999999897554517,
+            "min_ms": 0,
+            "max_ms": 124.00000006891787
+          },
+          "utterances": [
+            {
+              "id": 10,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 657.9999998286366,
+              "final_caption_delay_ms": 952.9999998696148,
+              "final_decode_ms": 51.8,
+              "final_queue_ms": 359,
+              "changed_partial_updates": 14
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestamp_utc": "2026-10-05T20:36:47.071474-07:00",
+      "machine": "windows-i9-14900k",
+      "platform": "Windows-10.0.26200",
+      "python": "3.12.10",
+      "versions": {
+        "moonshine-voice": "0.1.5",
+        "numpy": "2.5.1",
+        "onnxruntime": "1.28.0"
+      },
+      "model": "moonshine-small",
+      "provider": "CPU",
+      "threads_requested": 4,
+      "load_ms": 437.99999984912574,
+      "clips": 3,
+      "repeats": 3,
+      "settings": {
+        "frame_ms": 32,
+        "end_silence_ms": 520,
+        "effective_end_silence_ms": 512,
+        "min_partial_ms": 700,
+        "partial_interval_ms": 450,
+        "speaker_identification": false
+      },
+      "summary": {
+        "utterances": 9,
+        "failures": 0,
+        "first_caption": {
+          "n": 9,
+          "median_ms": 1096.000000020489,
+          "min_ms": 971.0000001303852,
+          "max_ms": 1250.9999999385327
+        },
+        "final_caption": {
+          "n": 9,
+          "median_ms": 3942.0000000614673,
+          "min_ms": 2332.9999998491253,
+          "max_ms": 4956.999999918044
+        },
+        "final_decode": {
+          "n": 9,
+          "median_ms": 2021.3,
+          "min_ms": 1632.9,
+          "max_ms": 3219.1
+        },
+        "final_queue": {
+          "n": 9,
+          "median_ms": 469,
+          "min_ms": 141,
+          "max_ms": 2157
+        },
+        "final_only": 0,
+        "non_silence_endpoints": 0
+      },
+      "limits": [
+        "VAD-estimated boundaries, not human phonetic annotations; 32 ms frames.",
+        "Caption emission before WebSocket transport and UI painting.",
+        "No microphone buffering, speaker identification or cold model load in caption delay.",
+        "In-use host; background applications are not paused.",
+        "Requested thread environment does not prove native ONNX thread count."
+      ],
+      "runs": [
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 1,
+          "audio_s": 5.855,
+          "replay_s": 10.063000000081956,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 20.00000001862645,
+            "min_ms": 0,
+            "max_ms": 64.00000001303852
+          },
+          "utterances": [
+            {
+              "id": 2,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1096.000000020489,
+              "final_caption_delay_ms": 4223.000000020489,
+              "final_decode_ms": 1959.1,
+              "final_queue_ms": 1734,
+              "changed_partial_updates": 4
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 1,
+          "audio_s": 4.815,
+          "replay_s": 7.218000000109896,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 20.99999994970858,
+            "min_ms": 0,
+            "max_ms": 67.99999997019768
+          },
+          "utterances": [
+            {
+              "id": 3,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 971.0000001303852,
+              "final_caption_delay_ms": 2660.0000001303847,
+              "final_decode_ms": 1871.8,
+              "final_queue_ms": 250,
+              "changed_partial_updates": 3
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 1,
+          "audio_s": 12.485,
+          "replay_s": 16.062999999849126,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 19.999999785795808,
+            "min_ms": 0,
+            "max_ms": 76.99999981559813
+          },
+          "utterances": [
+            {
+              "id": 4,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1142,
+              "final_caption_delay_ms": 4030.9999998491257,
+              "final_decode_ms": 3134.6,
+              "final_queue_ms": 359,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 2,
+          "audio_s": 5.855,
+          "replay_s": 9.594000000040978,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 19.500000053085387,
+            "min_ms": 0,
+            "max_ms": 55.00000016763806
+          },
+          "utterances": [
+            {
+              "id": 5,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1065.0000000614673,
+              "final_caption_delay_ms": 3723.000000020489,
+              "final_decode_ms": 2021.3,
+              "final_queue_ms": 1157,
+              "changed_partial_updates": 4
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 2,
+          "audio_s": 4.815,
+          "replay_s": 9.468000000109896,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 23.999999975785613,
+            "min_ms": 0,
+            "max_ms": 87.000000057742
+          },
+          "utterances": [
+            {
+              "id": 6,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1033.999999979511,
+              "final_caption_delay_ms": 4956.999999918044,
+              "final_decode_ms": 2260.6,
+              "final_queue_ms": 2157,
+              "changed_partial_updates": 4
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 2,
+          "audio_s": 12.485,
+          "replay_s": 15.968999999808148,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 20.99999994970858,
+            "min_ms": 0,
+            "max_ms": 67.99999997019768
+          },
+          "utterances": [
+            {
+              "id": 7,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1126.9999998696148,
+              "final_caption_delay_ms": 3890.000000020489,
+              "final_decode_ms": 3219.1,
+              "final_queue_ms": 141,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 3,
+          "audio_s": 5.855,
+          "replay_s": 9.828000000212342,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 20.00000001862645,
+            "min_ms": 0,
+            "max_ms": 53.000000305473804
+          },
+          "utterances": [
+            {
+              "id": 8,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1034.0000001024455,
+              "final_caption_delay_ms": 3942.0000000614673,
+              "final_decode_ms": 1766.2,
+              "final_queue_ms": 1625,
+              "changed_partial_updates": 4
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 3,
+          "audio_s": 4.815,
+          "replay_s": 6.812999999849126,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 18.99999985471368,
+            "min_ms": 0,
+            "max_ms": 52.99999983981252
+          },
+          "utterances": [
+            {
+              "id": 9,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1112.999999890104,
+              "final_caption_delay_ms": 2332.9999998491253,
+              "final_decode_ms": 1632.9,
+              "final_queue_ms": 156,
+              "changed_partial_updates": 3
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 3,
+          "audio_s": 12.485,
+          "replay_s": 16.140000000130385,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 20.99999994970858,
+            "min_ms": 0,
+            "max_ms": 70.00000006519258
+          },
+          "utterances": [
+            {
+              "id": 10,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1250.9999999385327,
+              "final_caption_delay_ms": 4045.999999979511,
+              "final_decode_ms": 3034.2,
+              "final_queue_ms": 469,
+              "changed_partial_updates": 6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestamp_utc": "2026-10-05T20:39:08.338102-07:00",
+      "machine": "windows-i9-14900k",
+      "platform": "Windows-10.0.26200",
+      "python": "3.12.10",
+      "versions": {
+        "moonshine-voice": "0.1.5",
+        "numpy": "2.5.1",
+        "onnxruntime": "1.28.0"
+      },
+      "model": "moonshine-medium",
+      "provider": "CPU",
+      "threads_requested": 4,
+      "load_ms": 1125,
+      "clips": 3,
+      "repeats": 3,
+      "settings": {
+        "frame_ms": 32,
+        "end_silence_ms": 520,
+        "effective_end_silence_ms": 512,
+        "min_partial_ms": 700,
+        "partial_interval_ms": 450,
+        "speaker_identification": false
+      },
+      "summary": {
+        "utterances": 9,
+        "failures": 0,
+        "first_caption": {
+          "n": 9,
+          "median_ms": 1533.0000000614673,
+          "min_ms": 1206,
+          "max_ms": 1625.9999999385327
+        },
+        "final_caption": {
+          "n": 9,
+          "median_ms": 6066.000000089407,
+          "min_ms": 5066.000000130385,
+          "max_ms": 9937.000000040978
+        },
+        "final_decode": {
+          "n": 9,
+          "median_ms": 3475.9,
+          "min_ms": 2003.4,
+          "max_ms": 3911.1
+        },
+        "final_queue": {
+          "n": 9,
+          "median_ms": 1922,
+          "min_ms": 875,
+          "max_ms": 7406
+        },
+        "final_only": 0,
+        "non_silence_endpoints": 0
+      },
+      "limits": [
+        "VAD-estimated boundaries, not human phonetic annotations; 32 ms frames.",
+        "Caption emission before WebSocket transport and UI painting.",
+        "No microphone buffering, speaker identification or cold model load in caption delay.",
+        "In-use host; background applications are not paused.",
+        "Requested thread environment does not prove native ONNX thread count."
+      ],
+      "runs": [
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 1,
+          "audio_s": 5.855,
+          "replay_s": 11.061999999918044,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 20.00000001862645,
+            "min_ms": 0,
+            "max_ms": 70.00000006519258
+          },
+          "utterances": [
+            {
+              "id": 2,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1424,
+              "final_caption_delay_ms": 5176,
+              "final_decode_ms": 2939.7,
+              "final_queue_ms": 1703,
+              "changed_partial_updates": 3
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 1,
+          "audio_s": 4.815,
+          "replay_s": 10.438000000081956,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 19.000000087544322,
+            "min_ms": 0,
+            "max_ms": 57.00000002980232
+          },
+          "utterances": [
+            {
+              "id": 3,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1206,
+              "final_caption_delay_ms": 5942.000000020489,
+              "final_decode_ms": 3475.9,
+              "final_queue_ms": 1922,
+              "changed_partial_updates": 3
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 1,
+          "audio_s": 12.485,
+          "replay_s": 20.155999999959022,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 20.00000001862645,
+            "min_ms": 0,
+            "max_ms": 62.00000015087426
+          },
+          "utterances": [
+            {
+              "id": 4,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1563.000000089407,
+              "final_caption_delay_ms": 8093,
+              "final_decode_ms": 2806,
+              "final_queue_ms": 4750,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 2,
+          "audio_s": 5.855,
+          "replay_s": 10.952999999979511,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 20.00000001862645,
+            "min_ms": 0,
+            "max_ms": 87.000000057742
+          },
+          "utterances": [
+            {
+              "id": 5,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1454.9999999590218,
+              "final_caption_delay_ms": 5066.000000130385,
+              "final_decode_ms": 3645.3,
+              "final_queue_ms": 875,
+              "changed_partial_updates": 3
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 2,
+          "audio_s": 4.815,
+          "replay_s": 11.030999999959022,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 23.000000044703484,
+            "min_ms": 0,
+            "max_ms": 108.00000000745058
+          },
+          "utterances": [
+            {
+              "id": 6,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1550.0000000409782,
+              "final_caption_delay_ms": 6504.000000171363,
+              "final_decode_ms": 3417.4,
+              "final_queue_ms": 2562,
+              "changed_partial_updates": 3
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 2,
+          "audio_s": 12.485,
+          "replay_s": 22.031000000191852,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 20.000000251457095,
+            "min_ms": 0,
+            "max_ms": 69.00000013411045
+          },
+          "utterances": [
+            {
+              "id": 7,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1533.0000000614673,
+              "final_caption_delay_ms": 9937.000000040978,
+              "final_decode_ms": 2003.4,
+              "final_queue_ms": 7406,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 3,
+          "audio_s": 5.855,
+          "replay_s": 11.562999999849126,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 20.499999867752194,
+            "min_ms": 0,
+            "max_ms": 76.99999981559813
+          },
+          "utterances": [
+            {
+              "id": 8,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1564.9999998286366,
+              "final_caption_delay_ms": 5723.000000020489,
+              "final_decode_ms": 3620.2,
+              "final_queue_ms": 1562,
+              "changed_partial_updates": 3
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 3,
+          "audio_s": 4.815,
+          "replay_s": 10.577999999979511,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 43.999999994412065,
+            "min_ms": 0,
+            "max_ms": 762.0000001043081
+          },
+          "utterances": [
+            {
+              "id": 9,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1345.9999998975545,
+              "final_caption_delay_ms": 6066.000000089407,
+              "final_decode_ms": 3911.1,
+              "final_queue_ms": 1609,
+              "changed_partial_updates": 3
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 3,
+          "audio_s": 12.485,
+          "replay_s": 21,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 20.00000001862645,
+            "min_ms": 0,
+            "max_ms": 74.99999995343387
+          },
+          "utterances": [
+            {
+              "id": 10,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 1625.9999999385327,
+              "final_caption_delay_ms": 8936.000000109896,
+              "final_decode_ms": 3657.2,
+              "final_queue_ms": 4750,
+              "changed_partial_updates": 5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestamp_utc": "2026-10-05T20:37:08.946104-07:00",
+      "machine": "mac-m1-max",
+      "platform": "Darwin-25.6.0-arm64",
+      "python": "3.12.14",
+      "versions": {
+        "moonshine-voice": "0.1.5",
+        "numpy": "2.5.3",
+        "onnxruntime": "1.30.0"
+      },
+      "model": "moonshine-tiny",
+      "provider": "CPU",
+      "threads_requested": 4,
+      "load_ms": 77.27554102893919,
+      "clips": 3,
+      "repeats": 3,
+      "settings": {
+        "frame_ms": 32,
+        "end_silence_ms": 520,
+        "effective_end_silence_ms": 512,
+        "min_partial_ms": 700,
+        "partial_interval_ms": 450,
+        "speaker_identification": false
+      },
+      "summary": {
+        "utterances": 9,
+        "failures": 0,
+        "first_caption": {
+          "n": 9,
+          "median_ms": 511.4572079563513,
+          "min_ms": 508.0522500155493,
+          "max_ms": 517.648875022307
+        },
+        "final_caption": {
+          "n": 9,
+          "median_ms": 549.0009580031038,
+          "min_ms": 528.6560840718444,
+          "max_ms": 655.5429579522461
+        },
+        "final_decode": {
+          "n": 9,
+          "median_ms": 15.8,
+          "min_ms": 10.4,
+          "max_ms": 135.3
+        },
+        "final_queue": {
+          "n": 9,
+          "median_ms": 0.1,
+          "min_ms": 0,
+          "max_ms": 52.7
+        },
+        "final_only": 0,
+        "non_silence_endpoints": 0
+      },
+      "limits": [
+        "VAD-estimated boundaries, not human phonetic annotations; 32 ms frames.",
+        "Caption emission before WebSocket transport and UI painting.",
+        "No microphone buffering, speaker identification or cold model load in caption delay.",
+        "In-use host; background applications are not paused.",
+        "Requested thread environment does not prove native ONNX thread count."
+      ],
+      "runs": [
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 1,
+          "audio_s": 5.855,
+          "replay_s": 7.878773332922719,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 5.027228966355324,
+            "min_ms": 0.09524996858090162,
+            "max_ms": 5.920957890339196
+          },
+          "utterances": [
+            {
+              "id": 2,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 510.1348329344765,
+              "final_caption_delay_ms": 549.0009580031038,
+              "final_decode_ms": 28.9,
+              "final_queue_ms": 0.2,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 1,
+          "audio_s": 4.815,
+          "replay_s": 6.819285959005356,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 5.02837507519871,
+            "min_ms": 0.1964170951396227,
+            "max_ms": 9.852624963968992
+          },
+          "utterances": [
+            {
+              "id": 3,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 508.0522500155493,
+              "final_caption_delay_ms": 528.6560840718444,
+              "final_decode_ms": 10.4,
+              "final_queue_ms": 0,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 1,
+          "audio_s": 12.485,
+          "replay_s": 14.501187124988064,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 5.029249936342239,
+            "min_ms": 0.06687489803880453,
+            "max_ms": 14.468208071775734
+          },
+          "utterances": [
+            {
+              "id": 4,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 517.648875022307,
+              "final_caption_delay_ms": 587.4608750520274,
+              "final_decode_ms": 15.8,
+              "final_queue_ms": 52.7,
+              "changed_partial_updates": 13
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 2,
+          "audio_s": 5.855,
+          "replay_s": 7.874101334018633,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 5.027229490224272,
+            "min_ms": 0.07608393207192421,
+            "max_ms": 6.137875025160611
+          },
+          "utterances": [
+            {
+              "id": 5,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 517.6079169623554,
+              "final_caption_delay_ms": 547.3210000423716,
+              "final_decode_ms": 31.2,
+              "final_queue_ms": 0.1,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 2,
+          "audio_s": 4.815,
+          "replay_s": 6.817934833001345,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 5.029332940466702,
+            "min_ms": 0.14020793605595827,
+            "max_ms": 11.334291892126203
+          },
+          "utterances": [
+            {
+              "id": 6,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 509.8905829889699,
+              "final_caption_delay_ms": 531.0604580258946,
+              "final_decode_ms": 12.6,
+              "final_queue_ms": 0,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 2,
+          "audio_s": 12.485,
+          "replay_s": 14.502361833001487,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 5.028500105254352,
+            "min_ms": 0.17325009685009718,
+            "max_ms": 12.540917028672993
+          },
+          "utterances": [
+            {
+              "id": 7,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 514.5748750148341,
+              "final_caption_delay_ms": 586.7921670498326,
+              "final_decode_ms": 15.8,
+              "final_queue_ms": 52.1,
+              "changed_partial_updates": 13
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 3,
+          "audio_s": 5.855,
+          "replay_s": 7.87829166604206,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 5.027895560488105,
+            "min_ms": 0.14958297833800316,
+            "max_ms": 6.805915967561305
+          },
+          "utterances": [
+            {
+              "id": 8,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 509.65566595643764,
+              "final_caption_delay_ms": 549.6936249770225,
+              "final_decode_ms": 29.8,
+              "final_queue_ms": 0.1,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 3,
+          "audio_s": 4.815,
+          "replay_s": 6.822457124944776,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 5.029124906286597,
+            "min_ms": 0.18179102335125208,
+            "max_ms": 8.332833065651357
+          },
+          "utterances": [
+            {
+              "id": 9,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 511.4572079563513,
+              "final_caption_delay_ms": 529.4508329639207,
+              "final_decode_ms": 11.1,
+              "final_queue_ms": 0,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 3,
+          "audio_s": 12.485,
+          "replay_s": 14.50039033300709,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 5.0276670372113585,
+            "min_ms": 0.13920804485678673,
+            "max_ms": 12.786375009454787
+          },
+          "utterances": [
+            {
+              "id": 10,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 513.0476249689236,
+              "final_caption_delay_ms": 655.5429579522461,
+              "final_decode_ms": 135.3,
+              "final_queue_ms": 0.1,
+              "changed_partial_updates": 12
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestamp_utc": "2026-10-05T20:38:44.748102-07:00",
+      "machine": "mac-m1-max",
+      "platform": "Darwin-25.6.0-arm64",
+      "python": "3.12.14",
+      "versions": {
+        "moonshine-voice": "0.1.5",
+        "numpy": "2.5.3",
+        "onnxruntime": "1.30.0"
+      },
+      "model": "moonshine-small",
+      "provider": "CPU",
+      "threads_requested": 4,
+      "load_ms": 113.81637502927333,
+      "clips": 3,
+      "repeats": 3,
+      "settings": {
+        "frame_ms": 32,
+        "end_silence_ms": 520,
+        "effective_end_silence_ms": 512,
+        "min_partial_ms": 700,
+        "partial_interval_ms": 450,
+        "speaker_identification": false
+      },
+      "summary": {
+        "utterances": 9,
+        "failures": 0,
+        "first_caption": {
+          "n": 9,
+          "median_ms": 535.2837500404567,
+          "min_ms": 529.6247079912573,
+          "max_ms": 546.3597920099273
+        },
+        "final_caption": {
+          "n": 9,
+          "median_ms": 569.7551249573003,
+          "min_ms": 547.1517089977862,
+          "max_ms": 767.4105420075357
+        },
+        "final_decode": {
+          "n": 9,
+          "median_ms": 15.9,
+          "min_ms": 6.7,
+          "max_ms": 248.3
+        },
+        "final_queue": {
+          "n": 9,
+          "median_ms": 40,
+          "min_ms": 0.1,
+          "max_ms": 215.7
+        },
+        "final_only": 0,
+        "non_silence_endpoints": 0
+      },
+      "limits": [
+        "VAD-estimated boundaries, not human phonetic annotations; 32 ms frames.",
+        "Caption emission before WebSocket transport and UI painting.",
+        "No microphone buffering, speaker identification or cold model load in caption delay.",
+        "In-use host; background applications are not paused.",
+        "Requested thread environment does not prove native ONNX thread count."
+      ],
+      "runs": [
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 1,
+          "audio_s": 5.855,
+          "replay_s": 7.878473374992609,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 5.0275205867365,
+            "min_ms": 0.06545800715684891,
+            "max_ms": 10.558833018876612
+          },
+          "utterances": [
+            {
+              "id": 2,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 537.0989160155877,
+              "final_caption_delay_ms": 551.2332500880585,
+              "final_decode_ms": 31.3,
+              "final_queue_ms": 0.1,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 1,
+          "audio_s": 4.815,
+          "replay_s": 6.822573791956529,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 5.029499996453524,
+            "min_ms": 0.14670798555016518,
+            "max_ms": 5.2031249506399035
+          },
+          "utterances": [
+            {
+              "id": 3,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 532.4747079228982,
+              "final_caption_delay_ms": 569.7551249573003,
+              "final_decode_ms": 6.9,
+              "final_queue_ms": 44.9,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 1,
+          "audio_s": 12.485,
+          "replay_s": 14.502340541919693,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 5.028374958783388,
+            "min_ms": 0.3135839942842722,
+            "max_ms": 14.58458392880857
+          },
+          "utterances": [
+            {
+              "id": 4,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 545.4346669213846,
+              "final_caption_delay_ms": 749.6004169872031,
+              "final_decode_ms": 15.4,
+              "final_queue_ms": 215.7,
+              "changed_partial_updates": 13
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 2,
+          "audio_s": 5.855,
+          "replay_s": 7.878312458051369,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 5.031749547924846,
+            "min_ms": 0.08445803541690111,
+            "max_ms": 15.91308310162276
+          },
+          "utterances": [
+            {
+              "id": 5,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 535.2837500404567,
+              "final_caption_delay_ms": 549.7407909939067,
+              "final_decode_ms": 29.4,
+              "final_queue_ms": 0.2,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 2,
+          "audio_s": 4.815,
+          "replay_s": 6.822157499962486,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 5.0304579781368375,
+            "min_ms": 0.13274990487843752,
+            "max_ms": 7.314582937397063
+          },
+          "utterances": [
+            {
+              "id": 6,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 534.685124986805,
+              "final_caption_delay_ms": 598.6128329345952,
+              "final_decode_ms": 6.7,
+              "final_queue_ms": 74,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 2,
+          "audio_s": 12.485,
+          "replay_s": 14.499175667064264,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 5.028249928727746,
+            "min_ms": 0.11454196646809578,
+            "max_ms": 17.85745902452618
+          },
+          "utterances": [
+            {
+              "id": 7,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 543.2512500630692,
+              "final_caption_delay_ms": 767.4105420075357,
+              "final_decode_ms": 248.3,
+              "final_queue_ms": 0.1,
+              "changed_partial_updates": 12
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 3,
+          "audio_s": 5.855,
+          "replay_s": 7.878521375008859,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 5.030458560213447,
+            "min_ms": 0.26037509087473154,
+            "max_ms": 6.513417116366327
+          },
+          "utterances": [
+            {
+              "id": 8,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 532.4871670464054,
+              "final_caption_delay_ms": 547.1517089977862,
+              "final_decode_ms": 26.9,
+              "final_queue_ms": 0.1,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 3,
+          "audio_s": 4.815,
+          "replay_s": 6.8203367500100285,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 5.028957966715097,
+            "min_ms": 0.06687501445412636,
+            "max_ms": 9.380541974678636
+          },
+          "utterances": [
+            {
+              "id": 9,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 529.6247079912573,
+              "final_caption_delay_ms": 564.8042079806323,
+              "final_decode_ms": 6.9,
+              "final_queue_ms": 40,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 3,
+          "audio_s": 12.485,
+          "replay_s": 14.498687917017378,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 5.03016693983227,
+            "min_ms": 0.05149992648512125,
+            "max_ms": 15.453874948434532
+          },
+          "utterances": [
+            {
+              "id": 10,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 546.3597920099273,
+              "final_caption_delay_ms": 688.9589589620009,
+              "final_decode_ms": 15.9,
+              "final_queue_ms": 153.6,
+              "changed_partial_updates": 13
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestamp_utc": "2026-10-05T20:40:20.656569-07:00",
+      "machine": "mac-m1-max",
+      "platform": "Darwin-25.6.0-arm64",
+      "python": "3.12.14",
+      "versions": {
+        "moonshine-voice": "0.1.5",
+        "numpy": "2.5.3",
+        "onnxruntime": "1.30.0"
+      },
+      "model": "moonshine-medium",
+      "provider": "CPU",
+      "threads_requested": 4,
+      "load_ms": 165.89545796159655,
+      "clips": 3,
+      "repeats": 3,
+      "settings": {
+        "frame_ms": 32,
+        "end_silence_ms": 520,
+        "effective_end_silence_ms": 512,
+        "min_partial_ms": 700,
+        "partial_interval_ms": 450,
+        "speaker_identification": false
+      },
+      "summary": {
+        "utterances": 9,
+        "failures": 0,
+        "first_caption": {
+          "n": 9,
+          "median_ms": 555.4722499810159,
+          "min_ms": 548.5867919642478,
+          "max_ms": 581.602083992213
+        },
+        "final_caption": {
+          "n": 9,
+          "median_ms": 617.1216669091955,
+          "min_ms": 547.431416948326,
+          "max_ms": 798.0469999415795
+        },
+        "final_decode": {
+          "n": 9,
+          "median_ms": 30.5,
+          "min_ms": 6.9,
+          "max_ms": 275.1
+        },
+        "final_queue": {
+          "n": 9,
+          "median_ms": 0.1,
+          "min_ms": 0,
+          "max_ms": 137.7
+        },
+        "final_only": 0,
+        "non_silence_endpoints": 0
+      },
+      "limits": [
+        "VAD-estimated boundaries, not human phonetic annotations; 32 ms frames.",
+        "Caption emission before WebSocket transport and UI painting.",
+        "No microphone buffering, speaker identification or cold model load in caption delay.",
+        "In-use host; background applications are not paused.",
+        "Requested thread environment does not prove native ONNX thread count."
+      ],
+      "runs": [
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 1,
+          "audio_s": 5.855,
+          "replay_s": 7.877391708898358,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 5.029104417189956,
+            "min_ms": 0.27708394918590784,
+            "max_ms": 11.597333941608667
+          },
+          "utterances": [
+            {
+              "id": 2,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 555.4722499810159,
+              "final_caption_delay_ms": 550.610499944538,
+              "final_decode_ms": 30.5,
+              "final_queue_ms": 0.1,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 1,
+          "audio_s": 4.815,
+          "replay_s": 6.819825625047088,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 5.030500120483339,
+            "min_ms": 0.055292039178311825,
+            "max_ms": 11.378625058569014
+          },
+          "utterances": [
+            {
+              "id": 3,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 555.1633750963956,
+              "final_caption_delay_ms": 662.6160830305885,
+              "final_decode_ms": 6.9,
+              "final_queue_ms": 137.7,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 1,
+          "audio_s": 12.485,
+          "replay_s": 14.500360624981113,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 5.028832936659455,
+            "min_ms": 0.081458012573421,
+            "max_ms": 15.528582967817783
+          },
+          "utterances": [
+            {
+              "id": 4,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 580.478208030574,
+              "final_caption_delay_ms": 733.2984999585897,
+              "final_decode_ms": 212.2,
+              "final_queue_ms": 0.1,
+              "changed_partial_updates": 12
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 2,
+          "audio_s": 5.855,
+          "replay_s": 7.877110500005074,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 5.028959014452994,
+            "min_ms": 0.037749879993498325,
+            "max_ms": 9.405416902154684
+          },
+          "utterances": [
+            {
+              "id": 5,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 548.5867919642478,
+              "final_caption_delay_ms": 554.9290839340539,
+              "final_decode_ms": 34.8,
+              "final_queue_ms": 0.1,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 2,
+          "audio_s": 4.815,
+          "replay_s": 6.828267624950968,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 5.049749976024032,
+            "min_ms": 0.23570796474814415,
+            "max_ms": 15.263166045770049
+          },
+          "utterances": [
+            {
+              "id": 6,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 555.6254999190569,
+              "final_caption_delay_ms": 798.0469999415795,
+              "final_decode_ms": 275.1,
+              "final_queue_ms": 0,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 2,
+          "audio_s": 12.485,
+          "replay_s": 14.499557749950327,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 10.026542004197836,
+            "min_ms": 0.13533397577703,
+            "max_ms": 22.220209008082747
+          },
+          "utterances": [
+            {
+              "id": 7,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 581.602083992213,
+              "final_caption_delay_ms": 617.1216669091955,
+              "final_decode_ms": 16.2,
+              "final_queue_ms": 77,
+              "changed_partial_updates": 13
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0000",
+          "sha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+          "repetition": 3,
+          "audio_s": 5.855,
+          "replay_s": 7.877023792010732,
+          "feed_lateness_ms": {
+            "n": 246,
+            "median_ms": 10.026312491390854,
+            "min_ms": 0.1598339295014739,
+            "max_ms": 14.761375030502677
+          },
+          "utterances": [
+            {
+              "id": 8,
+              "vad_onset_s": 0.576,
+              "vad_offset_s": 5.824,
+              "final_submitted_audio_s": 6.336,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 555.293416954577,
+              "final_caption_delay_ms": 547.431416948326,
+              "final_decode_ms": 30.9,
+              "final_queue_ms": 0.1,
+              "changed_partial_updates": 6
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0001",
+          "sha256": "473b1bb573e8f7cdcd639c6e318036236190107b66bfe6892286121a92d464c1",
+          "repetition": 3,
+          "audio_s": 4.815,
+          "replay_s": 6.827276333002374,
+          "feed_lateness_ms": {
+            "n": 213,
+            "median_ms": 10.027999989688396,
+            "min_ms": 0.13366597704589367,
+            "max_ms": 15.23400004953146
+          },
+          "utterances": [
+            {
+              "id": 9,
+              "vad_onset_s": 0.544,
+              "vad_offset_s": 4.48,
+              "final_submitted_audio_s": 4.992,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 554.6600409960374,
+              "final_caption_delay_ms": 662.7063749870281,
+              "final_decode_ms": 7,
+              "final_queue_ms": 132.7,
+              "changed_partial_updates": 5
+            }
+          ]
+        },
+        {
+          "clip_id": "1272-128104-0002",
+          "sha256": "5f4d8f7331acffc3d2efbe0f764b9eb3447911dc17f9843e38e1083eb1685b9c",
+          "repetition": 3,
+          "audio_s": 12.485,
+          "replay_s": 14.5078427499393,
+          "feed_lateness_ms": {
+            "n": 453,
+            "median_ms": 10.024833958595991,
+            "min_ms": 0.19112497102469206,
+            "max_ms": 25.590875069610775
+          },
+          "utterances": [
+            {
+              "id": 10,
+              "vad_onset_s": 0.608,
+              "vad_offset_s": 12.032,
+              "final_submitted_audio_s": 12.544,
+              "finish_reason": "silence_endpoint",
+              "first_caption_type": "partial",
+              "first_caption_delay_ms": 580.9247499639168,
+              "final_caption_delay_ms": 614.5979169588536,
+              "final_decode_ms": 16.1,
+              "final_queue_ms": 82.7,
+              "changed_partial_updates": 13
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

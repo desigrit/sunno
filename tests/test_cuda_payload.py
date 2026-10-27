@@ -174,13 +174,18 @@ streaming = [e for e in catalog if e["id"].startswith("stream-")]
 check("streaming models exist in the catalogue", len(streaming) >= 2)
 check("no streaming model uses the GPU", all(not e["uses_gpu"] for e in streaming),
       "picking one of these must never trigger a 455 MB download")
-whisper = [e for e in catalog if not e["id"].startswith("stream-")]
+from server.experimental_models import MODEL_IDS as EXPERIMENTAL_IDS
+
+whisper = [e for e in catalog if not models.is_stream_model(e["id"])
+           and e["id"] not in EXPERIMENTAL_IDS]
 check("every Whisper model uses the GPU", all(e["uses_gpu"] for e in whisper))
+check("Moonshine and native speech do not request CUDA payloads",
+      all(not e["uses_gpu"] for e in catalog if e["id"] in EXPERIMENTAL_IDS))
 
 # uses_gpu has to follow is_stream_model, not a string prefix. Nothing else in the codebase
 # treats "stream-" as meaningful, and a second parallel rule would drift from the first.
-check("uses_gpu tracks is_stream_model",
-      all(e["uses_gpu"] != models.is_stream_model(e["id"]) for e in catalog))
+check("uses_gpu tracks the engine's CUDA requirement",
+      all(e["uses_gpu"] == models.uses_cuda(e["id"]) for e in catalog))
 
 
 # ----------------------------------------------------------- device resolve
@@ -266,6 +271,10 @@ _SINGLE_NETWORK = [
     r"single network operation",
 ]
 for doc in sorted(REPO.rglob("*.md")):
+    # Local build sandboxes can contain the separate Mac repository, which does
+    # not ship CUDA. Its documents are not Windows product documentation.
+    if doc.relative_to(REPO).parts[0] in {"local", ".venv"}:
+        continue
     if any(part in {".git", "node_modules", "staging"} for part in doc.parts):
         continue
     text = doc.read_text(encoding="utf-8", errors="ignore")
@@ -320,7 +329,9 @@ app_py = (REPO / "server" / "app.py").read_text(encoding="utf-8")
 check("the device is re-resolved after the download",
       "GPU libraries are now installed" in app_py)
 check("the re-resolve only ever upgrades",
-      'if settings.device != "cuda":' in app_py)
+      'if model_uses_cuda and settings.device != "cuda":' in app_py)
+check("non-CUDA engines skip CUDA runtime registration",
+      'if model_uses_cuda and settings.device == "cuda":' in app_py)
 # The state the whole install base lands in after this update: model already cached, so the
 # picker never appears and ensure_model never runs. Without a repair here the machine sits on
 # the processor permanently, not just for one launch.
@@ -336,7 +347,7 @@ row_cs = (REPO / "app" / "Models" / "ModelRow.cs").read_text(encoding="utf-8")
 check("the switcher row knows the payload size", "GpuPayloadMb" in row_cs)
 check("the switcher size includes the payload", "public int TotalMb" in row_cs)
 check("the switcher shows a size whenever bytes will move",
-      "TotalMb > 0 && !_isBusy" in row_cs,
+      "Supported && (TotalMb > 0 || !Available) && !_isBusy" in row_cs,
       "an already-downloaded row showed nothing and then transferred 455 MB")
 
 

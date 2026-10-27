@@ -19,9 +19,9 @@ dependable, and conversational turns are often shorter than that. Two safeguards
   * `min_new_speaker_s` - creating a *new* speaker requires more evidence than matching an
     existing one, so brief utterances cannot fragment the roster.
 
-Automatic labelling is therefore best-effort. Naming a speaker once (see `rename`) pins
-their profile and makes subsequent matching markedly more reliable, because comparison then
-happens against a deliberately-chosen reference instead of a noisy first guess.
+Live labels are provisional. The live coordinator supplies voiced samples, updates a
+small session reference bank, and revisits recent assignments as evidence improves.
+Naming a speaker is optional; only explicitly pinned profiles are saved to disk.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def _l2_normalise(vec: np.ndarray) -> np.ndarray:
 class _Profile:
     """Running centroid for one speaker."""
 
-    __slots__ = ("id", "centroid", "count", "name", "pinned", "is_self")
+    __slots__ = ("id", "centroid", "count", "name", "pinned", "is_self", "references")
 
     def __init__(self, profile_id: int, embedding: np.ndarray, name: str | None = None,
                  pinned: bool = False, is_self: bool = False) -> None:
@@ -55,8 +55,13 @@ class _Profile:
         self.name = name
         self.pinned = pinned
         self.is_self = is_self
+        self.references: list[np.ndarray] = []
 
     def update(self, embedding: np.ndarray, max_weight: int = 20) -> None:
+        if not self.centroid.size:
+            self.centroid = embedding
+            self.count = 1
+            return
         # Pinned profiles are deliberately chosen references; don't let noisy far-field
         # utterances drift them.
         if self.pinned:
@@ -66,6 +71,13 @@ class _Profile:
         weight = min(self.count, max_weight)
         self.centroid = _l2_normalise((self.centroid * weight + embedding) / (weight + 1))
         self.count += 1
+        self.references = (self.references + [embedding])[-4:]
+
+    def similarity(self, embedding: np.ndarray) -> float:
+        if self.centroid.shape != embedding.shape:
+            return -1.0
+        return max(float(self.centroid @ embedding),
+                   *(float(ref @ embedding) for ref in self.references), -1.0)
 
 
 class SpeakerIdentifier:
@@ -217,9 +229,13 @@ class SpeakerIdentifier:
             if target is None or source is None or source_id == target_id:
                 return False
             total = target.count + source.count
-            target.centroid = _l2_normalise(
-                (target.centroid * target.count + source.centroid * source.count) / total
-            )
+            if not target.centroid.size:
+                target.centroid = source.centroid.copy()
+            elif source.centroid.size:
+                target.centroid = _l2_normalise(
+                    (target.centroid * target.count + source.centroid * source.count) / total
+                )
+            target.references = (target.references + source.references)[-4:]
             target.count = total
             # Everything the user asserted about either profile has to survive, because the
             # premise of a merge is that these were always one person.
@@ -250,7 +266,94 @@ class SpeakerIdentifier:
         stream.input_finished()
         if not self._extractor.is_ready(stream):
             return None
-        return _l2_normalise(np.asarray(self._extractor.compute(stream), dtype=np.float32))
+        embedding = np.asarray(self._extractor.compute(stream), dtype=np.float32)
+        if not np.all(np.isfinite(embedding)) or np.linalg.norm(embedding) < 1e-6:
+            return None
+        return _l2_normalise(embedding)
+
+    def provisional(self, preferred: int | None = None) -> int:
+        """Give the first words a label without waiting for a voice embedding.
+
+        Empty references are session-only placeholders, not learned voice identities.
+        """
+        with self._lock:
+            if preferred in self._profiles:
+                return preferred
+            empty = next((p for p in self._profiles.values() if not p.centroid.size), None)
+            if empty is not None:
+                return empty.id
+            return self._mint(np.empty(0, dtype=np.float32)).id
+
+    def assign(self, embedding: np.ndarray, speech_s: float, preferred: int | None,
+               learn: bool) -> tuple[int | None, float]:
+        """Match voiced audio, allowing a quick label to change as a turn grows.
+
+        Only completed, speech-rich turns update references. Overlapping partials must
+        not repeatedly reinforce their own first guess or contaminate another voice.
+        """
+        with self._lock:
+            candidates = [p for p in self._profiles.values() if p.centroid.size]
+            scores = sorted(((p.similarity(embedding), p.id) for p in candidates), reverse=True)
+            best_score, best_id = scores[0] if scores else (-1.0, None)
+            runner_up = scores[1][0] if len(scores) > 1 else -1.0
+            current = self._profiles.get(preferred)
+            if current is not None and current.pinned and not current.centroid.size:
+                if speech_s >= 2.0:
+                    current.update(embedding)
+                return current.id, 0.0
+            if best_score >= self.threshold:
+                # An ambiguous short sample should not bounce between similar voices.
+                if (current is not None and current.centroid.size and
+                        best_score - runner_up < 0.08 and
+                        current.similarity(embedding) >= self.threshold - 0.08):
+                    return current.id, current.similarity(embedding)
+                if learn and speech_s >= 2.5 and best_score >= self.threshold + 0.10:
+                    self._profiles[best_id].update(embedding)
+                return best_id, best_score
+            if current is not None and not current.centroid.size:
+                if speech_s >= 2.0:
+                    current.update(embedding)
+                return current.id, 0.0
+            if current is not None and (speech_s < 2.5 or
+                    current.similarity(embedding) >= self.threshold - 0.08):
+                return current.id, current.similarity(embedding)
+            if speech_s >= 2.5 and len(candidates) < self.max_speakers:
+                return self._mint(embedding).id, 0.0
+            return preferred, best_score
+
+    def is_placeholder(self, speaker_id: int | None) -> bool:
+        with self._lock:
+            profile = self._profiles.get(speaker_id)
+            return profile is not None and not profile.centroid.size and not profile.pinned
+
+    def reconsider(self, embedding: np.ndarray, current: int) -> int:
+        """Correct a recent label only with a clear, strong alternative match."""
+        with self._lock:
+            profile = self._profiles.get(current)
+            # A user-named identity is not silently overwritten by automatic revision.
+            if profile is None or profile.pinned:
+                return current
+            scores = sorted(((p.similarity(embedding), p.id) for p in self._profiles.values()
+                             if p.centroid.size), reverse=True)
+            if not scores:
+                return current
+            score, candidate = scores[0]
+            runner_up = scores[1][0] if len(scores) > 1 else -1.0
+            if (candidate != current and score >= max(0.65, self.threshold + 0.15)
+                    and score - runner_up >= 0.10):
+                return candidate
+            return current
+
+    def duplicate(self) -> tuple[int, int] | None:
+        """Find strongly matching session references, never merge user-named people."""
+        with self._lock:
+            candidates = [p for p in self._profiles.values()
+                          if not p.pinned and p.centroid.size and p.count >= 3]
+            for i, a in enumerate(candidates):
+                for b in candidates[i + 1:]:
+                    if float(a.centroid @ b.centroid) >= 0.80:
+                        return max(a.id, b.id), min(a.id, b.id)
+            return None
 
     def identify(self, audio: np.ndarray) -> tuple[int | None, float]:
         """Return (speaker_id, similarity). None when the clip is too short to judge."""
@@ -299,7 +402,7 @@ class SpeakerIdentifier:
                 {"name": p.name, "count": p.count, "is_self": p.is_self,
                  "centroid": p.centroid.tolist()}
                 for p in sorted(self._profiles.values(), key=lambda p: p.id)
-                if p.pinned
+                if p.pinned and p.centroid.size
             ]
         self.profile_path.parent.mkdir(parents=True, exist_ok=True)
         self.profile_path.write_text(json.dumps(payload), encoding="utf-8")

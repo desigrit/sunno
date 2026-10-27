@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 import time
+import uuid
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,10 +86,7 @@ def next_name(root: Path) -> str:
 
 
 def _count_lines(folder: Path) -> int:
-    path = folder / JSONL_NAME
-    if not path.exists():
-        return 0
-    return sum(1 for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip())
+    return len(_read_lines(folder))
 
 
 class Recorder:
@@ -102,6 +101,8 @@ class Recorder:
     def __init__(self, root: Path, resume: Path | str | None = None) -> None:
         self.root = Path(root)
         self._closed = False
+        self._transcript_lock = threading.RLock()
+        self._session = uuid.uuid4().hex
 
         if resume is not None and Path(resume).is_dir():
             self.folder = Path(resume)
@@ -163,15 +164,32 @@ class Recorder:
         # a start before the recording existed. Left alone that renders as "[-1:57]", which
         # reads as a broken file rather than as a sentence that straddled the button.
         at = max(0.0, event.get("started_at", 0.0) - self.started_at)
-        self._jsonl.write(json.dumps({
+        row = {
+            "_session": self._session,
+            "id": event.get("id"),
             "at": round(at, 2),
             "speaker": event.get("speaker"),
             "speaker_id": event.get("speaker_id"),
             "text": event.get("text", ""),
             "words": event.get("words") or [],
-        }, ensure_ascii=False) + "\n")
-        self._jsonl.flush()
-        self._lines += 1
+        }
+        with self._transcript_lock:
+            if self._closed:
+                return
+            self._jsonl.write(json.dumps(row, ensure_ascii=False) + "\n")
+            self._jsonl.flush()
+            self._lines += 1
+
+    def add_speaker_event(self, event: dict) -> None:
+        """Append corrections, preserving crash recovery without rewriting past lines."""
+        if event.get("type") not in ("speaker_label", "speaker_merged", "speaker_deleted", "roster"):
+            return
+        with self._transcript_lock:
+            if self._closed:
+                return
+            self._jsonl.write(json.dumps({**event, "_session": self._session},
+                                        ensure_ascii=False) + "\n")
+            self._jsonl.flush()
 
     def detach(self) -> None:
         """Let go of the files without finalising, so another process can take over.
@@ -179,12 +197,13 @@ class Recorder:
         Used when the backend restarts for a new microphone or model. The recording is not
         over; this process is simply no longer the one writing it.
         """
-        self._closed = True
-        for handle in (self._pcm, self._jsonl):
-            try:
-                handle.close()
-            except Exception:
-                pass
+        with self._transcript_lock:
+            self._closed = True
+            for handle in (self._pcm, self._jsonl):
+                try:
+                    handle.close()
+                except Exception:
+                    pass
 
     def stop(self) -> Saved:
         """Finalise: close the streams, transcode, and write the readable transcript."""
@@ -195,6 +214,9 @@ class Recorder:
 
 def _read_lines(folder: Path) -> list[dict]:
     out: list[dict] = []
+    corrections: dict[tuple, dict] = {}
+    merges: dict[tuple, int] = {}
+    names: dict[tuple, str] = {}
     path = folder / JSONL_NAME
     if not path.exists():
         return out
@@ -203,11 +225,41 @@ def _read_lines(folder: Path) -> list[dict]:
         if not raw:
             continue
         try:
-            out.append(json.loads(raw))
+            row = json.loads(raw)
         except ValueError:
             # A line torn in half by a kill. Everything before it is still good, and
             # discarding just the fragment is the whole reason for appending line by line.
             continue
+        if not isinstance(row, dict):
+            continue
+        session = row.get("_session")
+        kind = row.get("type")
+        if kind == "speaker_label":
+            corrections[(session, row.get("id"))] = row
+        elif kind == "speaker_merged":
+            merges[(session, row["from"])] = row["into"]
+        elif kind == "roster":
+            for speaker in row.get("speakers", []):
+                names[(session, speaker["id"])] = speaker["label"]
+        elif kind == "speaker_deleted":
+            names[(session, row["id"])] = row["label"]
+        elif kind is None:
+            out.append(row)
+    for row in out:
+        session = row.pop("_session", None)
+        utterance = row.pop("id", None)
+        correction = corrections.get((session, utterance)) if utterance is not None else None
+        if correction is not None:
+            row["speaker_id"] = correction.get("speaker_id")
+            row["speaker"] = correction.get("speaker")
+        sid = row.get("speaker_id")
+        seen = set()
+        while (session, sid) in merges and sid not in seen:
+            seen.add(sid)
+            sid = merges[(session, sid)]
+        row["speaker_id"] = sid
+        if (session, sid) in names:
+            row["speaker"] = names[(session, sid)]
     return out
 
 

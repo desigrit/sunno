@@ -1,0 +1,33 @@
+<UserControl
+    x:Class="Sunno.Controls.SkipToCurrentButton"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="SkipToCurrentFill" Color="#E6FFFFFF" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="SkipToCurrentFill" Color="#E62D2D2D" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="SkipToCurrentFill" Color="{ThemeResource SystemColorButtonFaceColor}" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+    <Button x:Name="SkipButton" Click="OnClick" CornerRadius="18" MinHeight="34"
+            Padding="12,5" FontSize="12"
+            Background="{ThemeResource SkipToCurrentFill}"
+            Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+            BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+            AutomationProperties.Name="Skip to current"
+            AutomationProperties.HelpText="Show the latest captions and resume automatic scrolling."
+            ToolTipService.ToolTip="Show the latest captions and resume automatic scrolling">
+        <StackPanel Orientation="Horizontal" Spacing="7">
+            <FontIcon Glyph="&#xE74B;" FontSize="12" IsHitTestVisible="False" />
+            <TextBlock Text="Skip to current" VerticalAlignment="Center" />
+        </StackPanel>
+    </Button>
+</UserControl>

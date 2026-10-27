@@ -19,14 +19,61 @@ Sunno means "listen" in Hindi and Urdu.
 
 ## What it does
 
+### Engine preview in 1.0.84
+
+The model picker now includes Moonshine Tiny, Small and Medium Streaming for English,
+plus Windows AI Speech where Windows reports support. These are opt-in experiments:
+no speed or accuracy ranking has been assigned yet, and your existing model choice stays
+unchanged. Windows manages its speech model download. Unsupported native engines are
+disabled with an explanation, not silently replaced by a cloud recognizer.
+
+Live audio is conditioned once as it arrives. Streaming engines keep decoder state and
+receive only new samples, including any samples accumulated while a caption refresh was
+skipped. Whisper still receives complete utterances for its existing two-pass decoding.
+Slow decoders get fewer provisional refreshes. Pause, device changes and helper failures
+reset stream state so old text cannot leak into a new capture session.
+
+Moonshine and the native engine currently provide line-level captions, without Whisper's
+word confidence, clarity scores or word-level recording navigation. Native engines do not
+use Sunno's custom vocabulary hints. Recognition remains local after model setup.
+
+This is still an x64 Windows app, including on Snapdragon. The Windows AI helper is also
+shipped as ARM64 and selected on ARM hardware; the rest of the app has not been made
+ARM-native. The first observational benchmarks are recorded in
+[bench/results](bench/results/README.md#2026-10-05-engine-preview-first-observational-pass).
+They cover an i9-14900K desktop and M1 Max, not the older Intel or Snapdragon laptops.
+The new engines remain opt-in; these limited measurements do not establish accent accuracy.
+
+The expanded model picker is capped at three quarters of the sidebar, supports mouse-wheel
+scrolling and shows the native slim scrollbar on hover. Unknown caption delays are labelled
+explicitly. Windows model setup preserves the OS error and rechecks readiness after a
+background installation, rather than caching an unavailable model until Sunno restarts.
+
+### Appearance
+
+Choose **System**, **Light** or **Dark** in Settings > Appearance.
+System is the default and follows your Windows app appearance, including changes
+made while Sunno is open. The choice is saved, and switching applies immediately
+without restarting capture or reloading the speech model. Caption status colors
+adapt to the selected appearance. Windows contrast themes take precedence.
+
+### Everyday use
+
+In **Settings > Updates**, choose **Check for updates** to look for newer stable releases
+on GitHub. **Download update** shows progress and supports cancellation. **Install update**
+opens Windows App Installer to complete the update. Settings and downloaded speech models
+stay in place. Finish any recording first; updating closes Sunno and clears the live transcript.
+Checks happen only when requested. No installer published on GitHub means there is no update
+available through this button, even when newer source code or a local build exists.
+
 Point it at a microphone and it writes down what people are saying, as they say it. Put it near
 the table at dinner, beside you in a meeting, or pass a small mic to whoever is talking.
 
 - **Fast enough to follow a conversation.** Around a third of a second behind on a machine with
   an NVIDIA GPU, so you are reading along rather than reading a transcript of something that
   already ended.
-- **Labels who is speaking.** A four way conversation reads like a conversation instead of one
-  long paragraph. Rename anyone, and mark which one is you so your own lines step back.
+- **Optional speaker labels.** Choose Automatic (Experimental) to show revisable speaker
+  labels, or Off for just the words. Naming people is optional.
 - **Captions your PC's audio too,** which covers video calls, YouTube, podcasts, anything coming
   out of your speakers.
 - **Handles accented speech well.** This was the whole reason for choosing Whisper large-v3 over
@@ -41,6 +88,11 @@ the table at dinner, beside you in a meeting, or pass a small mic to whoever is 
   unless you ask, the folder is not even created until the first save, and nothing is uploaded
   either way. See [Recording](#recording).
 - Adjustable text size, always on top, and you can select and copy any part of the transcript.
+
+Scroll up to read earlier captions without being pulled back down by new words. Scroll back
+near the bottom, or select **Skip to current**, to resume following live captions. The subtle
+floating button appears while you are reading above the latest captions. Finalizing text and
+pauses in speech preserve your choice. Clearing the transcript also resumes following.
 
 <table>
 <tr>
@@ -65,9 +117,9 @@ Sunno does the recognition on your own machine. No account, no sign in, no telem
 to send anything to. Once setup is done, turn off your Wi-Fi and it works exactly the same. The
 people around you are not being uploaded anywhere, and you can tell them so honestly.
 
-Sunno touches the network during setup and then never again. It downloads the speech model,
-and on a PC with an NVIDIA graphics card the CUDA libraries that card needs. After that,
-nothing.
+Sunno downloads speech models and, on a PC with an NVIDIA graphics card, the CUDA libraries
+that card needs. It also contacts GitHub when you request an app update check or download.
+Captioning works offline, and updates never send your audio or captions.
 
 Two things get written to disk, and both are yours: a pinned speaker's name and voice
 fingerprint, so Sunno recognises them next time, and any recording you deliberately make. Full
@@ -110,8 +162,8 @@ Change the folder in Settings. A few things worth knowing:
 On first run Sunno downloads a speech model. Whisper large-v3 is roughly 3 GB; the streaming
 models are under 70 MB. On a PC with an NVIDIA graphics card it also fetches about 450 MB of
 CUDA libraries, once, alongside the model. Those used to ship inside the installer, which
-made it 828 MB larger for every PC including the ones that can never use them. Setup is the
-only step that needs an internet connection.
+made it 828 MB larger for every PC including the ones that can never use them. Downloading
+models and checking for app updates need an internet connection; captioning does not.
 
 It runs on any modern PC: with an NVIDIA GPU captions appear almost
 immediately once those libraries are in place, and without one you can either use your
@@ -161,10 +213,13 @@ No captioning system is perfect, and anyone who tells you otherwise is selling s
   close talking one is worth roughly twice the accuracy, which is more than any model change
   available. There is a table of measured numbers in
   [the engineering notes](docs/ENGINEERING.md#microphone-matters-more-than-the-model).
-- **Speaker labels are best effort.** Around two thirds of turns are correct on two speaker
-  audio. Short turns like "yeah" or "okay, fine" are left unlabelled rather than guessed at,
-  because embeddings need two to three seconds of speech to be dependable. Naming the people you
-  talk to most is the single biggest improvement.
+- **Speaker labels are experimental.** Choose Off or Automatic in Settings under Captions.
+  Automatic shows provisional labels alongside the words and can correct them as more speech
+  arrives, without confirmation prompts or delaying transcription. Short turns, similar voices,
+  and overlapping speech can still be mislabelled. Off stops scheduling speaker inference and
+  ignores any result still finishing in the background. New installations
+  start with Off; updates preserve the previous Automatic behavior until you change it.
+  Voice references are learned in memory during the session. Naming or saving people is optional.
 - **Overlapping speech degrades badly.** When two people talk at once, single channel
   recognition of any kind struggles. Separation models fast enough for real time are not
   practical yet on this hardware.

@@ -749,7 +749,11 @@ class PipelineContinuityTests(unittest.TestCase):
                 self.assertTrue(pipeline.drain(3))
         finals = [event for event in events if event.get("type") == "final"]
         self.assertEqual([event["id"] for event in finals], [1, 2, 3])
-        self.assertTrue(all(event["speaker_id"] == 1 for event in finals))
+        # Speaker work no longer blocks transcription. An immediate provisional
+        # assignment can be corrected after the final text has already arrived.
+        assignments = {event["id"]: event["speaker_id"] for event in events
+                       if event.get("type") in ("final", "speaker_label")}
+        self.assertTrue(all(assignments[event["id"]] == 1 for event in finals))
         self.assertIs(pipeline._worker, asr)
         self.assertTrue(asr._thread.is_alive())
         self.assertIs(pipeline._speaker, speaker)
@@ -776,7 +780,7 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 managers.append(self)
 
         class Pipeline:
-            def __init__(self, settings, model, emit, should_run, speaker, on_audio):
+            def __init__(self, settings, model, emit, should_run, speaker, on_audio, speaker_labels=None):
                 self.on_audio = on_audio
                 self.closed = False
                 pipelines.append(self)

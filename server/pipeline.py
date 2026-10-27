@@ -19,7 +19,7 @@ from typing import Callable, Iterable
 
 import numpy as np
 
-from .engine import SpeechEngine
+from .engine import IncrementalSpeechEngine, SpeechEngine
 from .config import FRAME_MS, FRAME_SAMPLES, SAMPLE_RATE, Settings
 
 Emit = Callable[[dict], None]
@@ -71,11 +71,20 @@ class SessionController:
 @dataclass
 class _Job:
     utterance_id: int
-    audio: np.ndarray
+    audio: np.ndarray | None
     is_final: bool
     speaker_id: int | None = None
     speaker_label: str | None = None
     started_at: float = 0.0
+    chunks: tuple[np.ndarray, ...] = ()
+    generation: int = 0
+    queued_at: float = 0.0
+    reset_only: bool = False
+
+    def samples(self) -> np.ndarray:
+        if self.audio is not None:
+            return self.audio
+        return np.concatenate(self.chunks) if self.chunks else np.empty(0, np.float32)
 
 
 class AsrWorker:
@@ -89,6 +98,14 @@ class AsrWorker:
         self._finals: deque[_Job] = deque()
         self._busy = False
         self._stop = False
+        self._generation = 0
+        self._reset_pending = False
+        self._incremental = isinstance(engine, IncrementalSpeechEngine)
+        self._stream_id: int | None = None
+        self._stream_chunks = 0
+        self._stream_samples = 0
+        self._last_decode_ms = 0.0
+        self._max_finals = 8
         self._thread = threading.Thread(target=self._loop, name="asr", daemon=True)
 
     def start(self) -> None:
@@ -102,11 +119,29 @@ class AsrWorker:
 
     def submit_partial(self, job: _Job) -> None:
         with self._lock:
+            if self._stop or self._finals:
+                return
+            job.generation = self._generation
+            job.queued_at = time.monotonic()
             self._pending_partial = job  # latest wins
             self._lock.notify()
 
     def submit_final(self, job: _Job) -> None:
         with self._lock:
+            generation = self._generation
+            # Backpressure, never a deque(maxlen) that silently loses final captions.
+            if len(self._finals) >= self._max_finals:
+                self._emit({"type": "error", "code": "asr_backpressure",
+                            "message": "Recognition is falling behind. Audio may be skipped; "
+                                       "choose a lighter speech model."})
+            while len(self._finals) >= self._max_finals and not self._stop:
+                self._lock.wait(timeout=0.25)
+                if generation != self._generation:
+                    return
+            if self._stop:
+                return
+            job.generation = generation
+            job.queued_at = time.monotonic()
             self._finals.append(job)
             # A final supersedes any provisional decode for the same utterance.
             if self._pending_partial and self._pending_partial.utterance_id == job.utterance_id:
@@ -116,8 +151,16 @@ class AsrWorker:
     def flush(self) -> None:
         """Drop queued work so stale text can't surface after a pause/resume."""
         with self._lock:
+            self._generation += 1
             self._pending_partial = None
             self._finals.clear()
+            self._reset_pending = True
+            self._lock.notify_all()
+
+    def partial_interval_ms(self, configured: int) -> float:
+        """Avoid scheduling refreshes faster than this engine can finish them."""
+        with self._lock:
+            return max(configured, min(2000.0, self._last_decode_ms * 1.25))
 
     def drain(self, timeout: float = 30.0) -> bool:
         """Block until queued work is done. Needed when a finite source (a WAV file)
@@ -125,7 +168,8 @@ class AsrWorker:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self._lock:
-                idle = not self._finals and self._pending_partial is None and not self._busy
+                idle = (not self._finals and self._pending_partial is None
+                        and not self._busy and not self._reset_pending)
             if idle:
                 return True
             time.sleep(0.05)
@@ -134,30 +178,93 @@ class AsrWorker:
     def _next_job(self) -> _Job | None:
         with self._lock:
             self._busy = False
-            while not self._stop and not self._finals and self._pending_partial is None:
+            while (not self._stop and not self._finals and self._pending_partial is None
+                   and not self._reset_pending):
                 self._lock.wait(timeout=0.25)
             if self._stop:
                 return None
             self._busy = True
+            if self._reset_pending:
+                self._reset_pending = False
+                return _Job(-1, None, False, generation=self._generation, reset_only=True)
             if self._finals:
-                return self._finals.popleft()
+                job = self._finals.popleft()
+                self._lock.notify_all()
+                return job
             job, self._pending_partial = self._pending_partial, None
             return job
 
+    def _reset_stream(self) -> None:
+        try:
+            if self._incremental:
+                self._engine.reset_stream()
+        finally:
+            self._stream_id = None
+            self._stream_chunks = self._stream_samples = 0
+
+    def _recover_stream(self) -> None:
+        try:
+            self._reset_stream()
+        except Exception:
+            # Cleanup can fail after a helper exits. Keep the worker alive so the
+            # next job can recreate the engine's stream and replay its snapshot.
+            pass
+
+    def _decode(self, job: _Job):
+        if not self._incremental:
+            audio = job.samples()
+            return self._engine.final(audio) if job.is_final else self._engine.partial(audio)
+        if self._stream_id != job.utterance_id:
+            self._reset_stream()
+            self._engine.start_stream()
+            self._stream_id = job.utterance_id
+        if job.chunks:
+            tail = job.chunks[self._stream_chunks:]
+            audio = np.concatenate(tail) if tail else np.empty(0, np.float32)
+            self._stream_chunks = len(job.chunks)
+        else:
+            # Compatibility for callers submitting a complete immutable snapshot.
+            audio = job.samples()[self._stream_samples:]
+        self._stream_samples += len(audio)
+        result = self._engine.stream(audio, final=job.is_final)
+        if job.is_final:
+            self._reset_stream()
+        return result
+
     def _loop(self) -> None:
+        try:
+            self._run_jobs()
+        finally:
+            self._recover_stream()
+            close = getattr(self._engine, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:
+                    pass
+
+    def _run_jobs(self) -> None:
         while True:
             job = self._next_job()
             if job is None:
                 return
-            try:
-                result = (
-                    self._engine.final(job.audio)
-                    if job.is_final
-                    else self._engine.partial(job.audio)
-                )
-            except Exception as exc:  # keep the pipeline alive on a bad decode
-                self._emit({"type": "error", "message": f"ASR failure: {exc}"})
+            if job.reset_only:
+                self._recover_stream()
                 continue
+            started = time.monotonic()
+            try:
+                result = self._decode(job)
+            except Exception as exc:  # keep the pipeline alive on a bad decode
+                self._recover_stream()
+                with self._lock:
+                    if job.generation == self._generation:
+                        self._emit({"type": "error", "message": f"ASR failure: {exc}"})
+                continue
+
+            with self._lock:
+                self._last_decode_ms = (time.monotonic() - started) * 1000.0
+                if job.generation != self._generation or self._stop:
+                    continue
 
             if not result.text and not job.is_final:
                 continue
@@ -165,7 +272,7 @@ class AsrWorker:
             # Learn what this machine actually does, so the model picker can quote measured
             # figures instead of the ones recorded on the developer's hardware. Finals only:
             # partials decode greedily and would understate the wait for a finished sentence.
-            if job.is_final:
+            if job.is_final and not self._incremental:
                 from . import hardware
 
                 hardware.record_latency(
@@ -174,8 +281,7 @@ class AsrWorker:
                     result.latency_ms,
                 )
 
-            self._emit(
-                {
+            event = {
                     "type": "final" if job.is_final else "partial",
                     "id": job.utterance_id,
                     "text": result.text,
@@ -184,6 +290,7 @@ class AsrWorker:
                     "clarity": result.clarity,
                     "latency_ms": round(result.latency_ms, 1),
                     "duration_s": round(result.duration_s, 2),
+                    "queue_ms": round(max(0.0, started - job.queued_at) * 1000.0, 1),
                     # When the utterance was spoken, not when decoding finished, so a
                     # timestamp reflects the conversation rather than our queue depth.
                     "started_at": job.started_at,
@@ -198,7 +305,9 @@ class AsrWorker:
                         for w in result.words
                     ],
                 }
-            )
+            with self._lock:
+                if job.generation == self._generation and not self._stop:
+                    self._emit(event)
 
 
 class CaptionPipeline:
@@ -217,8 +326,9 @@ class CaptionPipeline:
         should_run: Callable[[], bool] | None = None,
         speaker: "SpeakerIdentifier | None" = None,
         on_audio: Callable[[np.ndarray], None] | None = None,
+        speaker_labels=None,
     ) -> None:
-        from .preprocess import AudioConditioner
+        from .preprocess import StreamingAudioConditioner
         from .vad import StreamingSileroVAD
 
         self.settings = settings
@@ -230,12 +340,17 @@ class CaptionPipeline:
         self._on_audio = on_audio
         self._vad = StreamingSileroVAD(FRAME_SAMPLES)
         self._speaker = speaker
-        self._condition = AudioConditioner(settings)
-        self._worker = AsrWorker(engine, emit)
+        from .speaker_labels import LiveSpeakerLabels
+        self._labels = speaker_labels or LiveSpeakerLabels(
+            speaker, emit, settings.enable_speakers and settings.speaker_labels)
+        self._owns_labels = speaker_labels is None
+        self._condition = StreamingAudioConditioner(settings)
+        self._worker = AsrWorker(engine, self._labels.emit_caption)
         self._worker_started = False
 
         pre_roll_frames = max(1, int(settings.pre_roll_ms / FRAME_MS))
         self._pre_roll: deque[np.ndarray] = deque(maxlen=pre_roll_frames)
+        self._speaker_pre_roll: deque[np.ndarray | None] = deque(maxlen=pre_roll_frames)
         self._end_silence_frames = max(1, int(settings.end_silence_ms / FRAME_MS))
         self._max_utterance_frames = int(settings.max_utterance_s * 1000 / FRAME_MS)
         self._min_utterance_frames = max(1, int(settings.min_utterance_ms / FRAME_MS))
@@ -243,7 +358,6 @@ class CaptionPipeline:
 
         self._utterance_id = 0
         self._last_level_at = 0.0
-        self._roster_signature: tuple = ()
         self._stop = threading.Event()
         self._reset_segmentation()
 
@@ -253,24 +367,31 @@ class CaptionPipeline:
         self._silence_run = 0
         self._buffer = []
         self._last_partial_at = 0.0
-        self._current_speaker = None
-        self._current_label = None
         self._utterance_started_at = 0.0
         self._pre_roll.clear()
+        self._speaker_pre_roll.clear()
+        self._speaker_buffer: deque[np.ndarray] = deque(maxlen=int(8 * SAMPLE_RATE / FRAME_SAMPLES))
+        self._speaker_frames = 0
+        self._speaker_observed = 0
+        self._speaker_generation = self._labels.generation
         self._vad.reset()
+        self._condition.reset()
 
     def stop(self) -> None:
         self._stop.set()
 
     def drain(self, timeout: float = 30.0) -> bool:
         """Wait for queued transcriptions to complete (used when a WAV source ends)."""
-        return self._worker.drain(timeout) if self._worker_started else True
+        labels_done = self._labels.drain(timeout)
+        return (self._worker.drain(timeout) if self._worker_started else True) and labels_done
 
     def close(self) -> None:
         """Shut down the ASR worker. Call once, at process exit."""
         if self._worker_started:
             self._worker.stop()
             self._worker_started = False
+        if self._owns_labels:
+            self._labels.close()
 
     def run(self, frames: Iterable[np.ndarray]) -> None:
         """Consume frames until the source ends, stop() is called, or should_run() goes false."""
@@ -291,8 +412,11 @@ class CaptionPipeline:
                 if self._should_run() and not self._stop.is_set():
                     self._finalise()
                 else:
+                    self._labels.discard(self._utterance_id)
                     self._emit({"type": "discard", "id": self._utterance_id})
                     self._worker.flush()
+            if not self._should_run() or self._stop.is_set():
+                self._worker.flush()
             self._reset_segmentation()
 
     def _process(self, frame: np.ndarray) -> None:
@@ -309,9 +433,18 @@ class CaptionPipeline:
         prob = self._vad(frame)
         now = time.monotonic()
         self._publish_level(frame, prob, now)
+        conditioned = self._condition(frame)
+        speaker_generation = self._labels.generation
+        if speaker_generation != self._speaker_generation:
+            self._speaker_generation = speaker_generation
+            self._speaker_pre_roll.clear()
+            self._speaker_buffer.clear()
+            self._speaker_frames = self._speaker_observed = 0
 
         if not self._speaking:
-            self._pre_roll.append(frame)
+            self._pre_roll.append(conditioned)
+            self._speaker_pre_roll.append(conditioned if self._labels.enabled and
+                                          prob >= self.settings.vad_end_threshold else None)
             if prob >= self.settings.vad_start_threshold:
                 self._speech_run += 1
                 if self._speech_run >= self.settings.start_frames:
@@ -320,7 +453,10 @@ class CaptionPipeline:
                 self._speech_run = 0
             return
 
-        self._buffer.append(frame)
+        self._buffer.append(conditioned)
+        if self._labels.enabled and prob >= self.settings.vad_end_threshold:
+            self._speaker_buffer.append(conditioned)
+            self._speaker_frames += 1
         if prob < self.settings.vad_end_threshold:
             self._silence_run += 1
         else:
@@ -344,20 +480,30 @@ class CaptionPipeline:
         self._utterance_id += 1
         self._utterance_started_at = time.time()
         self._buffer = list(self._pre_roll)  # keep word onsets
+        self._speaker_buffer = deque((f for f in self._speaker_pre_roll if f is not None),
+                                     maxlen=int(8 * SAMPLE_RATE / FRAME_SAMPLES))
+        self._speaker_frames = len(self._speaker_buffer)
+        self._speaker_observed = 0
         self._pre_roll.clear()
+        self._speaker_pre_roll.clear()
         self._last_partial_at = 0.0
+        self._labels.begin(self._utterance_id, self._utterance_started_at)
         self._emit({"type": "speech_start", "id": self._utterance_id})
 
     def _maybe_partial(self, now: float) -> None:
         if len(self._buffer) < self._min_partial_frames:
             return
-        if (now - self._last_partial_at) * 1000.0 < self.settings.partial_interval_ms:
+        if ((now - self._last_partial_at) * 1000.0
+                < self._worker.partial_interval_ms(self.settings.partial_interval_ms)):
             return
         self._last_partial_at = now
-        audio = self._condition(np.concatenate(self._buffer))
+        self._labels.begin(self._utterance_id, self._utterance_started_at)
+        if self._speaker_frames - self._speaker_observed >= 40:
+            self._speaker_observed = self._speaker_frames
+            self._labels.observe(self._utterance_id, tuple(self._speaker_buffer), final=False,
+                                 expected_generation=self._speaker_generation)
         self._worker.submit_partial(
-            _Job(self._utterance_id, audio, is_final=False,
-                 speaker_id=self._current_speaker, speaker_label=self._current_label,
+            _Job(self._utterance_id, None, is_final=False, chunks=tuple(self._buffer),
                  started_at=self._utterance_started_at)
         )
 
@@ -369,57 +515,21 @@ class CaptionPipeline:
         self._pre_roll.clear()
 
         if len(buffer) >= self._min_utterance_frames:
-            audio = self._condition(np.concatenate(buffer))
-            speaker_id, label = self._resolve_speaker(audio)
+            self._labels.begin(self._utterance_id, self._utterance_started_at)
+            self._labels.observe(self._utterance_id, tuple(self._speaker_buffer), final=True,
+                                 expected_generation=self._speaker_generation)
             self._worker.submit_final(
-                _Job(self._utterance_id, audio, is_final=True,
-                     speaker_id=speaker_id, speaker_label=label,
+                _Job(self._utterance_id, None, is_final=True, chunks=tuple(buffer),
                      started_at=self._utterance_started_at)
             )
         else:
+            self._labels.discard(self._utterance_id)
             self._emit({"type": "discard", "id": self._utterance_id})
-
-        self._current_speaker = None
-        self._current_label = None
 
         if continued:
             # Long monologue: immediately reopen so speech isn't dropped mid-sentence.
             self._vad.reset()
             self._begin_utterance()
-
-    def _resolve_speaker(self, audio: np.ndarray) -> tuple[int | None, str | None]:
-        """Identify the speaker for a completed utterance.
-
-        Runs before the Whisper call and costs ~10-35 ms against Whisper's ~350 ms, so it
-        adds no meaningful latency and the label is available the moment the text is.
-        """
-        if self._speaker is None:
-            return None, None
-        try:
-            speaker_id, _score = self._speaker.identify(audio)
-        except Exception as exc:
-            self._emit({"type": "error", "message": f"speaker id failed: {exc}"})
-            return None, None
-
-        # identify() can enrol someone new, and nothing else announces that. Without this the
-        # transcript shows "Speaker 2" while the Speakers pane still reads as empty.
-        self._publish_roster_if_changed()
-
-        if speaker_id is None:
-            return None, None
-        self._current_speaker = speaker_id
-        self._current_label = self._speaker.label(speaker_id)
-        return speaker_id, self._current_label
-
-    def _publish_roster_if_changed(self) -> None:
-        if self._speaker is None:
-            return
-        roster = self._speaker.roster()
-        signature = tuple((r["id"], r["label"], r["is_self"]) for r in roster)
-        if signature == self._roster_signature:
-            return
-        self._roster_signature = signature
-        self._emit({"type": "roster", "speakers": roster})
 
     def _publish_level(self, frame: np.ndarray, prob: float, now: float) -> None:
         if now - self._last_level_at < 0.1:  # ~10 Hz is plenty for a meter

@@ -18,7 +18,7 @@
   <Identity
     Name="DesigritLabs.Sunno"
     Publisher="CN=A2015C41-8111-42CA-8A27-273B3309C099"
-    Version="1.0.82.0"
+    Version="1.0.90.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
@@ -32,7 +32,7 @@
     <!-- Matches TargetPlatformMinVersion in Sunno.csproj. 1903 rather than 1809
          because AppCapability.Create - the microphone permission pre-flight - requires it. -->
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.18362.0"
-                        MaxVersionTested="10.0.26100.0" />
+                        MaxVersionTested="10.0.26226.0" />
   </Dependencies>
 
   <Resources>
@@ -64,6 +64,7 @@
   <Capabilities>
     <!-- runFullTrust is what keeps this out of AppContainer (see EntryPoint above). -->
     <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="systemAIModels" />
 
     <!-- The reason this app is packaged at all: with package identity plus this capability,
          Sunno gets its OWN entry and toggle under Settings > Privacy & security >

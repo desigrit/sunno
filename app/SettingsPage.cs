@@ -38,10 +38,13 @@ public sealed partial class MainWindow
 
         RefreshDiagnostics();
 
+        AppearancePicker.Preference = _settings.Appearance;
+        SpeakerLabelsPicker.Automatic = _settings.SpeakerLabelsEnabled;
         ClarityToggle.IsOn = _settings.ShowClarity;
         ForceCpuToggle.IsOn = _settings.ForceCpu;
         RefreshRecordingsPath();
         AboutVersion.Text = $"Sunno {Diagnostics.AppVersion()}";
+        RefreshUpdateAvailability();
         NoSpeakersInSettings.Visibility = Speakers.Count == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -51,13 +54,52 @@ public sealed partial class MainWindow
 
     private void OnCloseSettings(object sender, RoutedEventArgs e) => CloseSettings();
 
+    private void OnAppearancePreferenceChanged(object? sender, string preference)
+    {
+        if (_settings.Appearance == preference) return;
+        _settings.Appearance = preference;
+        _appearance?.Apply(preference);
+        _settings.Save();
+    }
+
+    private bool _speakerLabelsAvailable = true;
+    private string? _speakerSession;
+
+    private async void OnSpeakerLabelsPreferenceChanged(object? sender, bool automatic)
+    {
+        if (_settings.SpeakerLabelsEnabled == automatic) return;
+        _settings.SpeakerLabelsEnabled = automatic;
+        _settings.Save();
+        ApplySpeakerLabelsPreference();
+        // A disconnected backend receives the saved choice when it reconnects.
+        await _client.SetSpeakerLabelsAsync(automatic);
+    }
+
+    private void ApplySpeakerLabelsPreference()
+    {
+        var enabled = _settings.SpeakerLabelsEnabled;
+        _backend.SpeakerLabelsEnabled = enabled;
+        Sunno.Models.CaptionLine.SpeakerLabelsEnabled = enabled;
+        foreach (var line in Lines) line.RefreshSpeakerLabels();
+        SpeakerList.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        SpeakerProfilesCard.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        SpeakerProfilesHeading.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        NoSpeakers.Text = !enabled ? "Speaker labels are off. Change this in Settings."
+            : !_speakerLabelsAvailable ? "Speaker labels are unavailable. Restart Sunno to retry."
+            : "People appear here as they speak.";
+        NoSpeakers.Visibility = !enabled || Speakers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        NoSpeakersInSettings.Visibility = Speakers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        NoSpeakersInSettings.Text = _speakerLabelsAvailable ? "Nobody has been recognised yet."
+            : "Speaker labels are unavailable. Restart Sunno to retry.";
+    }
+
     private void CloseSettings()
     {
         if (SettingsPage.Visibility != Visibility.Visible) return;
         SetSettingsOpen(false);
 
-        // Captions kept arriving behind the page and the user could not see them, so land
-        // them back at the newest line rather than wherever they were reading before.
+        // Catch up if the reader was following live captions. Reading history remains
+        // paused across a visit to Settings, including speaker metadata changes.
         ScrollToEnd();
         MoreButton.Focus(FocusState.Programmatic);
     }

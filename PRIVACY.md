@@ -1,6 +1,6 @@
 # Privacy Policy for Sunno
 
-**Last updated: 1 August 2026**
+**Last updated: 26 October 2026**
 
 Sunno is a live captioning app for Windows. It listens to a microphone, or to your PC's own
 audio, and writes down what it hears so you can read it.
@@ -57,8 +57,8 @@ readable. It is written to disk only for pinned speakers, as described above.
 
 **Almost nothing, and never your audio or your captions.**
 
-Sunno needs the internet during setup, and then never again. Two things get downloaded, both
-of them files coming to you:
+Sunno needs the internet to download models, GPU support files, or app updates. Captioning
+continues to work offline once its model is installed:
 
 - **The speech recognition model**, the first time you use it or when you choose a different
   one. This comes from Hugging Face, a public model host.
@@ -68,8 +68,13 @@ of them files coming to you:
   about 450 MB. They used to be included in the installer, which made it 828 MB larger for
   everybody, including the majority of PCs that can never use them.
 
-Neither host is sent anything about you beyond what any file download requires. There is no
-other network operation anywhere in the app.
+- **App updates**, only when you choose **Check for updates** or **Download update** in
+  Settings. Sunno checks public GitHub release metadata and downloads the selected installer
+  from GitHub. It sends no audio, captions, recordings, model choices, or device identifiers.
+  There are no automatic background update checks.
+
+These requests expose the network information normally required for a download, such as
+your IP address and the updater's generic app identifier. They do not require signing in.
 
 Once those files are on your computer, you can disconnect from the internet permanently and
 Sunno will work exactly as before. If you never connect at all, Sunno still captions using
@@ -97,6 +102,7 @@ In `%LOCALAPPDATA%\Sunno`:
 | `startup-error.log` | Error text from the app itself, written only when something goes wrong |
 | `stream-models\` | The streaming recognisers, if you chose one. Downloaded model files |
 | `cuda\` | The NVIDIA GPU support libraries, if your PC has a card that can use them. About 828 MB once unpacked |
+| `Updates\` | App installers you chose to download. Cancelled partial downloads are removed; cached installers at or below the installed version are removed on the next update check |
 
 **On the input device in `settings.json`.** Sunno records the *name* of the microphone you chose,
 not only its position in the list, because Windows renumbers audio devices whenever the set of

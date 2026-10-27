@@ -15,6 +15,7 @@ public sealed class BackendHost : IDisposable
     private readonly SemaphoreSlim _restartLock = new(1, 1);
     private int _generation;
     public int Generation => _generation;
+    public bool SpeakerLabelsEnabled { get; set; }
     private readonly ChildProcessJob _job = new();
     private readonly List<string> _log = new();
     private readonly object _logLock = new();
@@ -206,6 +207,8 @@ public sealed class BackendHost : IDisposable
         // Load the model but leave the microphone alone. Used while consent is still being
         // resolved, so the ~33 s load overlaps the dialog instead of following it.
         if (startStopped) args.Add("--start-stopped");
+        args.Add("--speaker-labels");
+        args.Add(SpeakerLabelsEnabled ? "automatic" : "off");
         // Omitted rather than passed as "auto" when the user has expressed no preference, so
         // the backend's own default stays the single definition of what "auto" means.
         if (!string.IsNullOrEmpty(computeDevice) && computeDevice != "auto")

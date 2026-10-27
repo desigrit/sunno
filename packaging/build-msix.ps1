@@ -40,6 +40,14 @@ $signtool = Find-SdkTool "signtool.exe"
 
 New-Item -ItemType Directory -Path $out -Force | Out-Null
 
+# Resolve destructive staging targets before invoking the existing clean build.
+$validatedStaging = [IO.Path]::GetFullPath($staging)
+$expectedStaging = [IO.Path]::GetFullPath((Join-Path $root "packaging\staging\package"))
+if ($validatedStaging -ne $expectedStaging -or
+    ($validatedStaging -notlike ([IO.Path]::GetFullPath($root) + "\*"))) {
+  throw "Refusing to clean an unexpected staging directory: $validatedStaging"
+}
+
 # Wipe the staging tree, but keep the staged backend when reusing it — it is the expensive
 # part (~1.2 GB) and re-staging it dominates the build.
 if (Test-Path $staging) {
@@ -118,7 +126,20 @@ if (-not $SkipStage) {
 }
 
 # ---------------------------------------------------------------- manifest + assets
+# The system engine uses a separate process and its own SDK/runtime directory.
+# Ship both helper architectures so a Snapdragon launches the ARM64 helper even
+# while the existing desktop shell and Python build run under x64 emulation.
+$nativeProject = Join-Path $root "windows-speech-service\Sunno.SpeechService.csproj"
+foreach ($architecture in @("x64", "arm64")) {
+  $nativeOutput = Join-Path $staging "backend\native-speech\$architecture"
+  dotnet publish $nativeProject -c Release -r "win-$architecture" `
+    -p:PublishReadyToRun=false -o $nativeOutput --nologo -v quiet
+  if ($LASTEXITCODE -ne 0) { throw "Native speech helper build failed for $architecture" }
+}
+
 Copy-Item (Join-Path $root "app\Package.appxmanifest") (Join-Path $staging "AppxManifest.xml") -Force
+Copy-Item (Join-Path $root "THIRD-PARTY-NOTICES.md") $staging -Force
+Copy-Item (Join-Path $root "LICENSE") $staging -Force
 
 $assetsSrc = Join-Path $root "app\Assets"
 $assetsDst = Join-Path $staging "Assets"
@@ -188,6 +209,13 @@ Export-Certificate  -Cert $cert -FilePath $cer | Out-Null
 
 & $signtool sign /fd SHA256 /a /f $pfx /p "Sunno-dev" $msix
 if ($LASTEXITCODE -ne 0) { throw "signtool failed ($LASTEXITCODE)" }
+
+# The updater matches stable release tags to an explicitly versioned architecture asset.
+[xml]$packageManifest = Get-Content -LiteralPath (Join-Path $staging "AppxManifest.xml") -Raw
+$releaseName = "Sunno_{0}_{1}.msix" -f $packageManifest.Package.Identity.Version, $packageManifest.Package.Identity.ProcessorArchitecture
+$releasePackage = Join-Path $out $releaseName
+Copy-Item -LiteralPath $msix -Destination $releasePackage -Force
+Write-Host "GitHub release asset: $releasePackage" -ForegroundColor Green
 
 $mb = (Get-Item $msix).Length / 1MB
 Write-Host ""

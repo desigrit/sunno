@@ -127,7 +127,15 @@ AUTO_SELECT_EXCLUDED: frozenset[str] = frozenset({"stream-en-kroko"})
 
 def auto_selectable(model_id: str) -> bool:
     """Whether the app may choose this model when the user has not."""
-    return model_id not in AUTO_SELECT_EXCLUDED
+    from .experimental_models import MODEL_IDS
+
+    return model_id not in AUTO_SELECT_EXCLUDED and model_id not in MODEL_IDS
+
+
+def uses_cuda(model_id: str) -> bool:
+    from .experimental_models import MODEL_IDS
+
+    return not is_stream_model(model_id) and model_id not in MODEL_IDS
 
 # Streaming transducer models, which are a different shape from a Whisper checkpoint: an
 # encoder, a decoder and a joiner rather than one file. Kept apart from _REPOS so that a
@@ -276,6 +284,10 @@ def is_available(model_id: str) -> ModelStatus:
     whole backend down on a machine where CTranslate2 will not load, before anything had a
     chance to explain why.
     """
+    from .experimental_models import MODEL_IDS, status
+    if model_id in MODEL_IDS:
+        return ModelStatus(model_id, bool(status(model_id).get("available")))
+
     from huggingface_hub import snapshot_download
 
     if is_stream_model(model_id):
@@ -329,8 +341,11 @@ def catalog_with_status(device: str | None = None) -> list[dict]:
             lag_text=hardware.describe_lag(lag_ms),
             responsive=lag_ms <= hardware.RESPONSIVE_LAG_MS,
             auto_select=auto_selectable(entry["id"]),
-            uses_gpu=not is_stream_model(entry["id"]),
+            uses_gpu=uses_cuda(entry["id"]),
+            supported=True,
         ))
+    from .experimental_models import catalog_entries
+    entries.extend(catalog_entries())
     return entries
 
 
@@ -377,6 +392,13 @@ def _onnx_root() -> Path:
 
 def total_size_bytes(model_id: str) -> int:
     """Exact download size from the Hub, so progress is real rather than estimated."""
+    from .asr_moonshine import MODEL_ARCHES, total_bytes
+    from .asr_native import NATIVE_MODELS
+    if model_id in MODEL_ARCHES:
+        return total_bytes(model_id)
+    if model_id in NATIVE_MODELS:
+        return 0
+
     import fnmatch
 
     from huggingface_hub import HfApi
@@ -470,6 +492,10 @@ def _download_stream(model_id: str, on_progress: ProgressFn | None = None) -> st
 
 def download(model_id: str, on_progress: ProgressFn | None = None) -> str:
     """Download a model, reporting cumulative bytes. Resumes an interrupted download."""
+    from .experimental_models import MODEL_IDS, download as download_experimental
+    if model_id in MODEL_IDS:
+        return download_experimental(model_id, on_progress)
+
     from huggingface_hub import snapshot_download
     from tqdm.auto import tqdm
 

@@ -42,6 +42,8 @@ let inputState = null;
 /* ---------- caption rendering ---------- */
 
 const roster = new Map();   // speaker id -> { label, isSelf }
+let speakerLabelsEnabled = true;
+let speakerSession = null;
 
 function clarityClass(score) {
   if (score >= 80) return 'good';
@@ -51,15 +53,18 @@ function clarityClass(score) {
 
 /** Build/refresh one caption line: [speaker chip] text [clarity badge] */
 function renderLine(el, msg, isFinal) {
+  el.captionEvent = msg;
+  el.captionFinal = isFinal;
   const id = msg.speaker_id;
-  const info = id != null ? roster.get(id) : null;
-  const isSelf = info ? info.isSelf : false;
+  const info = id != null && msg.speaker_session === speakerSession ? roster.get(id) : null;
+  const isSelf = speakerLabelsEnabled && info ? info.isSelf : false;
 
   el.className = `line ${isFinal ? 'final' : 'provisional'}${isSelf ? ' self' : ''}`;
   el.textContent = '';
   if (id != null) el.dataset.speakerId = String(id);
+  else delete el.dataset.speakerId;
 
-  if (msg.speaker) {
+  if (speakerLabelsEnabled && msg.speaker) {
     const chip = document.createElement('span');
     chip.className = `speaker spk-${(id ?? 0) % 8}`;
     chip.textContent = isSelf ? 'You' : msg.speaker;
@@ -194,6 +199,31 @@ function updateMeter(db, speaking) {
 
 function handle(msg) {
   switch (msg.type) {
+    case 'speaker_labels':
+      speakerLabelsEnabled = msg.mode === 'automatic';
+      speakerSession = msg.session;
+      els.captions.querySelectorAll('.line').forEach(line => {
+        if (line.captionEvent) renderLine(line, line.captionEvent, line.captionFinal);
+      });
+      break;
+    case 'speaker_label':
+      els.captions.querySelectorAll('.line').forEach(line => {
+        const event = line.captionEvent;
+        if (event?.id === msg.id && event.started_at === msg.started_at)
+          renderLine(line, { ...event, speaker_id: msg.speaker_id, speaker: msg.speaker }, line.captionFinal);
+      });
+      break;
+    case 'speaker_merged':
+    case 'speaker_deleted':
+      els.captions.querySelectorAll('.line').forEach(line => {
+        const event = line.captionEvent;
+        if (!event || event.speaker_session !== speakerSession) return;
+        if (msg.type === 'speaker_merged' && event.speaker_id === msg.from)
+          renderLine(line, { ...event, speaker_id: msg.into }, line.captionFinal);
+        else if (msg.type === 'speaker_deleted' && event.speaker_id === msg.id)
+          renderLine(line, { ...event, speaker: msg.label }, line.captionFinal);
+      });
+      break;
     case 'partial':
       showProvisional(msg.id, msg);
       els.latency.textContent = `~${Math.round(msg.latency_ms)} ms`;
@@ -245,16 +275,12 @@ function handle(msg) {
 
 /** Re-label already-rendered lines after a rename, so history stays consistent. */
 function refreshRenderedSpeakers() {
-  els.captions.querySelectorAll('.speaker').forEach((chip) => {
-    const cls = [...chip.classList].find((c) => c.startsWith('spk-'));
-    if (!cls) return;
-    const line = chip.parentElement;
-    const id = Number(line.dataset.speakerId);
-    if (Number.isNaN(id)) return;
-    const info = roster.get(id);
+  els.captions.querySelectorAll('.line').forEach((line) => {
+    const event = line.captionEvent;
+    if (!event || event.speaker_session !== speakerSession) return;
+    const info = roster.get(event.speaker_id);
     if (!info) return;
-    chip.textContent = info.isSelf ? 'You' : info.label;
-    line.classList.toggle('self', info.isSelf);
+    renderLine(line, { ...event, speaker: info.label }, line.captionFinal);
   });
 }
 

@@ -52,6 +52,8 @@
             <SolidColorBrush x:Key="ClarityGood" Color="#2E8B57" />
             <SolidColorBrush x:Key="ClarityMid" Color="#B26A00" />
             <SolidColorBrush x:Key="ClarityLow" Color="#C42B1C" />
+            <!-- Updated in place with the clarity brushes when appearance changes. -->
+            <SolidColorBrush x:Key="CaptionUncertain" Color="#404040" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

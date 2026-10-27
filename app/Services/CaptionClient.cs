@@ -9,7 +9,7 @@ namespace Sunno.Services;
 public sealed record CaptionEvent(
     string Type, int Id, string? Text, int? SpeakerId, string? Speaker,
     int? Clarity, double LatencyMs,
-    double? StartedAt = null, IReadOnlyList<CaptionWord>? Words = null);
+    double? StartedAt = null, IReadOnlyList<CaptionWord>? Words = null, string? SpeakerSession = null);
 
 public sealed record StatusEvent(string State, bool? Running, string? Model, string? Device,
                                  string? Message, string? Code = null);
@@ -29,7 +29,8 @@ public sealed record InputStateEvent(string State, string? RequestId, AudioInput
 /// <summary>A model offered during first-run setup.</summary>
 public sealed record ModelOption(
     string Id, string Name, string Detail, int ApproxMb, string Languages, bool Available,
-    int LagMs = 0, bool Responsive = true, bool AutoSelect = true, bool UsesGpu = true);
+    int LagMs = 0, bool Responsive = true, bool AutoSelect = true, bool UsesGpu = true,
+    bool Supported = true);
 
 /// <summary>
 /// Whether this PC wants the CUDA libraries and hasn't got them, and how big they are.
@@ -83,6 +84,8 @@ public sealed class CaptionClient : IAsyncDisposable
     /// <summary>A speaker was forgotten. Captions tagged with that id should fall back to the
     /// supplied generic label. Raised immediately before the roster that reflects the removal.</summary>
     public event Action<int, string>? SpeakerDeleted;
+    public event Action<int, double?, int?, string?>? SpeakerLabelChanged;
+    public event Action<bool, bool, string?>? SpeakerLabelsState;
     public event Action<bool>? ConnectionChanged;
     /// <summary>
     /// No model is on disk yet, so first-run setup has to ask for one.
@@ -190,6 +193,15 @@ public sealed class CaptionClient : IAsyncDisposable
 
         switch (type)
         {
+            case "speaker_labels":
+                SpeakerLabelsState?.Invoke(GetString(root, "mode") == "automatic",
+                                           GetBool(root, "available") ?? false, GetString(root, "session"));
+                break;
+            case "speaker_label":
+                if (GetInt(root, "id") is int changedId)
+                    SpeakerLabelChanged?.Invoke(changedId, GetDouble(root, "started_at"),
+                        GetInt(root, "speaker_id"), GetString(root, "speaker"));
+                break;
             case "input":
                 Input?.Invoke(new InputStateEvent(GetString(root, "state") ?? "unknown",
                     GetString(root, "request_id"), ParseInputTarget(root, "target"),
@@ -204,7 +216,7 @@ public sealed class CaptionClient : IAsyncDisposable
                     type!, GetInt(root, "id") ?? 0, GetString(root, "text"),
                     GetInt(root, "speaker_id"), GetString(root, "speaker"),
                     GetInt(root, "clarity"), GetDouble(root, "latency_ms") ?? 0,
-                    GetDouble(root, "started_at"), ParseWords(root));
+                    GetDouble(root, "started_at"), ParseWords(root), GetString(root, "speaker_session"));
                 if (type == "partial") Partial?.Invoke(ev); else Final?.Invoke(ev);
                 break;
             }
@@ -355,7 +367,8 @@ public sealed class CaptionClient : IAsyncDisposable
                 GetBool(m, "auto_select") ?? true,
                 // Defaults true for the same reason: a backend that predates the split
                 // ships only Whisper models, all of which use the GPU when there is one.
-                GetBool(m, "uses_gpu") ?? true));
+                GetBool(m, "uses_gpu") ?? true,
+                GetBool(m, "supported") ?? true));
         }
         return options;
     }
@@ -371,6 +384,8 @@ public sealed class CaptionClient : IAsyncDisposable
             GetInt(root, "gpu_payload_mb") ?? 0);
 
     public Task ToggleAsync() => SendAsync(new { cmd = "toggle" });
+    public Task<bool> SetSpeakerLabelsAsync(bool automatic) =>
+        SendAsync(new { cmd = "set_speaker_labels", mode = automatic ? "automatic" : "off" });
     public Task StartCaptureAsync() => SendAsync(new { cmd = "start" });
     public Task StopCaptureAsync() => SendAsync(new { cmd = "stop" });
     public Task<bool> SetInputAsync(AudioInputTarget target, string requestId) =>

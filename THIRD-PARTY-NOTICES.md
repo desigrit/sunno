@@ -11,6 +11,7 @@ Sunno redistributes the components below. Each remains under its own licence.
 | ctranslate2 | 4.8.1 | MIT |
 | faster-whisper | 1.2.1 | MIT |
 | huggingface-hub | 1.25.1 | Apache-2.0 |
+| moonshine-voice | 0.1.5 | MIT, including the bundled Moonshine native runtime. [Upstream licence](https://github.com/moonshine-ai/moonshine/blob/main/LICENSE). |
 | numpy | 2.5.1 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 |
 | onnxruntime | 1.28.0 | MIT License |
 | sherpa-onnx | 1.13.4 | Apache licensed, as found in the LICENSE file |
@@ -31,6 +32,8 @@ Sunno redistributes the components below. Each remains under its own licence.
 | WeSpeaker CAM++ speaker embedding | Apache-2.0 | Downloaded at first run, not redistributed in the package. |
 | Streaming Zipformer English transducer | Apache-2.0 | Downloaded at first run, not redistributed in the package. From [csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26), trained with [k2-fsa/icefall](https://github.com/k2-fsa/icefall) on LibriSpeech. |
 | Kroko ASR streaming English transducer | **None declared** | Optional, never a default. See the section below. |
+| Moonshine Tiny, Small and Medium Streaming English weights | MIT | Optional downloads from Moonshine's model service. Not bundled, and not automatically selected. [Upstream project](https://github.com/moonshine-ai/moonshine). |
+| Microsoft Windows App SDK AI | Microsoft Windows App SDK terms | The isolated Windows speech helper uses the experimental 2.5.4 AI package. Windows provisions its own speech model; Sunno does not redistribute the model weights. |
 
 ## Models with no declared licence
 

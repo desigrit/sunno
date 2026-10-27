@@ -27,12 +27,12 @@ public sealed record AudioDevice(int Index, string Name, string HostApi, bool Lo
 /// <summary>A model shown in first-run setup.</summary>
 public sealed record ModelChoice(string Id, string Name, string Detail, int ApproxMb, bool Available,
                                  int LagMs = 0, bool Responsive = true, bool AutoSelect = true,
-                                 bool UsesGpu = true, int GpuPayloadMb = 0)
+                                 bool UsesGpu = true, int GpuPayloadMb = 0, bool Supported = true)
 {
     /// <summary>Megabytes this row would actually download, libraries included.</summary>
     public int TotalMb => (Available ? 0 : ApproxMb) + (UsesGpu ? GpuPayloadMb : 0);
 
-    public string SizeLabel => Format(ApproxMb);
+    public string SizeLabel => ApproxMb == 0 ? "System model" : Format(ApproxMb);
 
     private static string Format(int mb) => mb >= 1024 ? $"{mb / 1024.0:0.0} GB" : $"{mb} MB";
 
@@ -49,7 +49,7 @@ public sealed record ModelChoice(string Id, string Name, string Detail, int Appr
     {
         get
         {
-            if (LagMs <= 0) return Detail;
+            if (LagMs <= 0) return $"(Delay not measured) {Detail}";
             var delay = LagMs < 1000 ? $"~{LagMs / 1000.0:0.0}s" : $"~{LagMs / 1000.0:0}s";
             return $"({delay} delay) {Detail}";
         }
@@ -72,7 +72,8 @@ public sealed record ModelChoice(string Id, string Name, string Detail, int Appr
     /// </summary>
     public override string ToString()
     {
-        var size = TotalMb == 0 ? "already downloaded" : Format(TotalMb);
+        var size = !Available && ApproxMb == 0 ? "system-managed download"
+            : TotalMb == 0 ? "already downloaded" : Format(TotalMb);
         return $"{Name}, {size}. {DetailWithSpeed}";
     }
 }
@@ -87,6 +88,8 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private readonly DispatcherQueue _ui;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
     private readonly AppSettings _settings = AppSettings.Load();
+    private AppearanceController? _appearance;
+    private readonly CaptionScrollFollower _captionScroll;
 
     private CaptionLine? _provisional;
     private int _currentUtterance = -1;
@@ -215,8 +218,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         InitializeComponent();
         App.Trace("MainWindow ctor: XAML loaded");
         _ui = DispatcherQueue.GetForCurrentThread();
+        _captionScroll = new CaptionScrollFollower(CaptionScroller, CaptionItems);
+        _captionScroll.Changed += () =>
+            SkipToCurrent.Visibility = _captionScroll.CanSkipToCurrent ? Visibility.Visible : Visibility.Collapsed;
 
         ConfigureWindow();
+        ApplySpeakerLabelsPreference();
         App.Trace("MainWindow ctor: window configured");
 
         // Open straight onto the setup screen when this machine has no settings file at all,
@@ -244,12 +251,29 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _client.Discarded += id => _ui.TryEnqueue(() => OnDiscarded(id));
         _client.Level += lv => _ui.TryEnqueue(() => OnLevel(lv));
         _client.Status += st => QueueCurrentClientEvent(() => OnStatus(st));
-        _client.Roster += r => _ui.TryEnqueue(() => OnRoster(r));
+        _client.Roster += r => QueueCurrentClientEvent(() => OnRoster(r));
         // Subscribed and enqueued ahead of the roster it precedes. TryEnqueue preserves order
         // on the dispatcher queue, so the remap always runs before the relabel that depends
         // on it.
-        _client.SpeakersMerged += (from, into) => _ui.TryEnqueue(() => OnSpeakersMerged(from, into));
-        _client.SpeakerDeleted += (id, label) => _ui.TryEnqueue(() => OnSpeakerDeleted(id, label));
+        _client.SpeakersMerged += (from, into) => QueueCurrentClientEvent(() => OnSpeakersMerged(from, into));
+        _client.SpeakerDeleted += (id, label) => QueueCurrentClientEvent(() => OnSpeakerDeleted(id, label));
+        _client.SpeakerLabelChanged += (id, at, speakerId, label) => QueueCurrentClientEvent(() =>
+        {
+            foreach (var line in Lines)
+            {
+                if (line.UtteranceId != id || at is not double epoch ||
+                    line.SpokenAt?.ToUnixTimeMilliseconds() != (long)(epoch * 1000)) continue;
+                line.SpeakerId = speakerId;
+                line.SpeakerLabel = label;
+                line.IsSelf = speakerId is int sid && FindSpeaker(sid) is { IsSelf: true };
+            }
+        });
+        _client.SpeakerLabelsState += (_, available, session) => QueueCurrentClientEvent(() =>
+        {
+            _speakerSession = session;
+            _speakerLabelsAvailable = available;
+            ApplySpeakerLabelsPreference();
+        });
         _client.ConnectionChanged += ok => QueueCurrentClientEvent(() => OnConnection(ok));
         _client.ModelRequired += (device, m, gpu) => _ui.TryEnqueue(() => OnModelRequired(device, m, gpu));
         _client.DownloadProgress += p => _ui.TryEnqueue(() => OnDownloadProgress(p));
@@ -283,6 +307,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
         Closed += (_, _) =>
         {
+            _captionScroll.Dispose();
             App.Trace("MainWindow Closed -> exiting");
             // Where this mode's window was, so the next launch opens where it was left. Saved
             // here rather than on every drag: the file is rewritten whole each time, and a
@@ -439,10 +464,17 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         Sunno.Models.CaptionLine.ClarityEnabled = _settings.ShowClarity;
 
         if (MicaController.IsSupported())
+        {
             SystemBackdrop = new MicaBackdrop { Kind = MicaKind.Base };
+            // Keep Mica visible. On Windows without it, the XAML background provides
+            // a theme-aware solid canvas instead of white behind dark caption text.
+            AppRoot.Background = null;
+        }
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+        _appearance = new AppearanceController(this, AppRoot, _settings.Appearance);
+        AppearancePicker.Preference = _settings.Appearance;
 
         AppWindow.Resize(new SizeInt32(1040, 660));
         if (AppWindow.Presenter is OverlappedPresenter presenter)
@@ -569,6 +601,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         line.Text = ev.Text ?? string.Empty;
         line.SpeakerId = ev.SpeakerId;
+        line.SpeakerSession = ev.SpeakerSession;
         line.SpeakerLabel = ev.Speaker;
         line.Clarity = ev.Clarity;
         line.IsSelf = ev.SpeakerId is int id && FindSpeaker(id) is { IsSelf: true };
@@ -619,18 +652,18 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     }
 
     /// <summary>
-    /// Put the newest caption at the bottom of the view.
-    ///
-    /// The layout pass is forced first, deliberately. ScrollableHeight is derived from the
-    /// extent as it currently stands, and every caller of this runs from the handler that has
-    /// just added or replaced a line — so reading it straight away returns the height the list
-    /// had *before* the new words existed, and the view stops a line short. The newest caption
-    /// is the one the user is reading, and it was being clipped by the command bar.
+    /// Follow new words only while the reader remains near the live edge. The controller
+    /// coalesces layout updates and respects a scroll gesture even if a follow is queued.
     /// </summary>
     private void ScrollToEnd()
     {
-        CaptionScroller.UpdateLayout();
-        CaptionScroller.ChangeView(null, CaptionScroller.ScrollableHeight, null, disableAnimation: false);
+        _captionScroll.RequestFollow();
+    }
+
+    private void OnSkipToCurrent(object sender, RoutedEventArgs e)
+    {
+        CaptionScroller.Viewer.Focus(FocusState.Programmatic);
+        _captionScroll.Resume();
     }
 
     // ---------- status ----------
@@ -1455,15 +1488,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // only get their own machine's number after a restart.
         if (_modelSectionOpen && _connected) _ = _client.RequestModelsAsync();
 
-        var target = 0.0;
-        if (_modelSectionOpen)
-        {
-            ModelOptions.Measure(new Windows.Foundation.Size(
-                ModelPanel.ActualWidth > 0 ? ModelPanel.ActualWidth : 240, double.PositiveInfinity));
-            target = ModelOptions.DesiredSize.Height;
-        }
-
-        AnimateModelPanel(target);
+        AnimateModelPanel(_modelSectionOpen ? MeasureModelPanelHeight() : 0);
         AnimateChevron(_modelSectionOpen ? 180 : 0);
     }
 
@@ -1496,7 +1521,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     private void AnimateModelPanel(double toHeight)
     {
+        // Preserve the current animated height when reversing an unfinished toggle.
+        var fromHeight = ModelPanel.ActualHeight;
         _modelPanelStory?.Stop();
+        ModelPanel.Height = fromHeight;
 
         if (!AnimationsWanted)
         {
@@ -1506,6 +1534,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
         var animation = new DoubleAnimation
         {
+            From = fromHeight,
             To = toHeight,
             Duration = new Duration(TimeSpan.FromMilliseconds(220)),
             EnableDependentAnimation = true,
@@ -1514,9 +1543,19 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         Storyboard.SetTarget(animation, ModelPanel);
         Storyboard.SetTargetProperty(animation, "Height");
 
-        _modelPanelStory = new Storyboard();
-        _modelPanelStory.Children.Add(animation);
-        _modelPanelStory.Begin();
+        var story = new Storyboard();
+        story.Children.Add(animation);
+        story.Completed += (_, _) =>
+        {
+            if (_modelPanelStory != story) return;
+            // Persist the final size and release HoldEnd, so window resizes and a
+            // refreshed catalogue can change Height after the animation finishes.
+            ModelPanel.Height = toHeight;
+            story.Stop();
+            _modelPanelStory = null;
+        };
+        _modelPanelStory = story;
+        story.Begin();
     }
 
     private void AnimateChevron(double angle)
@@ -1545,15 +1584,38 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     }
 
     /// <summary>
-    /// Keep an open panel sized to its content, so a row changing height mid-download doesn't
-    /// leave the list clipped or floating above empty space.
+    /// Keep the whole model section within three quarters of the available sidebar.
+    /// The remaining space belongs to speakers, even in a short window.
     /// </summary>
+    private double MeasureModelPanelHeight()
+    {
+        var width = ModelPanel.ActualWidth > 0 ? ModelPanel.ActualWidth : 240;
+        ModelOptions.Measure(new Windows.Foundation.Size(width, double.PositiveInfinity));
+        ModelToggle.Measure(new Windows.Foundation.Size(width, double.PositiveInfinity));
+        var limit = ModelPickerLayout.MaximumListHeight(
+            SpeakerPaneLayout.ActualHeight,
+            SpeakerPaneLayout.Padding.Top + SpeakerPaneLayout.Padding.Bottom,
+            ModelToggle.DesiredSize.Height,
+            ModelSection.Margin.Top + ModelSection.Margin.Bottom);
+        ModelPanel.MaxHeight = limit;
+        return Math.Min(ModelOptions.DesiredSize.Height, limit);
+    }
+
+    private void OnSpeakerPaneSizeChanged(object sender, SizeChangedEventArgs e) =>
+        ResizeModelPanelIfOpen();
+
+    private void OnModelPanelPointerEntered(object sender, PointerRoutedEventArgs e) =>
+        ModelPanel.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+
+    private void OnModelPanelPointerExited(object sender, PointerRoutedEventArgs e) =>
+        ModelPanel.VerticalScrollBarVisibility = ScrollBarVisibility.Hidden;
+
     private void ResizeModelPanelIfOpen()
     {
         if (!_modelSectionOpen) return;
-        ModelOptions.Measure(new Windows.Foundation.Size(
-            ModelPanel.ActualWidth > 0 ? ModelPanel.ActualWidth : 240, double.PositiveInfinity));
-        ModelPanel.Height = ModelOptions.DesiredSize.Height;
+        _modelPanelStory?.Stop();
+        _modelPanelStory = null;
+        ModelPanel.Height = MeasureModelPanelHeight();
     }
 
     /// <summary>Keep the collapsed header's summary in step with what's actually loaded.</summary>
@@ -1606,6 +1668,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                     LagMs = o.LagMs,
                     Responsive = o.Responsive,
                     UsesGpu = o.UsesGpu,
+                    Supported = o.Supported,
                     GpuPayloadMb = gpu.Needed && o.UsesGpu ? gpu.ApproxMb : 0,
                     IsSelected = o.Id == current,
                     InUse = o.Id == current,
@@ -1636,7 +1699,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (sender is not RadioButton { Tag: string id }) return;
 
         var row = Models.FirstOrDefault(m => m.Id == id);
-        if (row is null || _switchingTo is not null) return;
+        if (row is null || !row.Supported || _switchingTo is not null) return;
 
         // Deliberately still an early return when the model has not changed.
         //
@@ -1855,6 +1918,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _connected = connected;
         if (connected)
         {
+            _ = _client.SetSpeakerLabelsAsync(_settings.SpeakerLabelsEnabled);
             _backendLoading = false;
             // Consent may have been granted while the model was still loading; sends are
             // dropped on a closed socket, so this is the other half of that handshake.
@@ -1935,12 +1999,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             existing.Named = s.Named;
         }
 
-        NoSpeakers.Visibility = Speakers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ApplySpeakerLabelsPreference();
 
         // Re-label existing lines so history stays consistent after a rename or merge.
         foreach (var line in Lines)
         {
-            if (line.SpeakerId is not int id) continue;
+            if (line.SpeakerId is not int id || line.SpeakerSession != _speakerSession) continue;
             var info = speakers.FirstOrDefault(s => s.Id == id);
             if (info is null) continue;
             line.SpeakerLabel = info.Label;
@@ -1962,7 +2026,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void OnSpeakersMerged(int from, int into)
     {
         foreach (var line in Lines)
-            if (line.SpeakerId == from)
+            if (line.SpeakerId == from && line.SpeakerSession == _speakerSession)
                 line.SpeakerId = into;
     }
 
@@ -1978,7 +2042,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         foreach (var line in Lines)
         {
-            if (line.SpeakerId != id) continue;
+            if (line.SpeakerId != id || line.SpeakerSession != _speakerSession) continue;
             line.SpeakerLabel = fallbackLabel;
             line.IsSelf = false;
         }
@@ -2006,6 +2070,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Close,
                 XamlRoot = Content.XamlRoot,
+                RequestedTheme = AppRoot.RequestedTheme,
             };
             try
             {
@@ -2192,7 +2257,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         var choices = options
             .Select(o => new ModelChoice(o.Id, o.Name, o.Detail, o.ApproxMb, o.Available,
                                          o.LagMs, o.Responsive, o.AutoSelect, o.UsesGpu,
-                                         gpu.Needed ? gpu.ApproxMb : 0))
+                                         gpu.Needed ? gpu.ApproxMb : 0, o.Supported))
             .ToList();
 
         BuildModelGroups(choices);
@@ -2214,8 +2279,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // always does, so this is where it is actually enforced. The fastest branch is where
         // it bites hardest: the excluded model is the quickest in the catalogue, so on a PC
         // too slow for anything else it would otherwise win outright.
-        var selectable = choices.Where(m => m.AutoSelect).ToList();
-        if (selectable.Count == 0) selectable = choices;   // cannot happen; better than nothing
+        var selectable = choices.Where(m => m.AutoSelect && m.Supported).ToList();
 
         var preferred = selectable
             .Where(m => m.Responsive)
@@ -2232,7 +2296,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
         SetupError.IsOpen = false;
         DownloadPanel.Visibility = Visibility.Collapsed;
-        DownloadButton.IsEnabled = true;
+        DownloadButton.IsEnabled = preferred != null;
         // Before the page is shown. It fills the window, so inside a compact strip it would be
         // an unreadable, unusable "Choose a speech model" with its button off the edge, and
         // until a model is chosen there is nothing to caption anyway.
@@ -2262,8 +2326,26 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // verdict on models that were never offered.
         if (choices.Count == 0) return;
 
+        var unmeasured = choices.Where(m => m.LagMs <= 0 && m.Supported).ToList();
+        var unsupported = choices.Where(m => !m.Supported).ToList();
+        choices = choices.Where(m => m.LagMs > 0 && m.Supported).ToList();
         var keepsUp = choices.Where(m => m.Responsive).ToList();
         var lags = choices.Where(m => !m.Responsive).ToList();
+
+        void AddNewEngines()
+        {
+            if (unmeasured.Count > 0)
+            {
+                AddModelNote("New engines. Performance and accuracy not yet tested in Sunno.");
+                foreach (var model in unmeasured) ModelList.Items.Add(model);
+            }
+            if (unsupported.Count > 0)
+            {
+                AddModelNote("Unavailable on this device");
+                foreach (var model in unsupported)
+                    ModelList.Items.Add(new ListViewItem { Content = model, IsEnabled = false });
+            }
+        }
 
         // Deliberately no mention of processors or graphics cards. An earlier version said
         // "Recommended for your processor", which asks someone who has just installed a
@@ -2278,12 +2360,13 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // Every option is too slow. A "not recommended" heading over the entire list would be
         // true and useless: it reads as "do not use this app". Say it once, plainly, and let
         // fastest-first carry the advice.
-        if (keepsUp.Count == 0)
+        if (keepsUp.Count == 0 && choices.Count > 0)
         {
             AddModelNote("None of these can keep up with a live conversation on this PC. "
                          + "The fastest one is first.");
             foreach (var m in choices.OrderBy(m => m.LagMs <= 0 ? int.MaxValue : m.LagMs))
                 ModelList.Items.Add(m);
+            AddNewEngines();
             return;
         }
 
@@ -2292,6 +2375,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (lags.Count == 0)
         {
             foreach (var m in choices) ModelList.Items.Add(m);
+            AddNewEngines();
             return;
         }
 
@@ -2299,6 +2383,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         foreach (var m in keepsUp) ModelList.Items.Add(m);
         AddModelNote("Slower on this PC. Captions arrive several seconds after the words are spoken.");
         foreach (var m in lags) ModelList.Items.Add(m);
+        AddNewEngines();
     }
 
     /// <summary>
@@ -2321,7 +2406,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
     private async void OnDownloadModel(object sender, RoutedEventArgs e)
     {
-        if (ModelList.SelectedItem is not ModelChoice choice) return;
+        if (ModelList.SelectedItem is not ModelChoice choice || !choice.Supported) return;
 
         SetupError.IsOpen = false;
         DownloadButton.IsEnabled = false;
@@ -2352,14 +2437,15 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (_switchingTo is not null)
         {
             var row = Models.FirstOrDefault(m => m.Id == p.Model);
-            row?.ShowProgress(p.Percent);
+            if (p.Total <= 0) row?.ShowLoading();
+            else row?.ShowProgress(p.Percent);
             return;
         }
 
-        DownloadBar.IsIndeterminate = false;
+        DownloadBar.IsIndeterminate = p.Total <= 0;
         DownloadBar.Value = Math.Clamp(p.Percent, 0, 100);
-        DownloadText.Text =
-            $"{p.Downloaded / 1048576.0:0} MB of {p.Total / 1048576.0:0} MB · {p.Percent:0}%";
+        DownloadText.Text = p.Total <= 0 ? "Setting up the system speech model..."
+            : $"{p.Downloaded / 1048576.0:0} MB of {p.Total / 1048576.0:0} MB · {p.Percent:0}%";
     }
 
     private void OnDownloadComplete()
@@ -3128,7 +3214,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // overflow button. Compact deliberately does not: reserving a line in a window whose
         // only content is captions costs the thing you opened it for, and a caption long
         // enough to reach that corner is rare. The button floats on the same row as the text.
-        CaptionScroller.Padding = compact
+        CaptionScroller.ScrollPadding = compact
             ? new Thickness(14, 10, 14, 10)
             : new Thickness(24, 40, 24, 16);
 
@@ -3450,6 +3536,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void OnClear(object sender, RoutedEventArgs e)
     {
         Lines.Clear();
+        _captionScroll.Reset();
         _provisional = null;
         _currentUtterance = -1;
         SetEmptyStateVisible(true);
@@ -3556,6 +3643,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = Content.XamlRoot,
+            RequestedTheme = AppRoot.RequestedTheme,
         };
 
         if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;

@@ -25,7 +25,14 @@ if (-not (Test-Path (Join-Path $baseHome "python.exe"))) {
   throw "Base Python not found at '$baseHome' (from pyvenv.cfg)."
 }
 
-if ($Clean -and (Test-Path $Destination)) { Remove-Item $Destination -Recurse -Force }
+$stageTarget = [IO.Path]::GetFullPath($Destination)
+$stageWorkspace = [IO.Path]::GetFullPath((Join-Path $repo "packaging\staging"))
+if ($Clean -and (Test-Path $Destination)) {
+  if (-not $stageTarget.StartsWith($stageWorkspace + "\", [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to clean a backend outside packaging/staging: $stageTarget"
+  }
+  Remove-Item -LiteralPath $stageTarget -Recurse -Force
+}
 $py = Join-Path $Destination "python"
 New-Item -ItemType Directory -Path $py -Force | Out-Null
 

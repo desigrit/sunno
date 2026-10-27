@@ -1,13 +1,9 @@
 """What the pipeline needs from a speech engine, and which one to build.
 
-Two engines exist because CTranslate2 - fast, accurate, and what the app was built on - has
-no win_arm64 wheel and will not build there. A Snapdragon laptop cannot run it at all, so ARM
-needs a second implementation over ONNX Runtime rather than a slower configuration of the first.
-
-The seam is deliberately narrow. The pipeline only ever asks an engine to decode audio twice
-per utterance - once fast, once well - and to warm itself up. Everything else about how a model
-is loaded, prompted, or quantised stays inside the implementation, which is why a second one is
-a new file rather than a set of branches through the existing code.
+Whisper engines accept complete utterance snapshots. Streaming transducers, Moonshine,
+and platform-native helpers additionally accept each new sample once through the optional
+incremental interface. Model loading, prompts, compute providers, and resource cleanup
+stay inside each implementation. New engines remain opt-in until evaluated in Sunno.
 """
 
 from __future__ import annotations
@@ -69,6 +65,22 @@ class SpeechEngine(Protocol):
     def warmup(self) -> float: ...
 
 
+@runtime_checkable
+class IncrementalSpeechEngine(Protocol):
+    """Optional streaming interface, used only on the serial ASR worker thread.
+
+    A stream owns one utterance. Every sample is delivered exactly once, even
+    when queued caption refreshes are coalesced. Reset abandons decoder state.
+    Batch engines keep the existing partial/final interface.
+    """
+
+    def start_stream(self) -> None: ...
+
+    def stream(self, audio: np.ndarray, *, final: bool = False) -> Transcript: ...
+
+    def reset_stream(self) -> None: ...
+
+
 def available_engines() -> dict[str, bool]:
     """Which engines could actually run here.
 
@@ -81,6 +93,7 @@ def available_engines() -> dict[str, bool]:
         "ct2": importlib.util.find_spec("ctranslate2") is not None,
         "onnx": importlib.util.find_spec("onnxruntime_genai") is not None,
         "stream": importlib.util.find_spec("sherpa_onnx") is not None,
+        "moonshine": importlib.util.find_spec("moonshine_voice") is not None,
     }
 
 
@@ -104,6 +117,15 @@ def resolve_engine(preference: str = "auto", model_id: str | None = None) -> str
 
     if model_id is not None:
         from .models import is_stream_model
+        from .asr_moonshine import MODEL_ARCHES
+        from .asr_native import NATIVE_MODELS
+
+        if model_id in MODEL_ARCHES:
+            if not have.get("moonshine"):
+                raise RuntimeError("Moonshine is not included for this processor architecture")
+            return "moonshine"
+        if model_id in NATIVE_MODELS:
+            return "native"
 
         if is_stream_model(model_id):
             if not have["stream"]:
@@ -134,6 +156,14 @@ def resolve_engine(preference: str = "auto", model_id: str | None = None) -> str
 def create_engine(settings: "Settings", preference: str = "auto") -> SpeechEngine:
     """Build the engine this machine can run."""
     kind = resolve_engine(preference, getattr(settings, "model_size", None))
+    if kind == "moonshine":
+        from .asr_moonshine import MoonshineEngine
+
+        return MoonshineEngine(settings)
+    if kind == "native":
+        from .asr_native import NativeSpeechEngine
+
+        return NativeSpeechEngine(settings)
     if kind == "stream":
         from .asr_stream import StreamingEngine
 

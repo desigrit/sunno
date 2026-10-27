@@ -21,6 +21,7 @@ public sealed class CaptionLine : INotifyPropertyChanged
 
     // Not init-only: the XAML type-info generator emits a plain setter assignment.
     public int UtteranceId { get; set; }
+    public string? SpeakerSession { get; set; }
 
     public string Text
     {
@@ -60,13 +61,16 @@ public sealed class CaptionLine : INotifyPropertyChanged
     public int? SpeakerId
     {
         get => _speakerId;
-        set => Set(ref _speakerId, value);
+        set
+        {
+            if (Set(ref _speakerId, value)) Notify(nameof(ColourIndex));
+        }
     }
 
     /// <summary>True when this is the user's own speech.</summary>
     public bool IsSelf
     {
-        get => _isSelf;
+        get => SpeakerLabelsEnabled && _isSelf;
         set
         {
             if (Set(ref _isSelf, value))
@@ -94,8 +98,19 @@ public sealed class CaptionLine : INotifyPropertyChanged
         }
     }
 
+    public static bool SpeakerLabelsEnabled { get; set; } = true;
     public bool HasSpeaker => !string.IsNullOrEmpty(DisplayLabel);
-    public string DisplayLabel => _isSelf ? "You" : _speakerLabel ?? string.Empty;
+    public string DisplayLabel => !SpeakerLabelsEnabled ? string.Empty
+        : _isSelf ? "You" : _speakerLabel ?? string.Empty;
+
+    public void RefreshSpeakerLabels()
+    {
+        Notify(nameof(IsSelf));
+        Notify(nameof(DisplayLabel));
+        Notify(nameof(HasSpeaker));
+        Notify(nameof(ShowMeta));
+        Notify(nameof(ShowClarity));
+    }
 
     /// <summary>
     /// The user's preference, shared by every line rather than copied into each one: a line
@@ -104,7 +119,7 @@ public sealed class CaptionLine : INotifyPropertyChanged
     /// </summary>
     public static bool ClarityEnabled { get; set; } = true;
 
-    public bool ShowClarity => ClarityEnabled && _isSelf && _isFinal && _clarity is not null;
+    public bool ShowClarity => SpeakerLabelsEnabled && ClarityEnabled && _isSelf && _isFinal && _clarity is not null;
 
     /// <summary>Re-evaluate after the shared preference changes; a static has no notification
     /// of its own, so the window tells each line to look again.</summary>

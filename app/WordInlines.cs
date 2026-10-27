@@ -271,17 +271,15 @@ public static class WordInlines
     private static Brush? _uncertainBrush;
 
     /// <summary>
-    /// Grey for uncertain words. Prefers the theme's secondary text brush so it tracks light
-    /// and dark, but falls back to a fixed mid grey that reads on both — a missing resource
-    /// key faults at render time as an opaque stowed exception, which is not worth risking
-    /// for a styling detail.
+    /// Shared gray for uncertain words. The appearance controller updates the same brush
+    /// in place, so already-rendered words follow light, dark and contrast themes too.
     /// </summary>
     private static Brush UncertainBrush()
     {
         if (_uncertainBrush is not null) return _uncertainBrush;
 
         if (Application.Current?.Resources is { } resources &&
-            resources.TryGetValue("TextFillColorSecondaryBrush", out var found) &&
+            resources.TryGetValue("CaptionUncertain", out var found) &&
             found is Brush themed)
         {
             return _uncertainBrush = themed;

@@ -226,6 +226,8 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     parser.add_argument(
         "--no-speakers", action="store_true", help="disable speaker labelling"
     )
+    parser.add_argument("--speaker-labels", choices=("off", "automatic"), default="automatic",
+                        help="initial speaker label mode; can be changed without restarting")
     parser.add_argument(
         "--vocabulary",
         default="",
@@ -265,6 +267,7 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
         recordings_path=args.recordings_path,
         end_silence_ms=args.end_silence_ms,
         partial_interval_ms=args.partial_interval_ms,
+        speaker_labels=args.speaker_labels == "automatic",
         vocabulary=tuple(v.strip() for v in args.vocabulary.split(",") if v.strip()),
     )
     return settings, args
@@ -307,11 +310,20 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                 recorder["active"].add_line(event)
             except Exception:
                 pass
+        elif event.get("type") in ("speaker_label", "speaker_merged", "speaker_deleted", "roster"):
+            active = recorder["active"]
+            if active is not None:
+                try:
+                    active.add_speaker_event(event)
+                except Exception:
+                    pass
         loop.call_soon_threadsafe(events.put_nowait, event)
 
     # One recording at a time, held in a dict so the closures below and the audio tap all see
     # the same object without a nonlocal chain through several nested functions.
     recorder: dict = {"active": None}
+    from .speaker_labels import LiveSpeakerLabels
+    labels = LiveSpeakerLabels(speaker, emit, settings.speaker_labels)
     from .capture import CaptureManager
     from .capture_target import AudioTarget
     capture = CaptureManager(AudioTarget.from_settings(settings), controller, emit, settings.model_size)
@@ -403,8 +415,10 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         # recording. Sent after the status frame so it cannot be overwritten by the replay.
         if recorder["active"] is not None:
             await ws.send(json.dumps(recording_frame()))
+        await ws.send(json.dumps(labels.state()))
         if speaker is not None:
-            await ws.send(json.dumps({"type": "roster", "speakers": speaker.roster()}))
+            await ws.send(json.dumps({"type": "roster", "speakers":
+                                     speaker.roster() if labels.enabled else []}))
         try:
             async for raw in ws:
                 try:
@@ -459,37 +473,21 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                         })
 
                     loop.create_task(send_catalog())
+                elif cmd == "set_speaker_labels" and msg.get("mode") in ("off", "automatic"):
+                    labels.set_enabled(msg["mode"] == "automatic")
                 elif cmd == "rename_speaker" and speaker is not None:
-                    if speaker.rename(int(msg.get("id", -1)), str(msg.get("name", ""))):
-                        emit({"type": "roster", "speakers": speaker.roster()})
+                    labels.edit("rename", int(msg.get("id", -1)), str(msg.get("name", "")))
                 elif cmd == "set_self" and speaker is not None:
-                    if speaker.set_self(int(msg.get("id", -1)), bool(msg.get("value", True))):
-                        emit({"type": "roster", "speakers": speaker.roster()})
+                    labels.edit("self", int(msg.get("id", -1)), bool(msg.get("value", True)))
                 elif cmd == "merge_speakers" and speaker is not None:
                     source = int(msg.get("source", -1))
                     target = int(msg.get("target", -1))
-                    if speaker.merge(source, target):
-                        # Announced before the roster, and it has to stay that way. Speaker
-                        # ids are durable now, so a merged-away id simply vanishes from the
-                        # roster and the UI's relabel pass skips the captions carrying it -
-                        # they would keep the old name for good. This tells the UI to move
-                        # those lines onto the survivor first; the roster that follows then
-                        # names them correctly.
-                        emit({"type": "speaker_merged", "from": source, "into": target})
-                        emit({"type": "roster", "speakers": speaker.roster()})
+                    labels.merge(source, target)
                 elif cmd == "delete_speaker" and speaker is not None:
                     target_id = int(msg.get("id", -1))
-                    fallback = speaker.delete(target_id)
-                    if fallback is not None:
-                        # Like speaker_merged, this goes out before the roster and for the
-                        # same reason: the deleted id is gone from the roster, so the UI's
-                        # relabel pass skips those captions and they would keep the name of
-                        # someone the user just asked the app to forget.
-                        emit({"type": "speaker_deleted", "id": target_id, "label": fallback})
-                        emit({"type": "roster", "speakers": speaker.roster()})
+                    labels.edit("delete", target_id)
                 elif cmd == "reset_speakers" and speaker is not None:
-                    speaker.reset()
-                    emit({"type": "roster", "speakers": speaker.roster()})
+                    labels.edit("reset")
         finally:
             clients.discard(ws)
 
@@ -584,7 +582,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         """
         from . import models as model_catalog
 
-        if model_catalog.is_stream_model(model_id):
+        if not model_catalog.uses_cuda(model_id):
             return False
         return gpu_payload_needed()
 
@@ -780,6 +778,9 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
 
         await model_ready.wait()
         settings.model_size = chosen_model
+        model_uses_cuda = model_catalog.uses_cuda(settings.model_size)
+        if not model_uses_cuda:
+            settings.device = "cpu"
 
         # Re-resolve the device now the download has finished.
         #
@@ -794,7 +795,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         # Only ever an upgrade. args.compute_type is honoured if the user set it explicitly,
         # and a forced --compute-device cpu still resolves to cpu, so this cannot override
         # either. The create_engine/warmup guard below catches it if the upgrade is wrong.
-        if settings.device != "cuda":
+        if model_uses_cuda and settings.device != "cuda":
             from . import hardware
 
             upgraded = hardware.resolve_device(args.compute_device)
@@ -807,7 +808,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         # captioning app that runs behind is far better than one that refuses to start.
         # resolve_device() has already checked the payload is complete, so reaching here with
         # a fault means it broke between that check and now.
-        if settings.device == "cuda":
+        if model_uses_cuda and settings.device == "cuda":
             from . import hardware
             from .cuda_setup import register_cuda_dlls
 
@@ -821,10 +822,13 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         # Not every model is a Whisper checkpoint any more, and this line ends up in the
         # backend log a user attaches to a bug report, where "Loading Whisper stream-en"
         # would send whoever reads it looking for a Whisper model that does not exist.
-        from .models import is_stream_model
+        from .models import uses_cuda
 
-        if is_stream_model(settings.model_size):
-            print(f"\nLoading {settings.model_size} on cpu ...")
+        if not uses_cuda(settings.model_size):
+            settings.device = "cpu"
+            from .asr_native import NATIVE_MODELS
+            execution = "through the system speech engine" if settings.model_size in NATIVE_MODELS else "on cpu"
+            print(f"\nLoading {settings.model_size} {execution} ...")
         else:
             print(f"\nLoading Whisper {settings.model_size} ({settings.compute_type}) on "
                   f"{settings.device} ...")
@@ -859,6 +863,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
             settings, engine, emit,
             should_run=lambda: controller.is_running,
             speaker=speaker,
+            speaker_labels=labels,
             # Every frame, including silence, and only while a recording is running. The
             # lookup is per frame, which is what lets record and stop take effect without
             # rebuilding the pipeline.
@@ -900,6 +905,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                     except Exception:
                         pass
                 pipeline.close()
+                labels.close()
 
         print("Press Ctrl+C to stop.\n")
         worker = asyncio.to_thread(pump)
