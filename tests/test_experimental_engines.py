@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from server import asr_native, experimental_models, models
+from server import asr_native, distribution, experimental_models, models
 from server.config import Settings
 from server.engine import resolve_engine
 
@@ -64,6 +64,46 @@ class CatalogTests(unittest.TestCase):
     def test_native_model_download_size_is_not_fabricated(self):
         for model_id in asr_native.NATIVE_MODELS:
             self.assertEqual(models.total_size_bytes(model_id), 0)
+
+
+class StoreDistributionTests(unittest.TestCase):
+    def test_store_catalog_keeps_moonshine_but_never_probes_windows_ai(self):
+        with patch.object(distribution, "IS_STORE_BUILD", True), \
+             patch.object(experimental_models.sys, "platform", "win32"), \
+             patch.object(experimental_models, "status", return_value={
+                 "supported": True, "available": True}) as status:
+            ids = {entry["id"] for entry in experimental_models.catalog_entries()}
+        self.assertNotIn("windows-speech", ids)
+        self.assertTrue({"moonshine-small", "moonshine-medium", "moonshine-tiny"} <= ids)
+        self.assertNotIn("windows-speech", {call.args[0] for call in status.call_args_list})
+
+    def test_store_blocks_direct_helper_and_download_requests(self):
+        with patch.object(distribution, "IS_STORE_BUILD", True), \
+             patch.object(asr_native.subprocess, "Popen") as spawn:
+            self.assertIsNone(asr_native.service_path("windows-speech"))
+            self.assertFalse(experimental_models.status("windows-speech")["supported"])
+            with self.assertRaisesRegex(RuntimeError, "not included"):
+                asr_native.download("windows-speech")
+        spawn.assert_not_called()
+
+    def test_store_migrates_only_the_unsupported_saved_selection(self):
+        with patch.object(distribution, "IS_STORE_BUILD", True):
+            self.assertIsNone(distribution.startup_model("windows-speech"))
+            for model in ("large-v3", "stream-en", "moonshine-medium", None):
+                self.assertEqual(distribution.startup_model(model), model)
+        with patch.object(distribution, "IS_STORE_BUILD", False):
+            self.assertEqual(distribution.startup_model("windows-speech"), "windows-speech")
+
+    def test_store_startup_resolves_a_supported_hardware_default(self):
+        from server.app import parse_args
+        with patch.object(distribution, "IS_STORE_BUILD", True), \
+             patch("sys.argv", ["sunno", "--model", "windows-speech"]), \
+             patch("server.hardware.resolve_device", return_value="cpu"), \
+             patch("server.hardware.compute_type_for", return_value="int8"), \
+             patch("server.hardware.default_model", return_value="small") as choose:
+            settings, _ = parse_args()
+        self.assertEqual(settings.model_size, "small")
+        choose.assert_called_once()
 
 
 class FakeService:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 
+from .distribution import model_allowed
+
 CATALOG = [
     {"id": "moonshine-small", "name": "Moonshine Small Streaming",
      "detail": "English streaming. Experimental; speed varies by PC.",
@@ -25,6 +27,9 @@ MODEL_IDS = frozenset(entry["id"] for entry in CATALOG)
 
 
 def status(model_id: str) -> dict:
+    if not model_allowed(model_id):
+        return {"supported": False, "available": False,
+                "reason": "Windows AI Speech is not included in the Microsoft Store version."}
     from . import asr_moonshine, asr_native
 
     if model_id in asr_moonshine.MODEL_ARCHES:
@@ -49,6 +54,8 @@ def catalog_entries() -> list[dict]:
     entries = []
     for entry in CATALOG:
         model_id = entry["id"]
+        if not model_allowed(model_id):
+            continue
         if model_id == "apple-speech" and sys.platform != "darwin":
             continue
         if model_id == "windows-speech" and sys.platform != "win32":

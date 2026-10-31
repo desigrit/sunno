@@ -2,6 +2,8 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
+using System.Diagnostics;
 using Sunno.Controls;
 
 namespace Sunno.Services;
@@ -22,17 +24,23 @@ public sealed class CaptionScrollFollower : IDisposable
     private bool _navigationPending;
     private int _direction;
     private double _lastOffset;
+    private readonly Func<bool> _animationsEnabled;
+    private long _jumpStarted;
+    private double _jumpFrom, _jumpSeconds;
+
+    internal bool IsJumping { get; private set; }
 
     public bool IsFollowing { get; private set; } = true;
     public bool CanSkipToCurrent => !IsFollowing && _viewer.ScrollableHeight - _viewer.VerticalOffset > .5;
     public event Action? Changed;
 
-    public CaptionScrollFollower(CaptionScrollViewer host, FrameworkElement content)
+    public CaptionScrollFollower(CaptionScrollViewer host, FrameworkElement content, Func<bool>? animationsEnabled = null)
     {
         _host = host;
         var viewer = host.Viewer;
         _viewer = viewer;
         _content = content;
+        _animationsEnabled = animationsEnabled ?? (() => new Windows.UI.ViewManagement.UISettings().AnimationsEnabled);
         _lastOffset = viewer.VerticalOffset;
         host.ScrollRequested += OnScrollRequested;
         host.ScrollCompleted += OnScrollCompleted;
@@ -72,6 +80,8 @@ public sealed class CaptionScrollFollower : IDisposable
     private void OnScrollRequested(int direction, double? target)
     {
         if (_disposed || _viewer.ScrollableHeight <= 0) return;
+        // A fresh gesture owns the viewport immediately, even during a button jump.
+        if (IsJumping) { StopJump(); SetFollowing(false); }
         _direction = direction;
         _navigationPending = true;
         if (direction < 0) SetFollowing(false);
@@ -105,6 +115,7 @@ public sealed class CaptionScrollFollower : IDisposable
 
     private void OnManipulationStarted(object? sender, object e)
     {
+        if (IsJumping) { StopJump(); SetFollowing(false); }
         _manipulating = true;
         _lastOffset = _viewer.VerticalOffset;
     }
@@ -127,7 +138,7 @@ public sealed class CaptionScrollFollower : IDisposable
 
     public void RequestFollow()
     {
-        if (_disposed || _queued || _changingView) return;
+        if (_disposed || _queued || _changingView || IsJumping) return;
         _queued = _viewer.DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
         {
             _queued = false;
@@ -137,7 +148,7 @@ public sealed class CaptionScrollFollower : IDisposable
 
     private void FollowAfterLayout()
     {
-        if (_disposed || _changingView || _manipulating || _host.IsScrollBarDragging) return;
+        if (_disposed || _changingView || IsJumping || _manipulating || _host.IsScrollBarDragging) return;
         _changingView = true;
         try
         {
@@ -150,14 +161,60 @@ public sealed class CaptionScrollFollower : IDisposable
         Changed?.Invoke();
     }
 
-    public void Resume()
+    internal static double JumpDurationSeconds(double distance, double viewportHeight) =>
+        Math.Clamp(.2 + .08 * Math.Max(0, distance / Math.Max(1, viewportHeight) - 1), .2, 1);
+
+    public void Resume(bool animate = false)
     {
         if (_disposed) return;
+        StopJump();
         _navigationPending = false;
         _direction = 0;
         SetFollowing(true);
+        _viewer.UpdateLayout();
+        var distance = _viewer.ScrollableHeight - _viewer.VerticalOffset;
+        if (animate && _animationsEnabled() && distance > .5 && !_manipulating && !_host.IsScrollBarDragging)
+        {
+            _jumpFrom = _viewer.VerticalOffset;
+            _jumpSeconds = JumpDurationSeconds(distance, _viewer.ViewportHeight);
+            _jumpStarted = Stopwatch.GetTimestamp();
+            IsJumping = true;
+            CompositionTarget.Rendering += OnJumpFrame;
+            return;
+        }
         FollowAfterLayout();
         RequestFollow();
+    }
+
+    private void OnJumpFrame(object? sender, object e)
+    {
+        if (_disposed || !IsFollowing || _manipulating || _host.IsScrollBarDragging)
+        {
+            StopJump();
+            return;
+        }
+        var elapsed = Stopwatch.GetElapsedTime(_jumpStarted).TotalSeconds;
+        var progress = Math.Clamp(elapsed / _jumpSeconds, 0, 1);
+        // Cubic ease-out: a quick departure and a gentle arrival. Re-read the live
+        // edge each frame so text arriving or finalizing never extends the deadline.
+        var eased = 1 - Math.Pow(1 - progress, 3);
+        var target = _jumpFrom + (_viewer.ScrollableHeight - _jumpFrom) * eased;
+        _changingView = true;
+        try { _viewer.ChangeView(null, Math.Clamp(target, 0, _viewer.ScrollableHeight), null, disableAnimation: true); }
+        finally { _changingView = false; }
+        if (progress >= 1)
+        {
+            StopJump();
+            FollowAfterLayout();
+            RequestFollow();
+        }
+    }
+
+    private void StopJump()
+    {
+        if (!IsJumping) return;
+        IsJumping = false;
+        CompositionTarget.Rendering -= OnJumpFrame;
     }
 
     public void Reset() => Resume();
@@ -166,6 +223,7 @@ public sealed class CaptionScrollFollower : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        StopJump();
         _host.ScrollRequested -= OnScrollRequested;
         _host.ScrollCompleted -= OnScrollCompleted;
         _viewer.ViewChanged -= OnViewChanged;

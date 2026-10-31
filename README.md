@@ -94,7 +94,9 @@ the table at dinner, beside you in a meeting, or pass a small mic to whoever is 
 Scroll up to read earlier captions without being pulled back down by new words. Scroll back
 near the bottom, or select **Skip to current**, to resume following live captions. The subtle
 floating button appears while you are reading above the latest captions. Finalizing text and
-pauses in speech preserve your choice. Clearing the transcript also resumes following.
+pauses in speech preserve your choice. The button scrolls smoothly for 0.2 to 1 second,
+depending on the distance, and stops if you scroll yourself. Windows' animation setting is
+respected. Clearing the transcript also resumes following.
 
 <table>
 <tr>
@@ -263,11 +265,18 @@ Run the backend on its own, useful for testing without the desktop app:
 .\.venv\Scripts\python.exe -m server.app --device "Umik-1"
 ```
 
-Build the installable package:
+Build the Microsoft Store package:
 
 ```powershell
-.\packaging\build-msix.ps1
+.\packaging\build-msix.ps1 -Store
 ```
+
+Upload the versioned `_Store.msix` file in `packaging/out/store/` to Partner Center.
+This build excludes the experimental Windows AI Speech API and its `systemAIModels`
+capability. Whisper, Moonshine and the streaming models remain available. Microsoft currently
+[excludes this Windows speech API from Store publication](https://learn.microsoft.com/en-us/windows/ai/apis/speech-recognition).
+For local or GitHub previews that include it, build without `-Store`; those packages go in
+`packaging/out/`.
 
 Tests are standalone scripts rather than pytest:
 

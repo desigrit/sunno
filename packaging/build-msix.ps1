@@ -7,11 +7,13 @@
 #
 #   .\build-msix.ps1                 # full build
 #   .\build-msix.ps1 -SkipStage      # reuse an existing staged backend
+#   .\build-msix.ps1 -Store          # Microsoft Store package, without Windows AI Speech
 
 [CmdletBinding()]
 param(
   [switch]$SkipStage,
   [switch]$SkipPublish,
+  [switch]$Store,
   # Must equal Package/Identity/Publisher in app/Package.appxmanifest or signtool refuses the
   # package with a publisher mismatch. That value is assigned by Partner Center and is not a
   # human-readable name. This certificate is self-signed and only exists so the package can be
@@ -23,6 +25,7 @@ $ErrorActionPreference = "Stop"
 $root     = Split-Path -Parent $PSScriptRoot
 $staging  = Join-Path $PSScriptRoot "staging\package"
 $out      = Join-Path $PSScriptRoot "out"
+if ($Store) { $out = Join-Path $out "store" }
 $appProj  = Join-Path $root "app\Sunno.csproj"
 
 function Find-SdkTool([string]$name) {
@@ -126,18 +129,40 @@ if (-not $SkipStage) {
 }
 
 # ---------------------------------------------------------------- manifest + assets
-# The system engine uses a separate process and its own SDK/runtime directory.
-# Ship both helper architectures so a Snapdragon launches the ARM64 helper even
-# while the existing desktop shell and Python build run under x64 emulation.
-$nativeProject = Join-Path $root "windows-speech-service\Sunno.SpeechService.csproj"
-foreach ($architecture in @("x64", "arm64")) {
-  $nativeOutput = Join-Path $staging "backend\native-speech\$architecture"
-  dotnet publish $nativeProject -c Release -r "win-$architecture" `
-    -p:PublishReadyToRun=false -o $nativeOutput --nologo -v quiet
-  if ($LASTEXITCODE -ne 0) { throw "Native speech helper build failed for $architecture" }
+$storeMarker = Join-Path $staging "backend\store-build"
+$nativeRoot = [IO.Path]::GetFullPath((Join-Path $staging "backend\native-speech"))
+if ($Store) {
+  # The Windows AI Speech API is experimental and excluded from Store submissions.
+  # Remove cached helpers too, since -SkipStage may reuse a preview backend.
+  if ($nativeRoot -ne (Join-Path $validatedStaging "backend\native-speech")) {
+    throw "Unexpected native helper path: $nativeRoot"
+  }
+  if (Test-Path -LiteralPath $nativeRoot) { Remove-Item -LiteralPath $nativeRoot -Recurse -Force }
+  Set-Content -LiteralPath $storeMarker -Value "Microsoft Store" -Encoding utf8
+} else {
+  if (Test-Path -LiteralPath $storeMarker) { Remove-Item -LiteralPath $storeMarker -Force }
+  # Ship both helper architectures for local and GitHub preview builds.
+  $nativeProject = Join-Path $root "windows-speech-service\Sunno.SpeechService.csproj"
+  foreach ($architecture in @("x64", "arm64")) {
+    $nativeOutput = Join-Path $nativeRoot $architecture
+    dotnet publish $nativeProject -c Release -r "win-$architecture" `
+      -p:PublishReadyToRun=false -o $nativeOutput --nologo -v quiet
+    if ($LASTEXITCODE -ne 0) { throw "Native speech helper build failed for $architecture" }
+  }
 }
 
 Copy-Item (Join-Path $root "app\Package.appxmanifest") (Join-Path $staging "AppxManifest.xml") -Force
+if ($Store) {
+  $stagedManifestPath = Join-Path $staging "AppxManifest.xml"
+  [xml]$storeManifest = Get-Content -LiteralPath $stagedManifestPath -Raw
+  $restricted = $storeManifest.SelectSingleNode("//*[local-name()='Capability' and @Name='systemAIModels']")
+  if ($restricted) { [void]$restricted.ParentNode.RemoveChild($restricted) }
+  $storeManifest.Save($stagedManifestPath)
+  if ($storeManifest.SelectSingleNode("//*[@Name='systemAIModels']") -or
+      (Test-Path -LiteralPath $nativeRoot) -or -not (Test-Path -LiteralPath $storeMarker)) {
+    throw "Store package contains Windows AI Speech or is missing its distribution marker."
+  }
+}
 Copy-Item (Join-Path $root "THIRD-PARTY-NOTICES.md") $staging -Force
 Copy-Item (Join-Path $root "LICENSE") $staging -Force
 
@@ -213,16 +238,17 @@ if ($LASTEXITCODE -ne 0) { throw "signtool failed ($LASTEXITCODE)" }
 # The updater matches stable release tags to an explicitly versioned architecture asset.
 [xml]$packageManifest = Get-Content -LiteralPath (Join-Path $staging "AppxManifest.xml") -Raw
 $releaseName = "Sunno_{0}_{1}.msix" -f $packageManifest.Package.Identity.Version, $packageManifest.Package.Identity.ProcessorArchitecture
+if ($Store) { $releaseName = $releaseName.Replace(".msix", "_Store.msix") }
 $releasePackage = Join-Path $out $releaseName
 Copy-Item -LiteralPath $msix -Destination $releasePackage -Force
-Write-Host "GitHub release asset: $releasePackage" -ForegroundColor Green
+Write-Host "Release package: $releasePackage" -ForegroundColor Green
 
 $mb = (Get-Item $msix).Length / 1MB
 Write-Host ""
 Write-Host ("Signed package: {0}  ({1:N0} MB)" -f $msix, $mb) -ForegroundColor Green
 Write-Host ""
 Write-Host "To install (both steps need an elevated prompt):" -ForegroundColor Yellow
-Write-Host "  1. Trust the development certificate — a machine-wide change:"
+Write-Host "  1. Trust the development certificate (a machine-wide change):"
 Write-Host "       Import-Certificate -FilePath `"$cer`" -CertStoreLocation Cert:\LocalMachine\TrustedPeople"
 Write-Host "  2. Install the package:"
 Write-Host "       Add-AppxPackage -Path `"$msix`""

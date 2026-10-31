@@ -320,7 +320,8 @@ public partial class App : Application
         var viewer = host.Viewer;
         root.Children.Add(host);
         _window!.AppWindow.Resize(new SizeInt32(720, 430));
-        using var follow = new CaptionScrollFollower(host, rows);
+        var animationsEnabled = true;
+        using var follow = new CaptionScrollFollower(host, rows, () => animationsEnabled);
         var skip = new SkipToCurrentButton
         {
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom,
@@ -328,7 +329,7 @@ public partial class App : Application
         };
         root.Children.Add(skip);
         follow.Changed += () => skip.Visibility = follow.CanSkipToCurrent ? Visibility.Visible : Visibility.Collapsed;
-        skip.Click += (_, _) => { viewer.Focus(FocusState.Programmatic); follow.Resume(); };
+        skip.Click += (_, _) => { viewer.Focus(FocusState.Programmatic); follow.Resume(animate: true); };
         TextBlock Add(string text = "A caption in the live transcript.")
         {
             var row = new TextBlock { Text = text, FontSize = 26, TextWrapping = TextWrapping.Wrap,
@@ -420,6 +421,21 @@ public partial class App : Application
             root.RequestedTheme = theme;
             await Task.Delay(100);
             await Capture(root, $"scroll-{theme.ToString().ToLowerInvariant()}.png");
+            var presenter = (ContentPresenter)VisualTreeHelper.GetChild(skipButton, 0);
+            var normal = ((SolidColorBrush)presenter.Background).Color;
+            var stableHover = true;
+            for (var hover = 0; hover < 6; hover++)
+            {
+                VisualStateManager.GoToState(skipButton, hover % 2 == 0 ? "PointerOver" : "Normal", true);
+                await Task.Delay(25);
+                var color = ((SolidColorBrush)presenter.Background).Color;
+                stableHover &= Math.Abs(color.R - normal.R) <= 20 && color.A >= 230;
+            }
+            Check(stableHover, $"{theme} rapid hover keeps the pill's translucent colors without a flash");
+            VisualStateManager.GoToState(skipButton, "PointerOver", true);
+            await Task.Delay(50);
+            await Capture(root, $"scroll-{theme.ToString().ToLowerInvariant()}-hover.png");
+            VisualStateManager.GoToState(skipButton, "Normal", true);
         }
         _window.AppWindow.Resize(new SizeInt32(390, 260));
         await Task.Delay(150);
@@ -465,11 +481,37 @@ public partial class App : Application
         Check(!follow.IsFollowing, "resizing while reading history does not turn following back on");
         var invokeSkip = (IInvokeProvider)FrameworkElementAutomationPeer.CreatePeerForElement(skipButton)
             .GetPattern(PatternInterface.Invoke);
+        Check(CaptionScrollFollower.JumpDurationSeconds(20, 500) == .2
+              && CaptionScrollFollower.JumpDurationSeconds(2500, 500) > .2
+              && CaptionScrollFollower.JumpDurationSeconds(100000, 500) == 1,
+            "jump duration scales with distance and stays between 0.2 and 1 second");
+        var jumpClock = System.Diagnostics.Stopwatch.StartNew();
         invokeSkip.Invoke();
-        await Task.Delay(180);
+        await Task.Delay(80);
+        Check(follow.IsJumping && viewer.ScrollableHeight - viewer.VerticalOffset > 1,
+            "Skip to current animates instead of jumping instantly");
+        Add("New captions continue arriving during the jump.");
+        while (follow.IsJumping && jumpClock.ElapsedMilliseconds < 1400) await Task.Delay(20);
+        await Task.Delay(60);
         Check(follow.IsFollowing && viewer.ScrollableHeight - viewer.VerticalOffset < 1
-              && skip.Visibility == Visibility.Collapsed,
-            "Skip to current jumps to the bottom, restores following and hides itself");
+              && skip.Visibility == Visibility.Collapsed && jumpClock.ElapsedMilliseconds <= 1400,
+            "animated skip reaches the moving live edge within its bounded duration");
+        scroll.SetScrollPercent(-1, 0);
+        await Task.Delay(100);
+        follow.Resume(animate: true);
+        await Task.Delay(80);
+        scroll.Scroll(ScrollAmount.NoAmount, ScrollAmount.LargeDecrement);
+        await Task.Delay(120);
+        Check(!follow.IsJumping && !follow.IsFollowing, "reader navigation interrupts the animated jump");
+        var interruptedOffset = viewer.VerticalOffset;
+        await Task.Delay(1000);
+        Check(Math.Abs(viewer.VerticalOffset - interruptedOffset) < 1, "an interrupted jump never resumes behind the reader");
+        animationsEnabled = false;
+        follow.Resume(animate: true);
+        await Task.Delay(100);
+        Check(!follow.IsJumping && follow.IsFollowing && viewer.ScrollableHeight - viewer.VerticalOffset < 1,
+            "reduced motion skips the spatial animation and resumes following");
+        animationsEnabled = true;
         Add("New words after skipping to current.");
         await Task.Delay(100);
         rows.Children.RemoveAt(rows.Children.Count - 1);

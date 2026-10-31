@@ -153,8 +153,11 @@ In the caption window:
 
 In the Windows app, upward reader navigation pauses automatic scrolling. Scrolling down again
 within 80 DIPs of the bottom resumes it. **Skip to current** appears above the bottom edge
-while reading history; selecting it immediately jumps to the latest captions and resumes
-following. Clearing the transcript also resets live following.
+while reading history; selecting it animates to the latest captions and resumes following.
+Duration ranges from 0.2 to 1 second, based on distance in viewport heights. A frame callback
+uses elapsed time and cubic ease-out, with a moving destination for incoming captions.
+New navigation cancels it immediately. Reduced motion and transcript resets use an instant
+follow. The rendering subscription exists only while the jump is active.
 
 `CaptionScrollFollower` stores following as reader intent. `CaptionScrollViewer` wraps the
 native WinUI ScrollViewer and reports scrollbar and accessibility navigation; the follower
@@ -328,13 +331,20 @@ packaging/
 
 ```powershell
 cd packaging
-.\build-msix.ps1
+.\build-msix.ps1 -Store
 ```
 
-Produces a signed `out\Sunno.msix` (~794 MB). The script deliberately stops before
+Produces a signed `out\store\Sunno_<version>_x64_Store.msix`. The script deliberately stops before
 installing: installing a self-signed package requires adding its certificate to
 LocalMachine Trusted People, which is a machine-wide trust change, so it prints the two
 elevated commands rather than running them.
+
+Store builds omit the Windows AI Speech helpers and `systemAIModels` capability. The
+`backend/store-build` marker filters the model catalogue, prevents direct helper launches,
+and migrates a saved preview selection to the normal hardware-based model choice. Reusing
+staging removes cached preview helpers. Building without `-Store` removes the marker and
+includes both native helper architectures for local and GitHub previews. Never upload that
+preview package to Partner Center while Microsoft's speech API remains experimental.
 
 **What is and isn't in the package.** The app, a self-contained Python 3.12 runtime, the
 backend, the browser UI and the 28 MB speaker-embedding model ship inside. The 2.9 GB

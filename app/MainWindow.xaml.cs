@@ -663,7 +663,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void OnSkipToCurrent(object sender, RoutedEventArgs e)
     {
         CaptionScroller.Viewer.Focus(FocusState.Programmatic);
-        _captionScroll.Resume();
+        _captionScroll.Resume(animate: true);
     }
 
     // ---------- status ----------
@@ -1648,6 +1648,17 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // "cuda" or "cpu", for the diagnostics report. This frame is the only one that carries
         // it; the status frame's "device" is the audio device name.
         if (!string.IsNullOrEmpty(computeDevice)) _computeDevice = computeDevice;
+
+        // A Store upgrade from a preview can retain a model that is not shipped there.
+        // Keep future restarts aligned with the supported model selected by the backend.
+        if (_settings.Model == "windows-speech" && current != "windows-speech" &&
+            options.Any(option => option.Id == current) &&
+            System.IO.File.Exists(System.IO.Path.Combine(AppContext.BaseDirectory, "backend", "store-build")))
+        {
+            _settings.Model = current;
+            _settings.Save();
+            _lastGoodModel = current;
+        }
 
         _gpuPayloadNeeded = gpu.Needed;
         _gpuPayloadMb = gpu.ApproxMb;

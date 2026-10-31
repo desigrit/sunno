@@ -246,7 +246,9 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
 
     compute_device = hardware.resolve_device(args.compute_device)
     compute_type = args.compute_type or hardware.compute_type_for(compute_device)
-    model = args.model or hardware.default_model(
+    from .distribution import startup_model
+
+    model = startup_model(args.model) or hardware.default_model(
         [entry["id"] for entry in model_catalog.CATALOG], compute_device
     )
 

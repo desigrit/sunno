@@ -20,11 +20,14 @@ import numpy as np
 
 from .config import SAMPLE_RATE, Settings
 from .engine import Transcript
+from .distribution import model_allowed
 
 NATIVE_MODELS = {"apple-speech", "windows-speech"}
 
 
 def service_path(model_id: str) -> Path | None:
+    if not model_allowed(model_id):
+        return None
     root = Path(__file__).resolve().parent.parent
     if model_id == "apple-speech" and sys.platform == "darwin":
         candidates = [root / "speech-service/.build/release/speech-service"]
