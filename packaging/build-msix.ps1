@@ -11,6 +11,8 @@
 
 [CmdletBinding()]
 param(
+  [ValidateSet("x64", "arm64")]
+  [string]$Architecture = "x64",
   [switch]$SkipStage,
   [switch]$SkipPublish,
   [switch]$Store,
@@ -24,6 +26,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root     = Split-Path -Parent $PSScriptRoot
 $staging  = Join-Path $PSScriptRoot "staging\package"
+if ($Architecture -eq "arm64") { $staging = Join-Path $PSScriptRoot "staging\release-arm64" }
 $out      = Join-Path $PSScriptRoot "out"
 if ($Store) { $out = Join-Path $out "store" }
 $appProj  = Join-Path $root "app\Sunno.csproj"
@@ -46,6 +49,7 @@ New-Item -ItemType Directory -Path $out -Force | Out-Null
 # Resolve destructive staging targets before invoking the existing clean build.
 $validatedStaging = [IO.Path]::GetFullPath($staging)
 $expectedStaging = [IO.Path]::GetFullPath((Join-Path $root "packaging\staging\package"))
+if ($Architecture -eq "arm64") { $expectedStaging = [IO.Path]::GetFullPath((Join-Path $root "packaging\staging\release-arm64")) }
 if ($validatedStaging -ne $expectedStaging -or
     ($validatedStaging -notlike ([IO.Path]::GetFullPath($root) + "\*"))) {
   throw "Refusing to clean an unexpected staging directory: $validatedStaging"
@@ -78,7 +82,8 @@ if (-not $SkipPublish) {
   # identity (which is what enables the per-app microphone toggle and AppCapability) comes
   # from being installed as an MSIX with EntryPoint="Windows.FullTrustApplication", not
   # from a build flag.
-  dotnet publish $appProj -c Release -r win-x64 `
+  dotnet publish $appProj -c Release -r "win-$Architecture" `
+    -p:Platform=$Architecture `
     -p:PackageForMsix=true `
     -p:PublishReadyToRun=false `
     -o "$staging" 2>&1 | Where-Object { $_ -match 'error|Error' }
@@ -102,7 +107,7 @@ if (-not $SkipPublish) {
 if (-not $SkipStage) {
   Write-Host "Staging the Python backend..." -ForegroundColor Cyan
   & (Join-Path $PSScriptRoot "stage-backend.ps1") `
-      -Destination (Join-Path $staging "backend") -Clean
+      -Destination (Join-Path $staging "backend") -Architecture $Architecture -Clean
 } else {
   $existing = Join-Path $staging "backend"
   if (-not (Test-Path $existing)) { throw "-SkipStage given but $existing does not exist." }
@@ -143,15 +148,19 @@ if ($Store) {
   if (Test-Path -LiteralPath $storeMarker) { Remove-Item -LiteralPath $storeMarker -Force }
   # Ship both helper architectures for local and GitHub preview builds.
   $nativeProject = Join-Path $root "windows-speech-service\Sunno.SpeechService.csproj"
-  foreach ($architecture in @("x64", "arm64")) {
-    $nativeOutput = Join-Path $nativeRoot $architecture
-    dotnet publish $nativeProject -c Release -r "win-$architecture" `
+  foreach ($helperArchitecture in @("x64", "arm64")) {
+    $nativeOutput = Join-Path $nativeRoot $helperArchitecture
+    dotnet publish $nativeProject -c Release -r "win-$helperArchitecture" `
       -p:PublishReadyToRun=false -o $nativeOutput --nologo -v quiet
-    if ($LASTEXITCODE -ne 0) { throw "Native speech helper build failed for $architecture" }
+    if ($LASTEXITCODE -ne 0) { throw "Native speech helper build failed for $helperArchitecture" }
   }
 }
 
 Copy-Item (Join-Path $root "app\Package.appxmanifest") (Join-Path $staging "AppxManifest.xml") -Force
+$stagedManifestPath = Join-Path $staging "AppxManifest.xml"
+[xml]$architectureManifest = Get-Content -LiteralPath $stagedManifestPath -Raw
+$architectureManifest.Package.Identity.ProcessorArchitecture = $Architecture
+$architectureManifest.Save($stagedManifestPath)
 if ($Store) {
   $stagedManifestPath = Join-Path $staging "AppxManifest.xml"
   [xml]$storeManifest = Get-Content -LiteralPath $stagedManifestPath -Raw
@@ -191,6 +200,7 @@ Write-Host ("Payload staged: {0:N0} MB" -f $size)
 
 # ---------------------------------------------------------------- pack
 $msix = Join-Path $out "Sunno.msix"
+if ($Architecture -eq "arm64") { $msix = Join-Path $out "Sunno-arm64.msix" }
 if (Test-Path $msix) { Remove-Item $msix -Force }
 
 # A second onnxruntime.dll at the package root hijacks sherpa-onnx's own copy and crashes the
@@ -203,9 +213,14 @@ if ($rootOnnx) {
 }
 
 Write-Host "Packing..." -ForegroundColor Cyan
+if ($Architecture -eq "arm64" -and $Store) {
+  & (Join-Path $root ".venv\Scripts\python.exe") (Join-Path $PSScriptRoot "verify_pe_arch.py") $staging --expected arm64
+  if ($LASTEXITCODE -ne 0) { throw "The ARM64 package contains incompatible native binaries." }
+}
 # MakeAppx emits a line per file (9k+). Redirect to a log rather than filtering the live
 # pipeline: truncating that pipeline detaches the process mid-pack and leaves a 0-byte file.
 $packLog = Join-Path $out "makeappx.log"
+if ($Architecture -eq "arm64") { $packLog = Join-Path $out "makeappx-arm64.log" }
 # Full manifest validation is on (no /nv): it verifies that every file the manifest
 # references actually exists in the layout, which is exactly the class of mistake that
 # would otherwise only surface at install time.

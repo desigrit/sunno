@@ -303,6 +303,14 @@ def engine_importable() -> bool:
 
     Cached so the report is made once per process rather than on every device resolution.
     """
+    from .arm_whisper import enabled
+    if enabled():
+        try:
+            import onnxruntime_genai  # noqa: F401
+            return True
+        except (ImportError, OSError) as exc:
+            print(f"[error] onnxruntime_genai could not be loaded: {exc}", flush=True)
+            return False
     try:
         import ctranslate2  # noqa: F401
 
@@ -336,7 +344,8 @@ def has_cuda() -> bool:
     below is the half that answers whether the libraries are actually there, and
     ``resolve_device`` requires both.
     """
-    if not engine_importable():
+    from .arm_whisper import enabled
+    if enabled() or not engine_importable():
         return False
 
     try:
@@ -506,6 +515,13 @@ _OBSERVE_WINDOW = 15
 _OBSERVE_MIN = 5
 
 
+def _latency_key(model_id: str, device: str) -> str:
+    from .arm_whisper import enabled
+    from .models import is_stream_model
+    prefix = "onnx:" if enabled() and not is_stream_model(model_id) else ""
+    return f"{prefix}{device}:{model_id}"
+
+
 def record_latency(model_id: str, device: str, ms: float) -> None:
     """Note how long a real decode actually took on this machine.
 
@@ -520,7 +536,7 @@ def record_latency(model_id: str, device: str, ms: float) -> None:
     if ms <= 0 or ms > 60_000:
         return   # a wild value means something else went wrong; don't poison the estimate
 
-    key = f"{device}:{model_id}"
+    key = _latency_key(model_id, device)
     samples = _OBSERVED.setdefault(key, [])
     samples.append(float(ms))
     if len(samples) > _OBSERVE_WINDOW:
@@ -541,7 +557,7 @@ def record_latency(model_id: str, device: str, ms: float) -> None:
 
 def measured_lag_ms(model_id: str, device: str) -> int | None:
     """What this machine has been seen doing, or None if it has never run this model."""
-    key = f"{device}:{model_id}"
+    key = _latency_key(model_id, device)
     samples = _OBSERVED.get(key)
     if samples and len(samples) >= _OBSERVE_MIN:
         return int(round(sorted(samples)[len(samples) // 2]))
@@ -563,6 +579,11 @@ def estimated_lag_ms(model_id: str, device: str | None = None) -> int:
     measured = measured_lag_ms(model_id, device)
     if measured is not None:
         return measured
+
+    from .arm_whisper import enabled
+    if enabled() and model_id in ("base", "tiny"):
+        # Snapdragon X Elite native GenAI measurements in Balanced power mode.
+        return {"base": 519, "tiny": 203}[model_id]
 
     if device == "cuda":
         return _LAG_MS_CUDA.get(model_id, _UNKNOWN_MODEL_LAG_MS)

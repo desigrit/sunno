@@ -363,11 +363,8 @@ class MicrophoneStream:
     def frames(self, should_continue: Callable[[], bool] | None = None) -> Iterator[np.ndarray]:
         resampler = None
         if self.capture_rate != SAMPLE_RATE:
-            import soxr
-
-            resampler = soxr.ResampleStream(
-                self.capture_rate, SAMPLE_RATE, 1, dtype="float32", quality="HQ"
-            )
+            from .resample import make_resampler
+            resampler = make_resampler(self.capture_rate, SAMPLE_RATE)
 
         pending = np.zeros(0, dtype=np.float32)
         while True:

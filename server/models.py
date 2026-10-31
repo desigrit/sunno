@@ -134,8 +134,16 @@ def auto_selectable(model_id: str) -> bool:
 
 def uses_cuda(model_id: str) -> bool:
     from .experimental_models import MODEL_IDS
+    from .arm_whisper import enabled
 
-    return not is_stream_model(model_id) and model_id not in MODEL_IDS
+    return not enabled() and not is_stream_model(model_id) and model_id not in MODEL_IDS
+
+
+def catalog_for_platform() -> list[dict]:
+    from . import arm_whisper
+    if arm_whisper.enabled():
+        return arm_whisper.CATALOG + [entry for entry in CATALOG if is_stream_model(entry["id"])]
+    return CATALOG
 
 # Streaming transducer models, which are a different shape from a Whisper checkpoint: an
 # encoder, a decoder and a joiner rather than one file. Kept apart from _REPOS so that a
@@ -298,6 +306,13 @@ def is_available(model_id: str) -> ModelStatus:
         except (FileNotFoundError, KeyError):
             return ModelStatus(model_id=model_id, available=False)
 
+    from . import arm_whisper
+    if arm_whisper.enabled():
+        try:
+            return ModelStatus(model_id, True, str(arm_whisper.model_path(model_id)))
+        except (FileNotFoundError, ValueError):
+            return ModelStatus(model_id, False)
+
     try:
         path = snapshot_download(
             _repo_id(model_id),
@@ -332,7 +347,7 @@ def catalog_with_status(device: str | None = None) -> list[dict]:
 
     device = device or hardware.resolve_device()
     entries = []
-    for entry in CATALOG:
+    for entry in catalog_for_platform():
         lag_ms = hardware.estimated_lag_ms(entry["id"], device)
         entries.append(dict(
             entry,
@@ -372,6 +387,9 @@ def onnx_model_path(model_id: str) -> Path:
     job, which reports progress; doing it silently from inside engine construction would look
     like a very slow startup.
     """
+    from . import arm_whisper
+    if arm_whisper.enabled():
+        return arm_whisper.model_path(model_id)
     root = _onnx_root() / model_id
     if (root / "genai_config.json").is_file():
         return root
@@ -405,6 +423,10 @@ def total_size_bytes(model_id: str) -> int:
 
     if is_stream_model(model_id):
         return _stream_total_size_bytes(model_id)
+
+    from . import arm_whisper
+    if arm_whisper.enabled():
+        return arm_whisper.total_bytes(model_id)
 
     try:
         info = HfApi().model_info(_repo_id(model_id), files_metadata=True)
@@ -501,6 +523,10 @@ def download(model_id: str, on_progress: ProgressFn | None = None) -> str:
 
     if is_stream_model(model_id):
         return _download_stream(model_id, on_progress)
+
+    from . import arm_whisper
+    if arm_whisper.enabled():
+        return arm_whisper.download(model_id, on_progress)
 
     total = total_size_bytes(model_id)
     state = {"done": 0}

@@ -154,7 +154,8 @@ HEAVY = (
 # Modules legitimately not shipped in every build. Anything else that fails to import is a
 # real failure, not a benign gap: a packaging regression that dropped faster_whisper would
 # otherwise render as a grey "--" and read as intentional.
-EXPECTED_ABSENT = frozenset({"onnxruntime_genai"})
+EXPECTED_ABSENT = (frozenset({"ctranslate2", "faster_whisper", "soxr", "pyaudiowpatch"})
+                   if process_tag() == "win-arm64" else frozenset({"onnxruntime_genai"}))
 
 
 def _probe_one(name: str) -> Probe:

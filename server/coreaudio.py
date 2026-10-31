@@ -283,9 +283,8 @@ class EndpointStream:
             self._apartment = None
 
     def frames(self, should_continue):
-        import soxr
-        resampler = (soxr.ResampleStream(self.capture_rate, SAMPLE_RATE, 1,
-                                       dtype="float32", quality="HQ")
+        from .resample import make_resampler
+        resampler = (make_resampler(self.capture_rate, SAMPLE_RATE)
                      if self.capture_rate != SAMPLE_RATE else None)
         pending = np.empty(0, dtype=np.float32)
         last_audio = last_yield = time.monotonic()

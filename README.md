@@ -40,9 +40,11 @@ Moonshine and the native engine currently provide line-level captions, without W
 word confidence, clarity scores or word-level recording navigation. Native engines do not
 use Sunno's custom vocabulary hints. Recognition remains local after model setup.
 
-This is still an x64 Windows app, including on Snapdragon. The Windows AI helper is also
-shipped as ARM64 and selected on ARM hardware; the rest of the app has not been made
-ARM-native. The first observational benchmarks are recorded in
+Windows releases include separate x64 and native ARM64 packages. The ARM64 package runs
+Whisper base and tiny through ONNX Runtime GenAI, and Zipformer and Kroko through sherpa-onnx.
+Microphone capture, system audio, automatic speaker labels, recording, and the current UI
+are included. Moonshine currently requires the x64 package on Windows. ARM Whisper provides
+line-level captions without word confidence or clarity scores. The first observational benchmarks are recorded in
 [bench/results](bench/results/README.md#2026-10-05-engine-preview-first-observational-pass).
 They cover an i9-14900K desktop and M1 Max, not the older Intel or Snapdragon laptops.
 The new engines remain opt-in; these limited measurements do not establish accent accuracy.
@@ -232,11 +234,13 @@ Build the Microsoft Store package:
 
 ```powershell
 .\packaging\build-msix.ps1 -Store
+.\packaging\build-msix.ps1 -Architecture arm64 -Store
 ```
 
 Upload the versioned `_Store.msix` file in `packaging/out/store/` to Partner Center.
 This build excludes the experimental Windows AI Speech API and its `systemAIModels`
-capability. Whisper, Moonshine and the streaming models remain available. Microsoft currently
+capability. Whisper and the streaming models remain available, with Moonshine also included
+in x64. Upload both architecture packages in the same Partner Center submission. Microsoft currently
 [excludes this Windows speech API from Store publication](https://learn.microsoft.com/en-us/windows/ai/apis/speech-recognition).
 For local or GitHub previews that include it, build without `-Store`; those packages go in
 `packaging/out/`.

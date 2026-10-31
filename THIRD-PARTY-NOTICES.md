@@ -23,6 +23,13 @@ Sunno redistributes the components below. Each remains under its own licence.
 
 ## Native and model components
 
+The native ARM64 package uses the versions pinned in `requirements-arm64.txt`: ONNX Runtime
+GenAI 0.15.2 and ONNX Runtime 1.29.0 (MIT), sherpa-onnx and sherpa-onnx-core 1.13.6
+(Apache-2.0), and PyAV 18.1.0 (BSD-3-Clause, with the bundled FFmpeg libraries under their
+own licenses). It omits CTranslate2, faster-whisper, Moonshine, soxr, PyAudioWPatch and CUDA.
+Whisper base and tiny are downloaded from [desigrit/Sunno](https://huggingface.co/desigrit/Sunno),
+converted from OpenAI's MIT-licensed weights using the repository's GenAI conversion script.
+
 | Component | Licence | Notes |
 |---|---|---|
 | NVIDIA CUDA runtime (cuBLAS, NVRTC) | NVIDIA CUDA Toolkit EULA | Redistributable components only, per the EULA's distribution list. Not in the package: published unmodified as separate assets on this repository's releases page and downloaded at first run on PCs with a compatible NVIDIA GPU. https://docs.nvidia.com/cuda/eula/ |

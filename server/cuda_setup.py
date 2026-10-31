@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import sysconfig
 import warnings
 from pathlib import Path
 
@@ -162,5 +163,5 @@ def register_cuda_dlls(required: bool = False) -> list[Path]:
     return added
 
 
-if sys.platform == "win32":
+if sys.platform == "win32" and sysconfig.get_platform() != "win-arm64":
     register_cuda_dlls()

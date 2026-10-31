@@ -249,8 +249,13 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     from .distribution import startup_model
 
     model = startup_model(args.model) or hardware.default_model(
-        [entry["id"] for entry in model_catalog.CATALOG], compute_device
+        [entry["id"] for entry in model_catalog.catalog_for_platform()], compute_device
     )
+    from . import arm_whisper
+    if arm_whisper.enabled():
+        supported = {entry["id"] for entry in model_catalog.catalog_for_platform()}
+        if model not in supported:
+            model = hardware.default_model(list(entry["id"] for entry in arm_whisper.CATALOG), "cpu")
 
     settings = Settings(
         model_size=model,

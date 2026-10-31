@@ -1651,7 +1651,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
 
         // A Store upgrade from a preview can retain a model that is not shipped there.
         // Keep future restarts aligned with the supported model selected by the backend.
-        if (_settings.Model == "windows-speech" && current != "windows-speech" &&
+        if (_settings.Model != current && !options.Any(option => option.Id == _settings.Model && option.Supported) &&
             options.Any(option => option.Id == current) &&
             System.IO.File.Exists(System.IO.Path.Combine(AppContext.BaseDirectory, "backend", "store-build")))
         {

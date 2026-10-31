@@ -35,6 +35,11 @@ Check(Select(Release("v1.0.89.0")).Update is null, "older releases cannot downgr
 Check(Select(Release("v1.0.100.0"), Release("v1.0.99.0")).Update?.Version == new Version(1,0,100,0), "versions are compared numerically");
 Check(Select(Release("v1.0.91.0", preview: true), Release("v1.0.92.0", draft: true)).Update is null, "draft and preview releases are skipped");
 Check(Select(Release("v1.0.91.0", "Sunno_1.0.91.0_arm64.msix")).Update is null, "wrong architecture is excluded");
+var armRelease = JsonSerializer.SerializeToUtf8Bytes(new[] {
+    Release("v1.0.92.0", "Sunno_1.0.92.0_arm64.msix")
+});
+Check(AppUpdates.SelectRelease(armRelease, current, "arm64").Update?.Version == new Version(1, 0, 92, 0),
+    "ARM64 clients select the native release asset");
 Check(Select(Release("v1.0.91.0", digest: "sha256:bad")).Update is null, "malformed digests are excluded");
 Check(Select(Release("v1.0.91.0", url: "https://example.com/Sunno.msix")).Update is null, "unrelated download hosts are excluded");
 Check(Select(Release("v1.0.91.0", url: "https://github.com/other/app/releases/download/a/Sunno.msix")).Update is null, "another repository cannot supply an update");
