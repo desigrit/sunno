@@ -131,72 +131,35 @@ details in [PRIVACY.md](PRIVACY.md).
 
 ## Product decisions and model judgment
 
-I judge Sunno by whether I can follow a conversation while it is happening. That means
-considering missed words, invented words, delay and distracting revisions together. A model
-can produce a good transcript and still be a poor choice for live captions.
+I built Sunno to help me follow a conversation as it happens. Getting the words right matters, but so do delay and how often a line changes while I am reading it.
 
 ### Tradeoffs I made
 
-**Accuracy has to fit the machine.** Accented speech was central to the original choice of
-Whisper large-v3. Keeping it useful also meant offering smaller Whisper models and streaming
-engines for PCs that cannot run it responsively. The model picker exposes the alternatives and
-their estimated delay. A fixed "Recommended" label was removed because it could recommend a
-model the app had already found too slow on that PC. The remaining tradeoff is real: choosing
-a faster model can change what gets transcribed correctly. [Model-selection decisions](docs/CONTEXT.md#model-descriptions-say-what-a-model-is-never-whether-to-pick-it)
+**Choose a model the computer can keep up with.** I started with Whisper large-v3 because of accented speech. Smaller models give people with slower PCs another option, with a possible loss in accuracy. We removed a fixed "Recommended" label because it could point to a model that was too slow on that person's PC. [Model choices](docs/CONTEXT.md#model-descriptions-say-what-a-model-is-never-whether-to-pick-it)
 
-**Fast text and stable text are different goals.** The Windows Whisper path uses a quick
-provisional pass, followed by a more expensive final pass over the completed utterance. That
-keeps one speech model in memory while allowing an initial reading and a later correction.
-It also adds computation and visible revisions. I treat how often a reader has to reread a
-line as part of quality, alongside recognition errors. [Decoding choices](docs/ENGINEERING.md#why-these-choices)
+**Show words early, then correct them.** Windows Whisper makes a quick first attempt and checks the completed sentence again. This keeps one model in memory, but uses more processing and can make people reread a line. Fewer wrong words do not automatically mean easier captions. [How this works](docs/ENGINEERING.md#why-these-choices)
 
-**A hallucination filter can create its own failure.** Early filtering removed caption credits
-Whisper sometimes invented, but also deleted legitimate speech such as "The book was translated
-by Tolkien himself." Review exposed that the original passing examples did not cover this
-kind of sentence. The filter was narrowed, and the regression set now checks both unwanted
-credits and real speech that must survive. Those checks protect known cases; they do not
-establish a live hallucination rate. [Filter regression cases](tests/test_hallucinations.py)
+**Check what a fix accidentally removes.** A filter caught fake caption credits, but also deleted real speech such as "The book was translated by Tolkien himself." Review uncovered the gap. We narrowed the filter and added checks for both unwanted credits and real sentences. Those checks cover known examples; they do not tell us how often the problem happens in everyday use. [Examples](tests/test_hallucinations.py)
 
-**Conversation context needs an expiry.** Recent recognized text helps with names and continuity,
-but feeding model output back indefinitely can reinforce an error. The Whisper path uses a
-bounded prompt that expires after silence, with automatic previous-text conditioning disabled.
-That gives up some continuity to limit repeated mistakes. [Recognition and context handling](server/asr.py)
+**Let old context expire.** Recent captions help the model recognize names, but a wrong word can influence later captions. Sunno limits how much earlier text it reuses and clears that context after silence. The cost is losing some continuity. [Recognition code](server/asr.py)
 
 ### How I worked with AI
 
-AI coding assistants contributed implementation, tests and technical investigations. I used
-the builds in conversations and while watching videos, described failures I could reproduce,
-and made choices about what the experience should tolerate.
+AI helped investigate problems and write code and tests. I tried the builds in conversations and while watching videos, then brought back specific failures.
 
-One recent example was a webinar with a single presenter being labeled as several people.
-I asked whether speaker recognition could be improved or should be removed. The investigation
-separated two systems I needed to judge independently: Whisper transcribes the words, while
-CAM++ embeddings and matching logic assign the speakers. A transcription-model upgrade would
-not by itself resolve that failure. [Speaker matching](server/speaker.py)
+When one webinar presenter appeared as several speakers, I asked whether speaker labels should improve or go. The investigation showed that recognizing words and identifying speakers use separate systems. Changing the speech model alone would not fix the speaker labels. [Speaker matching](server/speaker.py)
 
 ### What I pushed back on
 
-For that speaker-labeling iteration, I rejected a dedicated single-speaker mode as a poor fit
-for the changing videos I watch. I also did not want extra confirmations interrupting the
-experience or saved voice profiles to become a prerequisite.
+I rejected a single-speaker mode because I switch between different kinds of videos. I also wanted captions to work without confirmation prompts or saved voice profiles.
 
-I asked for an Off / Automatic choice, an Experimental label on Automatic, and speaker labels
-that could appear with the words and be corrected as more evidence arrived. These are choices
-in ongoing Windows development, not a measured improvement in speaker accuracy. The cost is
-that a provisional attribution can still be wrong. Testing has to measure both splitting one
-person into several speakers and incorrectly combining different people.
+I asked for **Off** and **Automatic (Experimental)**, with labels that can be corrected as more speech arrives. Those choices are now in the Windows app. The tradeoff remains: an early label can be wrong, and changing it can distract the reader. This does not establish an improvement in speaker accuracy.
 
 ### What I would measure next
 
-I would compare the same speech across models, microphones and hardware, measuring time to
-first useful text, time to stable text, word errors and revisions. Speaker attribution needs
-its own evaluation on both single-presenter videos and conversations with real turn changes.
-A decode timing on one machine does not establish the delay someone experiences from speech
-to readable captions.
+I would compare the same speech across models, microphones and computers: how quickly words appear, when they stop changing, and which words are wrong. Speaker tests need to catch both one person being split into several speakers and different people being combined.
 
-The next product decision is which configurations people can comfortably follow for a whole
-conversation, including on battery. That needs listening sessions and reader feedback alongside
-the existing regression tests.
+I also want to test battery use and how tiring the captions are to follow. A fast model test is only one part of a comfortable conversation.
 
 ## Recording
 
