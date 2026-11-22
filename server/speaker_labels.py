@@ -26,8 +26,13 @@ class Assignment:
 
 
 class LiveSpeakerLabels:
-    def __init__(self, speaker, emit: Callable[[dict], None], enabled: bool = True):
+    def __init__(self, speaker, emit: Callable[[dict], None], enabled: bool = True,
+                 *, factory=None):
         self.speaker = speaker
+        self._factory = factory
+        self._requested = enabled and (speaker is not None or factory is not None)
+        self._loading_allowed = False
+        self._loader = None
         self.session = uuid.uuid4().hex
         self._emit = emit
         self._enabled = enabled and speaker is not None
@@ -52,11 +57,48 @@ class LiveSpeakerLabels:
             return self._generation
 
     def state(self) -> dict:
-        return {"type": "speaker_labels", "mode": "automatic" if self._enabled else "off",
-                "available": self.speaker is not None, "session": self.session}
+        with self._condition:
+            return {"type": "speaker_labels", "mode": "automatic" if self._requested else "off",
+                    "available": self.speaker is not None or self._factory is not None,
+                    "session": self.session}
+
+    def start(self) -> None:
+        """Allow optional model loading once the caption engine is ready."""
+        with self._condition:
+            self._loading_allowed = True
+            self._start_loading()
+
+    def _start_loading(self) -> None:
+        if (self._closed or not self._loading_allowed or not self._requested
+                or self.speaker is not None or self._factory is None or self._loader is not None):
+            return
+        self._loader = threading.Thread(target=self._load, name="speaker-load", daemon=True)
+        self._loader.start()
+
+    def _load(self) -> None:
+        from .startup import startup
+
+        try:
+            with startup.measure("speaker_load"):
+                speaker = self._factory()
+        except Exception:
+            with self._condition:
+                if not self._closed:
+                    self._factory = None
+                    self._emit(self.state())
+            return
+        with self._condition:
+            if self._closed:
+                return
+            self.speaker = speaker
+            # Off can arrive while native model initialization is in flight.
+            self.set_enabled(self._requested)
 
     def set_enabled(self, enabled: bool) -> None:
         with self._condition:
+            if self._closed:
+                return
+            self._requested = enabled and (self.speaker is not None or self._factory is not None)
             enabled = enabled and self.speaker is not None
             if enabled != self._enabled:
                 self._enabled = enabled
@@ -69,6 +111,7 @@ class LiveSpeakerLabels:
                 self._condition.notify_all()
             self._emit(self.state())
             self._publish_roster()
+            self._start_loading()
 
     def begin(self, utterance_id: int, started_at: float) -> None:
         with self._condition:

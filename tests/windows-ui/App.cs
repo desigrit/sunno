@@ -34,7 +34,7 @@ public partial class App : Application
         InitializeComponent();
         UnhandledException += (_, args) =>
         {
-            Console.Error.WriteLine(args.Exception);
+            ReportFailure(args.Exception);
             args.Handled = true;
             Environment.Exit(1);
         };
@@ -43,6 +43,30 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         _window = new Window { Title = "Sunno appearance check" };
+        if (Environment.GetEnvironmentVariable("SUNNO_LANGUAGE_TEST_ONLY") == "1")
+        {
+            var page = new LanguageTestPage();
+            _window.Content = page;
+            page.Loaded += async (_, _) =>
+            {
+                try
+                {
+                    await RunLanguageChecks(page.TestSurface);
+                    Console.WriteLine($"{_checks} language UI checks passed.");
+                    _window.Close();
+                    Environment.Exit(0);
+                }
+                catch (Exception ex)
+                {
+                    ReportFailure(ex);
+                    _window.Close();
+                    Environment.Exit(1);
+                }
+            };
+            _window.AppWindow.Resize(new SizeInt32(350, 260));
+            _window.AppWindow.Show(false);
+            return;
+        }
         var root = (Grid)XamlReader.Load("""
             <Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                   Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
@@ -118,7 +142,7 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine(ex);
+                ReportFailure(ex);
                 _appearance.Dispose();
                 _window.Close();
                 Environment.Exit(1);
@@ -129,11 +153,101 @@ public partial class App : Application
         _window.AppWindow.Show(false);
     }
 
+    private static void ReportFailure(Exception ex)
+    {
+        Console.Error.WriteLine(ex);
+        var output = Environment.GetEnvironmentVariable("SUNNO_APPEARANCE_TEST_OUTPUT");
+        if (string.IsNullOrEmpty(output)) return;
+        Directory.CreateDirectory(output);
+        File.WriteAllText(Path.Combine(output, "failure.txt"), ex.ToString());
+    }
+
     private void Check(bool condition, string message)
     {
         if (!condition) throw new Exception(message);
         _checks++;
         Console.WriteLine($"PASS {message}");
+    }
+
+    private async Task RunLanguageChecks(Grid root)
+    {
+        var panel = new StackPanel { Width = 240, VerticalAlignment = VerticalAlignment.Center };
+        var spoken = new LanguagePicker();
+        var translate = new LanguagePicker();
+        panel.Children.Add(spoken);
+        panel.Children.Add(translate);
+        root.Children.Clear();
+        root.Children.Add(panel);
+        spoken.Configure("Spoken language", new[] { "en" }, "en");
+        Check(!spoken.IsEnabled, "English-only model offers a single language");
+        spoken.Configure("Spoken language", new[] { "auto", "en", "es", "fr", "ja", "ar", "hi", "zh" }, "auto", "es");
+        translate.Configure("Translate to", new[] { "off", "pt", "de" }, "off");
+        Check(AutomationProperties.GetName(spoken).Contains("Auto ("), "Detected language is announced");
+        foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
+        {
+            root.RequestedTheme = theme;
+            await Task.Delay(120);
+            var selectedLabel = ((Panel)spoken.Content).Children.OfType<TextBlock>().Last();
+            Check(selectedLabel.Text.Contains("Spanish") && !selectedLabel.IsTextTrimmed,
+                  "The detected language fits within the sidebar");
+            await Capture(root, $"languages-{theme}.png");
+        }
+        var menu = (Flyout)spoken.Flyout;
+        menu.ShowAt(spoken);
+        await Task.Delay(150);
+        var content = (StackPanel)menu.Content;
+        var input = content.Children.OfType<TextBox>().Single();
+        var choices = content.Children.OfType<ListView>().Single();
+        Check(choices.SelectedItem as string == "Auto", "Opening the picker preserves the selected value");
+        async Task Search(string query)
+        {
+            var changed = new TaskCompletionSource();
+            void Changed(object sender, TextChangedEventArgs e) => changed.TrySetResult();
+            input.TextChanged += Changed;
+            try
+            {
+                input.Text = query;
+                await changed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            }
+            finally { input.TextChanged -= Changed; }
+        }
+        await Search("hi");
+        var hindi = System.Globalization.CultureInfo.GetCultureInfo("hi").DisplayName;
+        Check(Equals(choices.SelectedItem, hindi), $"An exact language code wins over a substring (selected {choices.SelectedItem})");
+        await Search("français");
+        Check(choices.Items.Count == 1, "Search finds a language by its native name");
+        await Search("zzzzzz");
+        Check(choices.Items.Count == 0, "No matching language is selectable");
+        await Search("ja");
+        await Capture(content, "language-search.png");
+        menu.Hide();
+
+        panel.Children.Clear();
+        var rows = new[]
+        {
+            new[] { "مرحبا", " بكم" }, new[] { "今天", "有字幕。" }, new[] { "今日", "は晴れです。" },
+        };
+        foreach (var words in rows)
+        {
+            var caption = new RichTextBlock { TextReadingOrder = TextReadingOrder.DetectFromContent, FontSize = 22 };
+            panel.Children.Add(caption);
+            WordInlines.SetLine(caption, new CaptionLine
+            {
+                Text = string.Concat(words), IsFinal = true,
+                Words = words.Select(word => new CaptionWord(word, 0.95)).ToArray(),
+            });
+            root.UpdateLayout();
+            var runs = ((Paragraph)caption.Blocks[0]).Inlines.OfType<Run>().ToArray();
+            Check(string.Concat(runs.Select(run => run.Text)) == string.Concat(words),
+                  "The caption renderer preserves original word spacing");
+            if (words == rows[0])
+            {
+                var first = runs.First().ContentStart.GetCharacterRect(LogicalDirection.Forward);
+                var last = runs.Last().ContentStart.GetCharacterRect(LogicalDirection.Forward);
+                Check(first.X > last.X, "Arabic words render in right-to-left order");
+            }
+        }
+        await Capture(root, "caption-scripts.png");
     }
 
     private async Task RunChecks(Grid root, AppearancePicker picker)

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Sunno.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -45,28 +45,20 @@
         <!-- body -->
         <Grid x:Name="BodyArea" Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="SidebarColumn" Width="240" />
+                <ColumnDefinition x:Name="SidebarColumn" Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
             <!-- speakers pane -->
-            <Border x:Name="SpeakerPane" Grid.Column="0"
-                    Background="{ThemeResource LayerFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="0,1,1,0">
-                <Grid x:Name="SpeakerPaneLayout" Padding="0,14,0,0"
+            <controls:CollapsibleSidebar x:Name="SpeakerPane" Grid.Column="0">
+                <Grid x:Name="SpeakerPaneLayout"
                       SizeChanged="OnSpeakerPaneSizeChanged">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="Speakers" Margin="16,0,16,8"
-                               Style="{StaticResource BodyStrongTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-
-                    <ListView x:Name="SpeakerList" Grid.Row="1"
+                    <ListView x:Name="SpeakerList" Grid.Row="0"
                               ItemsSource="{x:Bind Speakers}"
                               SelectionMode="Single"
                               IsItemClickEnabled="True"
@@ -118,7 +110,7 @@
                         </ListView.ItemTemplate>
                     </ListView>
 
-                    <TextBlock x:Name="NoSpeakers" Grid.Row="1" Margin="16,2,16,0"
+                    <TextBlock x:Name="NoSpeakers" Grid.Row="0" Margin="16,2,16,0"
                                Text="People appear here as they speak."
                                TextWrapping="Wrap" VerticalAlignment="Top"
                                Style="{StaticResource CaptionTextBlockStyle}"
@@ -131,7 +123,7 @@
                          drives the height, and the star row follows it frame by frame.
                          The list stays in the tree at zero height, so its items are already
                          realised before the section opens. -->
-                    <StackPanel x:Name="ModelSection" Grid.Row="2" Margin="0,2,0,6">
+                    <StackPanel x:Name="ModelSection" Grid.Row="1" Margin="0,2,0,6">
                         <Button x:Name="ModelToggle" Click="OnToggleModelSection"
                                 Margin="8,0,8,0" Padding="8,6"
                                 HorizontalAlignment="Stretch"
@@ -270,9 +262,16 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </ScrollViewer>
+                        <StackPanel x:Name="LanguageControls">
+                            <controls:LanguagePicker x:Name="SpokenPicker" />
+                            <controls:LanguagePicker x:Name="TranslationPicker" />
+                            <TextBlock x:Name="LanguageNotice" Visibility="Collapsed" Margin="16,2,16,4"
+                                       TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                       AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
-            </Border>
+            </controls:CollapsibleSidebar>
 
             <!-- transcript -->
             <Grid Grid.Column="1">
@@ -335,7 +334,7 @@
                                          what makes per-word confidence on hover possible.
                                          Content is built in code so each word can be styled
                                          and located individually. -->
-                                    <RichTextBlock local:WordInlines.Line="{x:Bind}"
+                                    <RichTextBlock TextReadingOrder="DetectFromContent" local:WordInlines.Line="{x:Bind}"
                                                    IsTextSelectionEnabled="True"
                                                    TextWrapping="Wrap"
                                                    Opacity="{x:Bind local:MainWindow.LineOpacity(IsFinal, IsSelf), Mode=OneWay}"
@@ -384,7 +383,7 @@
                                HorizontalAlignment="Center"
                                Style="{StaticResource BodyTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock x:Name="EmptyDetail" Text="This takes about half a minute the first time."
+                    <TextBlock x:Name="EmptyDetail" Text="This may take a few seconds."
                                HorizontalAlignment="Center" TextAlignment="Center"
                                Style="{StaticResource CaptionTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
@@ -913,7 +912,7 @@
                                     <TextBlock Style="{StaticResource CaptionTextBlockStyle}"
                                                TextWrapping="Wrap"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                               Text="Slower, but a way back in if a driver update stops the engine starting. Reloads the model, which takes about half a minute." />
+                                               Text="Slower, but a way back in if a driver update stops the engine starting. Reloads the model. This may take a few seconds." />
                                 </StackPanel>
                                 <ToggleSwitch x:Name="ForceCpuToggle" Grid.Column="1"
                                               Toggled="OnForceCpuToggled"

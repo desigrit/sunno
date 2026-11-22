@@ -261,7 +261,7 @@ check("a restart releases rather than finalises", "active.detach()" in app_py,
 check("a resumed recording is not treated as an orphan",
       "skip=args.resume_recording" in app_py)
 check("the backend can resume on startup", "args.resume_recording" in app_py)
-check("startup recovers what a crash left", "rec_mod.recover(" in app_py)
+check("startup recovers what a crash left", '"recording_recovery", rec_mod.recover,' in app_py)
 check("a reconnecting client learns a recording is running",
       "recording_frame()" in app_py)
 # The bug this guards: on a device change the old process saved and died, the app never saw

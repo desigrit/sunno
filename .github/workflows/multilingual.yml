@@ -1,0 +1,85 @@
+name: Multilingual captions
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'server/**'
+      - 'packaging/**'
+      - 'tests/windows-ui/**'
+      - 'tests/*multilingual*.py'
+      - 'tests/test_spoken_languages.py'
+      - 'tests/test_local_translation.py'
+      - 'tests/fleurs_samples.py'
+      - 'tests/fixtures/edacc/**'
+      - '.github/workflows/multilingual.yml'
+permissions:
+  contents: read
+jobs:
+  winui:
+    runs-on: windows-2025
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Compile the native app
+        run: dotnet build app/Sunno.csproj -c Release -p:Platform=x64 -r win-x64
+      - name: Exercise the native language pickers
+        run: |
+          dotnet build tests/windows-ui/AppearanceTests.csproj -c Release -r win-x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $fixture = (Resolve-Path "tests/windows-ui/bin/Release/net8.0-windows10.0.19041.0/win-x64").Path
+          foreach ($file in @("App.xbf", "LanguageTestPage.xbf", "AppearanceTests.pri")) {
+            if (!(Test-Path (Join-Path $fixture $file))) { throw "Missing WinUI fixture resource $file" }
+          }
+          Copy-Item (Join-Path $fixture "AppearanceTests.pri") (Join-Path $fixture "resources.pri") -Force
+          $env:SUNNO_LANGUAGE_TEST_ONLY = "1"
+          $env:SUNNO_APPEARANCE_TEST_OUTPUT = "$env:GITHUB_WORKSPACE/picker-images"
+          $probe = Start-Process (Join-Path $fixture "AppearanceTests.exe") -WorkingDirectory $fixture -Wait -PassThru -WindowStyle Hidden -RedirectStandardError "$env:RUNNER_TEMP/picker-stderr" -RedirectStandardOutput "$env:RUNNER_TEMP/picker-stdout"
+          Get-Content "$env:RUNNER_TEMP/picker-stderr","$env:RUNNER_TEMP/picker-stdout"
+          if (Test-Path picker-images/failure.txt) { Get-Content picker-images/failure.txt }
+          exit $probe.ExitCode
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: winui-language-pickers
+          path: picker-images
+          retention-days: 1
+  native-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            engine: ct2
+            arch: x64
+          - runner: windows-11-arm
+            engine: onnx
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.arch }}
+      - run: python -m pip install numpy av onnxruntime sentencepiece==0.2.1 huggingface_hub
+      - if: matrix.engine == 'onnx'
+        run: python -m pip install onnxruntime-genai==0.15.2
+      - if: matrix.engine == 'ct2'
+        run: python -m pip install faster-whisper==1.2.1
+      - run: python tests/test_spoken_languages.py
+      - name: Measure native speech recognition and check saved captions
+        run: python tests/benchmark_multilingual.py --engine ${{ matrix.engine }} --fixtures "$env:RUNNER_TEMP/fleurs" --report report.json --download
+      - name: Verify local French to Portuguese translation
+        run: python tests/test_local_translation.py --real
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-${{ matrix.arch }}-language-results
+          path: report.json
+          retention-days: 1
+

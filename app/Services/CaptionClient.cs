@@ -14,6 +14,10 @@ public sealed record CaptionEvent(
 public sealed record StatusEvent(string State, bool? Running, string? Model, string? Device,
                                  string? Message, string? Code = null);
 
+public sealed record LanguageState(string Kind, string[] Choices, string Selected, string? Detected,
+    string? Accepted, bool Preparing, string? Message);
+public sealed record TranslatedCaption(int Id, double StartedAt, string Original, string Text, string Target);
+
 public sealed record LevelEvent(double Db, bool Speaking);
 
 public sealed record AudioInputTarget(
@@ -68,6 +72,7 @@ public sealed class CaptionClient : IAsyncDisposable
     private Task? _pump;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private int _sessionId;
+    private readonly SemaphoreSlim _serverReady = new(0, 1);
 
     public CaptionClient(string host = "127.0.0.1", int port = 8766)
         => _uri = new Uri($"ws://{host}:{port}");
@@ -77,6 +82,8 @@ public sealed class CaptionClient : IAsyncDisposable
     public event Action<int>? Discarded;
     public event Action<StatusEvent>? Status;
     public event Action<LevelEvent>? Level;
+    public event Action<LanguageState>? LanguageChanged;
+    public event Action<TranslatedCaption>? Translated;
     public event Action<IReadOnlyList<SpeakerInfo>>? Roster;
     /// <summary>Two speakers were folded into one: captions tagged with the first id belong
     /// to the second now. Raised immediately before the roster that reflects the merge.</summary>
@@ -123,6 +130,12 @@ public sealed class CaptionClient : IAsyncDisposable
         _pump = Task.Run(() => RunAsync(lifetime.Token));
     }
 
+    public void NotifyServerReady()
+    {
+        try { _serverReady.Release(); }
+        catch (SemaphoreFullException) { }
+    }
+
     /// <summary>Reconnects with backoff, so the UI survives a backend restart.</summary>
     private async Task RunAsync(CancellationToken token)
     {
@@ -153,7 +166,7 @@ public sealed class CaptionClient : IAsyncDisposable
             }
 
             ConnectionChanged?.Invoke(false);
-            try { await Task.Delay(delay, token); }
+            try { await _serverReady.WaitAsync(delay, token); }
             catch (OperationCanceledException) { return; }
             delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 5000));
         }
@@ -193,6 +206,18 @@ public sealed class CaptionClient : IAsyncDisposable
 
         switch (type)
         {
+            case "spoken_language":
+            case "translation_state":
+                var codes = root.GetProperty("choices").Deserialize<string[]>() ?? Array.Empty<string>();
+                LanguageChanged?.Invoke(new LanguageState(type!, codes, GetString(root, "selected") ?? "",
+                    GetString(root, "detected"), GetString(root, "accepted"),
+                    GetString(root, "phase") == "preparing", GetString(root, "message")));
+                break;
+            case "translation":
+                if (GetInt(root, "id") is int captionId && GetDouble(root, "started_at") is double at)
+                    Translated?.Invoke(new(captionId, at, GetString(root, "original") ?? "",
+                        GetString(root, "text") ?? "", GetString(root, "target_language") ?? ""));
+                break;
             case "speaker_labels":
                 SpeakerLabelsState?.Invoke(GetString(root, "mode") == "automatic",
                                            GetBool(root, "available") ?? false, GetString(root, "session"));
@@ -382,6 +407,9 @@ public sealed class CaptionClient : IAsyncDisposable
     private static GpuPayloadInfo ParseGpuPayload(JsonElement root) =>
         new(GetBool(root, "gpu_payload_needed") ?? false,
             GetInt(root, "gpu_payload_mb") ?? 0);
+
+    public Task SetLanguageAsync(string code, bool translation) =>
+        SendAsync(new { cmd = translation ? "translate_to" : "set_language", language = code });
 
     public Task ToggleAsync() => SendAsync(new { cmd = "toggle" });
     public Task<bool> SetSpeakerLabelsAsync(bool automatic) =>

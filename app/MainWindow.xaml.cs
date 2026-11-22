@@ -92,6 +92,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private readonly CaptionScrollFollower _captionScroll;
 
     private CaptionLine? _provisional;
+    private string _translationTarget = "off";
     private int _currentUtterance = -1;
     private bool _running = true;
     private bool _captureWanted = true;
@@ -223,6 +224,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             SkipToCurrent.Visibility = _captionScroll.CanSkipToCurrent ? Visibility.Visible : Visibility.Collapsed;
 
         ConfigureWindow();
+        SpeakerPane.IsCollapsed = _settings.SidebarCollapsed;
+        SpeakerPane.CollapsedChanged += (_, _) =>
+        {
+            _settings.SidebarCollapsed = SpeakerPane.IsCollapsed;
+            _settings.Save();
+        };
         ApplySpeakerLabelsPreference();
         App.Trace("MainWindow ctor: window configured");
 
@@ -247,6 +254,19 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         }
 
         _client.Partial += ev => _ui.TryEnqueue(() => OnPartial(ev));
+        SpokenPicker.Configure("Spoken language", Array.Empty<string>(), "en");
+        TranslationPicker.Configure("Translate to", Array.Empty<string>(), "off");
+        SpokenPicker.Chosen += code => _ = _client.SetLanguageAsync(code, false);
+        TranslationPicker.Chosen += code => _ = _client.SetLanguageAsync(code, true);
+        _client.LanguageChanged += state => QueueCurrentClientEvent(() => OnLanguageState(state));
+        _client.Translated += translation => QueueCurrentClientEvent(() =>
+        {
+            if (translation.Target != _translationTarget) return;
+            var at = (long)(translation.StartedAt * 1000);
+            var line = Lines.LastOrDefault(l => l.IsFinal && l.UtteranceId == translation.Id &&
+                l.SpokenAt?.ToUnixTimeMilliseconds() == at && l.Text == translation.Original);
+            if (line != null) line.Translation = translation.Text;
+        });
         _client.Final += ev => _ui.TryEnqueue(() => OnFinal(ev));
         _client.Discarded += id => _ui.TryEnqueue(() => OnDiscarded(id));
         _client.Level += lv => _ui.TryEnqueue(() => OnLevel(lv));
@@ -274,6 +294,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             _speakerLabelsAvailable = available;
             ApplySpeakerLabelsPreference();
         });
+        _backend.ControlReady += _client.NotifyServerReady;
         _client.ConnectionChanged += ok => QueueCurrentClientEvent(() => OnConnection(ok));
         _client.ModelRequired += (device, m, gpu) => _ui.TryEnqueue(() => OnModelRequired(device, m, gpu));
         _client.DownloadProgress += p => _ui.TryEnqueue(() => OnDownloadProgress(p));
@@ -352,6 +373,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex,
             computeDevice: _settings.ForceCpu ? "cpu" : "auto",
+            spokenLanguage: _settings.SpokenLanguage, translateTo: _settings.TranslateTo,
             recordingsPath: _settings.RecordingsPath,
             // Handed straight back so the restart continues the same recording instead of
             // quietly ending it and beginning another. Changing microphone mid-meeting is a
@@ -490,6 +512,26 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     }
 
     // ---------- caption stream ----------
+
+    private void OnLanguageState(LanguageState state)
+    {
+        if (state.Kind == "spoken_language")
+        {
+            SpokenPicker.Configure("Spoken language", state.Choices, state.Selected, state.Detected);
+            if (state.Accepted is string code) _settings.SpokenLanguage = code;
+        }
+        else
+        {
+            if (_translationTarget != state.Selected)
+                foreach (var line in Lines) line.Translation = null;
+            _translationTarget = state.Selected;
+            TranslationPicker.Configure("Translate to", state.Choices, state.Selected, preparing: state.Preparing);
+            if (state.Accepted is string code) _settings.TranslateTo = code;
+        }
+        if (state.Accepted != null) _settings.Save();
+        LanguageNotice.Text = state.Message ?? "";
+        LanguageNotice.Visibility = state.Message == null ? Visibility.Collapsed : Visibility.Visible;
+    }
 
     private void OnPartial(CaptionEvent ev)
     {
@@ -1595,7 +1637,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         var limit = ModelPickerLayout.MaximumListHeight(
             SpeakerPaneLayout.ActualHeight,
             SpeakerPaneLayout.Padding.Top + SpeakerPaneLayout.Padding.Bottom,
-            ModelToggle.DesiredSize.Height,
+            ModelToggle.DesiredSize.Height + LanguageControls.ActualHeight,
             ModelSection.Margin.Top + ModelSection.Margin.Bottom);
         ModelPanel.MaxHeight = limit;
         return Math.Min(ModelOptions.DesiredSize.Height, limit);
@@ -1791,6 +1833,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex,
             computeDevice: _settings.ForceCpu ? "cpu" : "auto",
+            spokenLanguage: _settings.SpokenLanguage, translateTo: _settings.TranslateTo,
             recordingsPath: _settings.RecordingsPath,
             // Handed straight back so the restart continues the same recording instead of
             // quietly ending it and beginning another. Changing microphone mid-meeting is a
@@ -1826,7 +1869,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         LoadingRing.Visibility = Visibility.Visible;
         EmptyGlyph.Visibility = Visibility.Collapsed;
         EmptyTitle.Text = title;
-        EmptyDetail.Text = "This takes about half a minute.";
+        EmptyDetail.Text = "This may take a few seconds.";
         SetEmptyStateVisible(Lines.Count == 0);
     }
 
@@ -1927,6 +1970,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void OnConnection(bool connected)
     {
         _connected = connected;
+        LanguageControls.IsHitTestVisible = connected;
+        if (!connected)
+        {
+            SpokenPicker.IsEnabled = false;
+            TranslationPicker.IsEnabled = false;
+        }
         if (connected)
         {
             _ = _client.SetSpeakerLabelsAsync(_settings.SpeakerLabelsEnabled);
@@ -2148,7 +2197,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // The same words the ordinary empty state uses, because that is what is actually
         // happening. An earlier draft said "Looking for models on this PC", which was untrue
         // for most of the wait: nothing is looking for models, the Python backend is booting.
-        AddModelNote("Starting the speech engine. This takes about half a minute the first time.");
+        AddModelNote("Starting the speech engine. This may take a few seconds.");
         DownloadButton.IsEnabled = false;
         SetupError.IsOpen = false;
         DownloadPanel.Visibility = Visibility.Collapsed;
@@ -3209,7 +3258,6 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (remember) _settings.CompactMode = compact;
         CompactModeItem.IsChecked = compact;
 
-        SidebarColumn.Width = compact ? new GridLength(0) : new GridLength(240);
         SpeakerPane.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         CommandArea.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         WindowCommands.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;

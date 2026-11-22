@@ -12,6 +12,8 @@ namespace Sunno.Services;
 /// </summary>
 public sealed class AppSettings
 {
+    public string SpokenLanguage { get; set; } = "en";
+    public string TranslateTo { get; set; } = "off";
     public string Model { get; set; } = "large-v3";
     public int? DeviceIndex { get; set; }
     /// <summary>A WASAPI output endpoint to caption instead of a microphone.</summary>
@@ -84,6 +86,9 @@ public sealed class AppSettings
     /// leaves it has been registered.
     /// </summary>
     public bool CompactMode { get; set; }
+
+    /// <summary>Keep the sidebar folded independently of the compact caption window.</summary>
+    public bool SidebarCollapsed { get; set; }
 
     /// <summary>
     /// Where the window sat in each mode, kept separately.

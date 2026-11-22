@@ -6,6 +6,7 @@
     <RootNamespace>Sunno</RootNamespace>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
@@ -27,6 +28,7 @@
     <Compile Include="../../app/Controls/SkipToCurrentButton.xaml.cs" Link="Controls/SkipToCurrentButton.xaml.cs" />
     <Compile Include="../../app/Services/AppearancePreference.cs" Link="Services/AppearancePreference.cs" />
     <Compile Include="../../app/Models/CaptionLine.cs" Link="Models/CaptionLine.cs" />
+    <Compile Include="../../app/Controls/LanguagePicker.cs" Link="Controls/LanguagePicker.cs" />
     <Compile Include="../../app/WordInlines.cs" Link="WordInlines.cs" />
     <Page Include="../../app/Controls/AppUpdatePanel.xaml" Link="Controls/AppUpdatePanel.xaml" />
     <Compile Include="../../app/Controls/AppUpdatePanel.xaml.cs" Link="Controls/AppUpdatePanel.xaml.cs" />

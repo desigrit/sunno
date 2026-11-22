@@ -106,3 +106,7 @@ dependencies, because it is not one.
 
 - tqdm source: https://github.com/tqdm/tqdm
 - MPL-2.0 text: https://mozilla.org/MPL/2.0/
+
+## Local caption translation
+
+Sunno includes SentencePiece 0.2.1 (Apache-2.0). The optional M2M100 418M weights are distributed under the MIT license. The quantized ONNX conversion is downloaded when translation is enabled. [SentencePiece](https://github.com/google/sentencepiece) · [Original model and license](https://huggingface.co/facebook/m2m100_418M) · [ONNX conversion](https://huggingface.co/Xenova/m2m100_418M)

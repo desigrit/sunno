@@ -241,13 +241,9 @@ if (-not $cert) {
             -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
 }
 
-$pfx = Join-Path $out "SunnoDev.pfx"
 $cer = Join-Path $out "SunnoDev.cer"
-$pwd = ConvertTo-SecureString -String "Sunno-dev" -Force -AsPlainText
-Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pwd | Out-Null
-Export-Certificate  -Cert $cert -FilePath $cer | Out-Null
-
-& $signtool sign /fd SHA256 /a /f $pfx /p "Sunno-dev" $msix
+Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+& $signtool sign /fd SHA256 /s My /sha1 $cert.Thumbprint $msix
 if ($LASTEXITCODE -ne 0) { throw "signtool failed ($LASTEXITCODE)" }
 
 # The updater matches stable release tags to an explicitly versioned architecture asset.

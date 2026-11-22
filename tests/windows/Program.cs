@@ -218,6 +218,40 @@ await WaitFor(() => acknowledgements == 26);
 Check(sockets == 2, "reconnect replaces the previous socket");
 await client.DisposeAsync();
 await server.StopAsync();
+
+// A ready backend should interrupt even the longer retry delays.
+var lateBuilder = WebApplication.CreateBuilder();
+lateBuilder.Logging.ClearProviders();
+lateBuilder.WebHost.UseUrls("http://127.0.0.1:0");
+await using var lateServer = lateBuilder.Build();
+lateServer.UseWebSockets();
+var accepting = false;
+lateServer.Run(async context =>
+{
+    if (!Volatile.Read(ref accepting))
+    {
+        context.Response.StatusCode = 503;
+        return;
+    }
+    using var socket = await context.WebSockets.AcceptWebSocketAsync();
+    try { await socket.ReceiveAsync(new ArraySegment<byte>(new byte[16]), CancellationToken.None); }
+    catch (WebSocketException) { }
+});
+await lateServer.StartAsync();
+await using var lateClient = new CaptionClient("127.0.0.1", new Uri(lateServer.Urls.Single()).Port);
+var failures = 0;
+lateClient.ConnectionChanged += connected => { if (!connected) Interlocked.Increment(ref failures); };
+lateClient.Start();
+await WaitFor(() => Volatile.Read(ref failures) >= 4);
+Volatile.Write(ref accepting, true);
+var started = System.Diagnostics.Stopwatch.StartNew();
+lateClient.NotifyServerReady();
+lateClient.NotifyServerReady();
+await WaitFor(() => lateClient.IsConnected);
+Check(started.Elapsed < TimeSpan.FromSeconds(1.5), "backend readiness wakes reconnect backoff immediately");
+await lateClient.DisposeAsync();
+lateClient.NotifyServerReady();
+await lateServer.StopAsync();
 Console.WriteLine($"{checks} checks passed.");
 
 namespace Sunno

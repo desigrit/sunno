@@ -22,6 +22,7 @@ worse than no figure at all for someone relying on this to follow a conversation
 from __future__ import annotations
 
 import io
+import json
 import time
 import wave
 from collections import deque
@@ -51,7 +52,12 @@ class OnnxEngine:
         model_dir = onnx_model_path(settings.model_size)
         self._model = og.Model(str(model_dir))
         self._processor = self._model.create_multimodal_processor()
-        self._prompt = _PROMPT_TEMPLATE.format(lang=settings.language or "en")
+        self.set_language(settings.language or "en")
+        from .spoken_language import whisper_codes
+        vocabulary = json.loads((model_dir / "tokenizer.json").read_text(encoding="utf-8"))
+        special = {token["content"]: token["id"] for token in vocabulary["added_tokens"]}
+        self._codes = whisper_codes(settings.model_size)
+        self._language_ids = [special[f"<|{code}|>"] for code in self._codes]
 
         self._context: deque[str] = deque(maxlen=6)
         self._context_updated = 0.0
@@ -82,6 +88,24 @@ class OnnxEngine:
             handle.writeframes(pcm.tobytes())
         return buffer.getvalue()
 
+    def set_language(self, language):
+        from .spoken_language import script_hint
+        self._hint = script_hint(self.settings.model_size, language)
+        context = f"<|startofprev|> {self._hint}" if self._hint else ""
+        self._prompt = context + _PROMPT_TEMPLATE.format(lang=language)
+
+    def detect_language(self, audio):
+        audios = self._og.Audios.open_bytes(self._to_wav(audio))
+        inputs = self._processor(prompt="<|startoftranscript|>", audios=audios)
+        params = self._og.GeneratorParams(self._model)
+        generator = self._og.Generator(self._model, params)
+        generator.set_inputs(inputs)
+        logits = generator.get_logits()
+        scores = logits.reshape(-1, logits.shape[-1])[-1, self._language_ids]
+        probabilities = np.exp(scores - np.max(scores))
+        index = int(np.argmax(probabilities))
+        return self._codes[index], float(probabilities[index] / probabilities.sum())
+
     def _run(self, audio: np.ndarray, is_final: bool) -> Transcript:
         started = time.perf_counter()
         og = self._og
@@ -90,12 +114,15 @@ class OnnxEngine:
         inputs = self._processor(prompt=self._prompt, audios=audios)
 
         params = og.GeneratorParams(self._model)
+        if self._hint:
+            params.set_search_options(no_repeat_ngram_size=4)
         generator = og.Generator(self._model, params)
         generator.set_inputs(inputs)
+        prefix_length = len(generator.get_sequence(0))
         while not generator.is_done():
             generator.generate_next_token()
 
-        text = self._processor.decode(generator.get_sequence(0))
+        text = self._processor.decode(generator.get_sequence(0)[prefix_length:])
 
         return Transcript(
             text=self._clean(text.strip()),

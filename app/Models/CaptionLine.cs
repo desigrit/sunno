@@ -11,6 +11,8 @@ namespace Sunno.Models;
 public sealed class CaptionLine : INotifyPropertyChanged
 {
     private string _text = string.Empty;
+    private string? _translation;
+    public string? Translation { get => _translation; set => Set(ref _translation, value); }
     private bool _isFinal;
     private string? _speakerLabel;
     private int? _speakerId;

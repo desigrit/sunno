@@ -29,6 +29,7 @@ public sealed class BackendHost : IDisposable
     private bool _engineUnloadableOnArm;
 
     public event Action<string>? Output;
+    public event Action? ControlReady;
 
     /// <summary>
     /// Raised when the backend exits without being asked to. Without this a crashed backend is
@@ -131,7 +132,8 @@ public sealed class BackendHost : IDisposable
     public string Start(string? device = null, string model = "large-v3", string? vocabulary = null,
                         bool startStopped = false, int? loopbackDevice = null,
                         string? computeDevice = null, string? recordingsPath = null,
-                        string? resumeRecording = null, AudioInputTarget? input = null)
+                        string? resumeRecording = null, AudioInputTarget? input = null,
+                        string spokenLanguage = "en", string translateTo = "off")
     {
         if (IsRunning) return "already running";
 
@@ -170,7 +172,8 @@ public sealed class BackendHost : IDisposable
                    + "Reinstalling Sunno should replace it.";
         }
 
-        var args = new List<string> { "-m", "server.app", "--model", model };
+        var args = new List<string> { "-m", "server.app", "--model", model,
+            "--language", spokenLanguage, "--translate-to", translateTo };
         if (input is not null)
         {
             args.Add("--input-kind"); args.Add(input.Kind);
@@ -228,6 +231,7 @@ public sealed class BackendHost : IDisposable
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.Environment["PYTHONUTF8"] = "1";
         psi.Environment["PYTHONUNBUFFERED"] = "1";
+        psi.Environment["PYTHONPYCACHEPREFIX"] = Path.Combine(Path.GetDirectoryName(LogPath)!, "pycache");
         // Tell the backend explicitly whether it is running from a package, rather than
         // leaving paths.is_packaged() to infer it from a "WindowsApps" path substring.
         if (IsPackaged())
@@ -301,7 +305,8 @@ public sealed class BackendHost : IDisposable
     public string Restart(string? device, string model, string? vocabulary,
                           bool startStopped = false, int? loopbackDevice = null,
                           string? computeDevice = null, string? recordingsPath = null,
-                          string? resumeRecording = null, AudioInputTarget? input = null)
+                          string? resumeRecording = null, AudioInputTarget? input = null,
+                        string spokenLanguage = "en", string translateTo = "off")
     {
         _stopping = true;
         try
@@ -326,18 +331,19 @@ public sealed class BackendHost : IDisposable
             _stopping = false;
         }
         return Start(device, model, vocabulary, startStopped, loopbackDevice, computeDevice,
-                     recordingsPath, resumeRecording, input);
+                     recordingsPath, resumeRecording, input, spokenLanguage, translateTo);
     }
 
     public async Task<string> RestartAsync(string? device, string model, string? vocabulary,
         bool startStopped = false, int? loopbackDevice = null, string? computeDevice = null,
-        string? recordingsPath = null, string? resumeRecording = null, AudioInputTarget? input = null)
+        string? recordingsPath = null, string? resumeRecording = null, AudioInputTarget? input = null,
+                        string spokenLanguage = "en", string translateTo = "off")
     {
         await _restartLock.WaitAsync();
         try
         {
             return await Task.Run(() => Restart(device, model, vocabulary, startStopped,
-                loopbackDevice, computeDevice, recordingsPath, resumeRecording, input));
+                loopbackDevice, computeDevice, recordingsPath, resumeRecording, input, spokenLanguage, translateTo));
         }
         finally { _restartLock.Release(); }
     }
@@ -362,6 +368,13 @@ public sealed class BackendHost : IDisposable
             _log.Add(line);
             if (_log.Count > 500) _log.RemoveAt(0);
             AppendToLogFile(line);
+        }
+        if (System.Text.RegularExpressions.Regex.IsMatch(line,
+            @"^\[startup\] stage=(imports_ready|hardware|control_ready|cache_lookup|model_load|model_warmup|pipeline_ready|capture_ready|speaker_load|recording_recovery|catalog|correction_load|correction_warmup) duration_ms=\d+ elapsed_ms=\d+ result=(ok|failed)$"))
+        {
+            App.Trace(line);
+            if (line.StartsWith("[startup] stage=control_ready ", StringComparison.Ordinal)
+                && line.EndsWith("result=ok", StringComparison.Ordinal)) ControlReady?.Invoke();
         }
         Output?.Invoke(line);
     }
