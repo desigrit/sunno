@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Windows.Foundation;
 using Windows.System;
 
 namespace Sunno.Controls;
@@ -15,9 +16,8 @@ public sealed class LanguagePicker : Button
         public override string ToString() => Name;
     }
 
-    private readonly TextBlock _title = new() { VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBlock _value = new() { TextTrimming = TextTrimming.CharacterEllipsis,
-        VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+    private readonly TextBlock _title = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _value = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
     private readonly FontIcon _chevron = new() { Glyph = "\uE70D", FontSize = 10 };
     private readonly TextBox _search = new() { PlaceholderText = "Search languages" };
     private readonly ListView _list = new() { MaxHeight = 250, IsItemClickEnabled = true };
@@ -38,16 +38,7 @@ public sealed class LanguagePicker : Button
         Padding = new Thickness(8, 4, 8, 4);
         if (Application.Current.Resources.TryGetValue("SubtleButtonStyle", out var subtle) && subtle is Style style)
             Style = style;
-        var row = new Grid { ColumnSpacing = 6 };
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        row.Children.Add(_title);
-        Grid.SetColumn(_value, 1);
-        row.Children.Add(_value);
-        Grid.SetColumn(_chevron, 2);
-        row.Children.Add(_chevron);
-        Content = row;
+        Content = new LanguageRow(_title, _value, _chevron);
         var panel = new StackPanel { Width = 228, Spacing = 6 };
         panel.Children.Add(_search);
         panel.Children.Add(_list);
@@ -83,6 +74,68 @@ public sealed class LanguagePicker : Button
         ToolTipService.SetToolTip(this, title == "Translate to" && selected == "off"
             ? "Translate completed captions locally. The first language downloads a 638 MB model." : $"{title}, {value}");
         if (_menu.IsOpen) Filter();
+    }
+
+    // Keep short values on one line and let the full selection wrap below the label
+    // when the sidebar is narrow or the user increases the Windows text size.
+    private sealed class LanguageRow : Panel
+    {
+        private const double Gap = 6;
+        private readonly TextBlock _label, _selection;
+        private readonly FontIcon _arrow;
+        private bool _stacked;
+
+        public LanguageRow(TextBlock label, TextBlock selection, FontIcon arrow)
+        {
+            _label = label;
+            _selection = selection;
+            _arrow = arrow;
+            Children.Add(label);
+            Children.Add(selection);
+            Children.Add(arrow);
+        }
+
+        private double ArrowSpace => _arrow.Visibility == Visibility.Visible ? _arrow.DesiredSize.Width + Gap : 0;
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            var unrestricted = new Size(double.PositiveInfinity, double.PositiveInfinity);
+            _arrow.Measure(unrestricted);
+            _label.Measure(unrestricted);
+            _selection.Measure(unrestricted);
+            var inline = _label.DesiredSize.Width + Gap + _selection.DesiredSize.Width;
+            var textWidth = Math.Max(0, availableSize.Width - ArrowSpace);
+            _stacked = inline > textWidth;
+            if (_stacked)
+            {
+                var limit = new Size(textWidth, double.PositiveInfinity);
+                _label.Measure(limit);
+                _selection.Measure(limit);
+            }
+            var width = _stacked ? Math.Max(_label.DesiredSize.Width, _selection.DesiredSize.Width) : inline;
+            var height = _stacked ? _label.DesiredSize.Height + _selection.DesiredSize.Height
+                                  : Math.Max(_label.DesiredSize.Height, _selection.DesiredSize.Height);
+            return new Size(Math.Min(availableSize.Width, width + ArrowSpace), Math.Max(height, _arrow.DesiredSize.Height));
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            var textWidth = Math.Max(0, finalSize.Width - ArrowSpace);
+            if (_stacked)
+            {
+                _label.Arrange(new Rect(0, 0, textWidth, _label.DesiredSize.Height));
+                _selection.Arrange(new Rect(0, _label.DesiredSize.Height, textWidth, _selection.DesiredSize.Height));
+            }
+            else
+            {
+                _label.Arrange(new Rect(0, 0, _label.DesiredSize.Width, finalSize.Height));
+                var width = Math.Min(textWidth, _selection.DesiredSize.Width);
+                _selection.Arrange(new Rect(textWidth - width, 0, width, finalSize.Height));
+            }
+            _arrow.Arrange(new Rect(Math.Max(0, finalSize.Width - _arrow.DesiredSize.Width), 0,
+                                    _arrow.DesiredSize.Width, finalSize.Height));
+            return finalSize;
+        }
     }
 
     private static string LanguageName(string code, bool native = false)

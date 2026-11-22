@@ -187,6 +187,9 @@ public partial class App : Application
         {
             root.RequestedTheme = theme;
             await Task.Delay(120);
+            var selectedLabel = ((Panel)spoken.Content).Children.OfType<TextBlock>().Last();
+            Check(selectedLabel.Text.Contains("Spanish") && !selectedLabel.IsTextTrimmed,
+                  "The detected language fits within the sidebar");
             await Capture(root, $"languages-{theme}.png");
         }
         var menu = (Flyout)spoken.Flyout;
