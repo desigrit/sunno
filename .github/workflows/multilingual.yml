@@ -18,11 +18,16 @@ jobs:
         run: dotnet build app/Sunno.csproj -c Release -p:Platform=x64 -r win-x64
       - name: Exercise the native language pickers
         run: |
-          dotnet publish tests/windows-ui/AppearanceTests.csproj -c Release -o "$env:RUNNER_TEMP/pickers"
+          dotnet build tests/windows-ui/AppearanceTests.csproj -c Release -r win-x64
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $fixture = (Resolve-Path "tests/windows-ui/bin/Release/net8.0-windows10.0.19041.0/win-x64").Path
+          foreach ($file in @("App.xbf", "LanguageTestPage.xbf", "AppearanceTests.pri")) {
+            if (!(Test-Path (Join-Path $fixture $file))) { throw "Missing WinUI fixture resource $file" }
+          }
+          Copy-Item (Join-Path $fixture "AppearanceTests.pri") (Join-Path $fixture "resources.pri") -Force
           $env:SUNNO_LANGUAGE_TEST_ONLY = "1"
           $env:SUNNO_APPEARANCE_TEST_OUTPUT = "$env:GITHUB_WORKSPACE/picker-images"
-          $probe = Start-Process "$env:RUNNER_TEMP/pickers/AppearanceTests.exe" -Wait -PassThru -WindowStyle Hidden -RedirectStandardError "$env:RUNNER_TEMP/picker-stderr" -RedirectStandardOutput "$env:RUNNER_TEMP/picker-stdout"
+          $probe = Start-Process (Join-Path $fixture "AppearanceTests.exe") -WorkingDirectory $fixture -Wait -PassThru -WindowStyle Hidden -RedirectStandardError "$env:RUNNER_TEMP/picker-stderr" -RedirectStandardOutput "$env:RUNNER_TEMP/picker-stdout"
           Get-Content "$env:RUNNER_TEMP/picker-stderr","$env:RUNNER_TEMP/picker-stdout"
           if (Test-Path picker-images/failure.txt) { Get-Content picker-images/failure.txt }
           exit $probe.ExitCode
