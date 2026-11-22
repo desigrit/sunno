@@ -221,6 +221,33 @@ public partial class App : Application
         await Search("ja");
         await Capture(content, "language-search.png");
         menu.Hide();
+
+        panel.Children.Clear();
+        var rows = new[]
+        {
+            new[] { "مرحبا", " بكم" }, new[] { "今天", "有字幕。" }, new[] { "今日", "は晴れです。" },
+        };
+        foreach (var words in rows)
+        {
+            var caption = new RichTextBlock { TextReadingOrder = TextReadingOrder.DetectFromContent, FontSize = 22 };
+            panel.Children.Add(caption);
+            WordInlines.SetLine(caption, new CaptionLine
+            {
+                Text = string.Concat(words), IsFinal = true,
+                Words = words.Select(word => new CaptionWord(word, 0.95)).ToArray(),
+            });
+            root.UpdateLayout();
+            var runs = ((Paragraph)caption.Blocks[0]).Inlines.OfType<Run>().ToArray();
+            Check(string.Concat(runs.Select(run => run.Text)) == string.Concat(words),
+                  "The caption renderer preserves original word spacing");
+            if (words == rows[0])
+            {
+                var first = runs.First().ContentStart.GetCharacterRect(LogicalDirection.Forward);
+                var last = runs.Last().ContentStart.GetCharacterRect(LogicalDirection.Forward);
+                Check(first.X > last.X, "Arabic words render in right-to-left order");
+            }
+        }
+        await Capture(root, "caption-scripts.png");
     }
 
     private async Task RunChecks(Grid root, AppearancePicker picker)
