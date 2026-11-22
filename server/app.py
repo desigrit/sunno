@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .startup import startup
+
 import argparse
 import asyncio
 import functools
@@ -39,6 +41,8 @@ except Exception:
 from .config import Settings
 from .paths import bundled_model, data_dir, speaker_profiles_path, ui_dir
 from .pipeline import CaptionPipeline, SessionController
+
+startup.mark("imports_ready")
 
 UI_DIR = ui_dir()
 
@@ -244,11 +248,13 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
     # every such machine into an install that raised at startup and never captioned.
     from . import hardware, models as model_catalog
 
-    compute_device = hardware.resolve_device(args.compute_device)
-    compute_type = args.compute_type or hardware.compute_type_for(compute_device)
     from .distribution import startup_model
 
-    model = startup_model(args.model) or hardware.default_model(
+    model = startup_model(args.model)
+    compute_device = ("cpu" if model and not model_catalog.uses_cuda(model)
+                      else hardware.resolve_device(args.compute_device))
+    compute_type = args.compute_type or hardware.compute_type_for(compute_device)
+    model = model or hardware.default_model(
         [entry["id"] for entry in model_catalog.catalog_for_platform()], compute_device
     )
     from . import arm_whisper
@@ -283,33 +289,37 @@ def parse_args() -> tuple[Settings, argparse.Namespace]:
 async def run(settings: Settings, args: argparse.Namespace) -> None:
     from websockets.asyncio.server import serve
 
+    startup.enable()
     loop = asyncio.get_running_loop()
     clients: set = set()
     events: asyncio.Queue[dict] = asyncio.Queue()
     controller = SessionController(running=not args.start_stopped)
+    optional_ready = asyncio.Event()
+    catalog_ready = asyncio.Event()
+    catalog_task = None
+    recovering_folder = None
+    recovery_folders = set()
     latest_status: dict = {"type": "status", "state": "starting", "running": False,
                            "wanted": controller.is_running}
 
     speaker = None
-    if settings.enable_speakers and not args.no_speakers:
+
+    def load_speaker():
         from .speaker import SpeakerIdentifier
 
-        model_file = bundled_model(settings.speaker_model)
-        try:
-            speaker = SpeakerIdentifier(
-                model_file,
-                threshold=settings.speaker_threshold,
-                max_speakers=settings.max_speakers,
-                min_identify_s=settings.speaker_min_identify_s,
-                min_new_speaker_s=settings.speaker_min_new_s,
-                profile_path=speaker_profiles_path(),
-            )
-            print(f"Speaker labelling: on ({settings.speaker_model})")
-        except Exception as exc:
-            print(f"Speaker labelling: off ({exc})")
+        return SpeakerIdentifier(
+            bundled_model(settings.speaker_model),
+            threshold=settings.speaker_threshold,
+            max_speakers=settings.max_speakers,
+            min_identify_s=settings.speaker_min_identify_s,
+            min_new_speaker_s=settings.speaker_min_new_s,
+            profile_path=speaker_profiles_path(),
+        )
 
     def emit(event: dict) -> None:
         """Thread-safe bridge from pipeline threads into the asyncio loop."""
+        if event.get("type") == "status" and event.get("state") == "listening":
+            startup.mark("capture_ready")
         # Finished lines go to the recording as they happen, from whichever thread produced
         # them, so a kill loses at most the sentence being spoken.
         if event.get("type") == "final" and recorder["active"] is not None:
@@ -330,7 +340,8 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     # the same object without a nonlocal chain through several nested functions.
     recorder: dict = {"active": None}
     from .speaker_labels import LiveSpeakerLabels
-    labels = LiveSpeakerLabels(speaker, emit, settings.speaker_labels)
+    labels = LiveSpeakerLabels(None, emit, settings.speaker_labels,
+                               factory=load_speaker if settings.enable_speakers and not args.no_speakers else None)
     from .capture import CaptureManager
     from .capture_target import AudioTarget
     capture = CaptureManager(AudioTarget.from_settings(settings), controller, emit, settings.model_size)
@@ -362,6 +373,13 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
 
         from . import recorder as rec_mod
 
+        if resume:
+            resumed = Path(resume).resolve()
+            if resumed == recovering_folder:
+                emit({"type": "recording", "state": "failed",
+                      "message": "This recording is being recovered. Try again shortly."})
+                return
+            recovery_folders.discard(resumed)
         try:
             root = Path(path) if path else recordings_root()
             recorder["active"] = rec_mod.Recorder(root, resume=resume)
@@ -414,6 +432,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
             emit({"type": "recording", "state": "failed", "message": str(exc)})
 
     async def handler(ws) -> None:  # noqa: ANN001
+        nonlocal catalog_task
         clients.add(ws)
         await ws.send(json.dumps(latest_status))
         if capture.snapshot() is not None:
@@ -423,9 +442,9 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         if recorder["active"] is not None:
             await ws.send(json.dumps(recording_frame()))
         await ws.send(json.dumps(labels.state()))
-        if speaker is not None:
+        if labels.speaker is not None:
             await ws.send(json.dumps({"type": "roster", "speakers":
-                                     speaker.roster() if labels.enabled else []}))
+                                     labels.speaker.roster() if labels.enabled else []}))
         try:
             async for raw in ws:
                 try:
@@ -466,6 +485,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                     # The first-run gate only advertises the catalogue when a model is missing.
                     # The switcher needs it whenever asked, including once one is already loaded.
                     async def send_catalog() -> None:
+                        await catalog_ready.wait()
                         from . import models as model_catalog
 
                         emit({
@@ -474,26 +494,27 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                             "device": settings.device,
                             "gpu_payload_needed": gpu_payload_needed(),
                             "gpu_payload_mb": round(cuda_bytes() / 1e6),
-                            "catalog": await asyncio.to_thread(
-                                model_catalog.catalog_with_status, catalog_device()
+                            "catalog": await startup.run(
+                                "catalog", model_catalog.catalog_with_status, catalog_device()
                             ),
                         })
 
-                    loop.create_task(send_catalog())
+                    if catalog_task is None or catalog_task.done():
+                        catalog_task = loop.create_task(send_catalog())
                 elif cmd == "set_speaker_labels" and msg.get("mode") in ("off", "automatic"):
                     labels.set_enabled(msg["mode"] == "automatic")
-                elif cmd == "rename_speaker" and speaker is not None:
+                elif cmd == "rename_speaker" and labels.speaker is not None:
                     labels.edit("rename", int(msg.get("id", -1)), str(msg.get("name", "")))
-                elif cmd == "set_self" and speaker is not None:
+                elif cmd == "set_self" and labels.speaker is not None:
                     labels.edit("self", int(msg.get("id", -1)), bool(msg.get("value", True)))
-                elif cmd == "merge_speakers" and speaker is not None:
+                elif cmd == "merge_speakers" and labels.speaker is not None:
                     source = int(msg.get("source", -1))
                     target = int(msg.get("target", -1))
                     labels.merge(source, target)
-                elif cmd == "delete_speaker" and speaker is not None:
+                elif cmd == "delete_speaker" and labels.speaker is not None:
                     target_id = int(msg.get("id", -1))
                     labels.edit("delete", target_id)
-                elif cmd == "reset_speakers" and speaker is not None:
+                elif cmd == "reset_speakers" and labels.speaker is not None:
                     labels.edit("reset")
         finally:
             clients.discard(ws)
@@ -541,13 +562,14 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
     print(f"  UI:        http://{ui_host}:{settings.http_port}")
     print(f"  WebSocket: ws://{ui_host}:{settings.ws_port}")
 
-    # Probed unconditionally, not inside the CUDA branch. Force CPU skips the GPU probe
-    # entirely, so an ARM user with that setting on would otherwise get no report at all -
-    # exactly the machine where "the engine will not load" is the whole story. Cached, so the
-    # auto path that already probed during argument parsing does not report twice.
+    # Probe the selected Whisper runtime, including forced CPU and native ARM64.
+    # Streaming engines do not need to import an unused Whisper runtime here.
     from . import hardware as _hw
 
-    _hw.engine_importable()
+    from .models import is_stream_model
+    from .experimental_models import MODEL_IDS
+    if not is_stream_model(settings.model_size) and settings.model_size not in MODEL_IDS:
+        _hw.engine_importable()
 
     # Recorded plainly rather than as [error], because emulation is not by itself a failure:
     # Prism emulates AVX2 on recent Windows, so the x64 engine may load and run, just slowly.
@@ -705,24 +727,31 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         finally:
             downloading = False
 
+    from . import recorder as rec_mod
+    try:
+        recovery_folders.update(rec_mod.recovery_candidates(recordings_root(), skip=args.resume_recording))
+    except OSError:
+        pass
+
     async with serve(handler, settings.host, settings.ws_port):
         asyncio.create_task(broadcaster())
 
-        # Anything the last run did not finish. A folder still holding raw audio means the
-        # process ended mid-recording, so the meeting is on disk but not yet a file; this
-        # turns it into one before the user goes looking for it.
-        #
-        # --resume-recording is skipped, because that folder is not an orphan: the app is
-        # about to ask us to carry on writing to it after a restart for a new microphone or
-        # model. Finalising it here would cut the recording in half.
-        try:
-            from . import recorder as rec_mod
+        startup.mark("control_ready")
 
-            for found in rec_mod.recover(recordings_root(), skip=args.resume_recording):
-                print(f"Recovered {found.name} from a previous session "
-                      f"({found.duration_s:.0f}s)", flush=True)
-        except Exception as exc:
-            print(f"[error] could not recover past recordings: {exc}", flush=True)
+        async def recover_recordings():
+            nonlocal recovering_folder
+            await optional_ready.wait()
+            while recovery_folders:
+                recovering_folder = recovery_folders.pop()
+                try:
+                    await startup.run("recording_recovery", rec_mod.recover, recordings_root(),
+                                      candidates=(recovering_folder,))
+                except Exception as exc:
+                    print(f"[error] could not recover past recordings: {exc}", flush=True)
+                finally:
+                    recovering_folder = None
+
+        recovery_task = asyncio.create_task(recover_recordings())
 
         # Pick the recording back up before any client connects, so the first frame a
         # reconnecting app receives already says "still recording" rather than "idle".
@@ -732,7 +761,7 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         # Decide up front whether we can load, or must ask the user to pick and download.
         from . import models as model_catalog
 
-        if model_catalog.is_available(settings.model_size).available:
+        if (await startup.run("cache_lookup", model_catalog.is_available, settings.model_size)).available:
             model_ready.set()
             # The model is on disk, so nothing above will ever ask the user to choose, which
             # means ensure_model never runs and the CUDA libraries would never be fetched.
@@ -769,8 +798,10 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
 
                 asyncio.create_task(repair_payload())
         else:
-            catalog = await asyncio.to_thread(
-                model_catalog.catalog_with_status, catalog_device()
+            catalog_ready.set()
+            optional_ready.set()
+            catalog = await startup.run(
+                "catalog", model_catalog.catalog_with_status, catalog_device()
             )
             latest_status = {
                 "type": "model_required",
@@ -850,8 +881,8 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         # have caught nothing and left the backend dying here, outside every handler, on a
         # machine whose payload was incomplete.
         try:
-            engine = await asyncio.to_thread(create_engine, settings)
-            warmup_ms = await asyncio.to_thread(engine.warmup)
+            engine = await startup.run("model_load", create_engine, settings)
+            warmup_ms = await startup.run("model_warmup", engine.warmup)
         except Exception as exc:
             if settings.device == "cpu":
                 raise
@@ -862,11 +893,11 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
             settings.device = "cpu"
             settings.compute_type = hardware.compute_type_for("cpu")
             emit({"type": "status", "state": "loading", "model": settings.model_size})
-            engine = await asyncio.to_thread(create_engine, settings)
-            warmup_ms = await asyncio.to_thread(engine.warmup)
+            engine = await startup.run("model_load", create_engine, settings)
+            warmup_ms = await startup.run("model_warmup", engine.warmup)
         print(f"Model ready (warmup {warmup_ms:.0f} ms)")
 
-        pipeline = CaptionPipeline(
+        pipeline = await startup.run("pipeline_ready", CaptionPipeline,
             settings, engine, emit,
             should_run=lambda: controller.is_running,
             speaker=speaker,
@@ -914,6 +945,9 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
                 pipeline.close()
                 labels.close()
 
+        labels.start()
+        optional_ready.set()
+        catalog_ready.set()
         print("Press Ctrl+C to stop.\n")
         worker = asyncio.to_thread(pump)
         try:
@@ -922,10 +956,15 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
             controller.shutdown()
             pipeline.stop()
             raise
+        finally:
+            if catalog_task is not None:
+                catalog_task.cancel()
+            recovery_task.cancel()
 
 
 def main() -> None:
-    settings, args = parse_args()
+    with startup.measure("hardware"):
+        settings, args = parse_args()
     if args.list_devices:
         from .audio import print_input_devices
 

@@ -68,6 +68,7 @@ public sealed class CaptionClient : IAsyncDisposable
     private Task? _pump;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private int _sessionId;
+    private readonly SemaphoreSlim _serverReady = new(0, 1);
 
     public CaptionClient(string host = "127.0.0.1", int port = 8766)
         => _uri = new Uri($"ws://{host}:{port}");
@@ -123,6 +124,12 @@ public sealed class CaptionClient : IAsyncDisposable
         _pump = Task.Run(() => RunAsync(lifetime.Token));
     }
 
+    public void NotifyServerReady()
+    {
+        try { _serverReady.Release(); }
+        catch (SemaphoreFullException) { }
+    }
+
     /// <summary>Reconnects with backoff, so the UI survives a backend restart.</summary>
     private async Task RunAsync(CancellationToken token)
     {
@@ -153,7 +160,7 @@ public sealed class CaptionClient : IAsyncDisposable
             }
 
             ConnectionChanged?.Invoke(false);
-            try { await Task.Delay(delay, token); }
+            try { await _serverReady.WaitAsync(delay, token); }
             catch (OperationCanceledException) { return; }
             delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 5000));
         }

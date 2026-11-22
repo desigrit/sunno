@@ -223,6 +223,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             SkipToCurrent.Visibility = _captionScroll.CanSkipToCurrent ? Visibility.Visible : Visibility.Collapsed;
 
         ConfigureWindow();
+        SpeakerPane.IsCollapsed = _settings.SidebarCollapsed;
+        SpeakerPane.CollapsedChanged += (_, _) =>
+        {
+            _settings.SidebarCollapsed = SpeakerPane.IsCollapsed;
+            _settings.Save();
+        };
         ApplySpeakerLabelsPreference();
         App.Trace("MainWindow ctor: window configured");
 
@@ -274,6 +280,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             _speakerLabelsAvailable = available;
             ApplySpeakerLabelsPreference();
         });
+        _backend.ControlReady += _client.NotifyServerReady;
         _client.ConnectionChanged += ok => QueueCurrentClientEvent(() => OnConnection(ok));
         _client.ModelRequired += (device, m, gpu) => _ui.TryEnqueue(() => OnModelRequired(device, m, gpu));
         _client.DownloadProgress += p => _ui.TryEnqueue(() => OnDownloadProgress(p));
@@ -1826,7 +1833,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         LoadingRing.Visibility = Visibility.Visible;
         EmptyGlyph.Visibility = Visibility.Collapsed;
         EmptyTitle.Text = title;
-        EmptyDetail.Text = "This takes about half a minute.";
+        EmptyDetail.Text = "This may take a few seconds.";
         SetEmptyStateVisible(Lines.Count == 0);
     }
 
@@ -2148,7 +2155,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         // The same words the ordinary empty state uses, because that is what is actually
         // happening. An earlier draft said "Looking for models on this PC", which was untrue
         // for most of the wait: nothing is looking for models, the Python backend is booting.
-        AddModelNote("Starting the speech engine. This takes about half a minute the first time.");
+        AddModelNote("Starting the speech engine. This may take a few seconds.");
         DownloadButton.IsEnabled = false;
         SetupError.IsOpen = false;
         DownloadPanel.Visibility = Visibility.Collapsed;
@@ -3209,7 +3216,6 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (remember) _settings.CompactMode = compact;
         CompactModeItem.IsChecked = compact;
 
-        SidebarColumn.Width = compact ? new GridLength(0) : new GridLength(240);
         SpeakerPane.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         CommandArea.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         WindowCommands.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;

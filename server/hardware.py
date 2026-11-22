@@ -427,6 +427,8 @@ def cpu_score() -> float:
     rather than to a confidently wrong estimate.
     """
     cached = _read_cached_score()
+    if cached is not None:
+        return cached
     measured = _measure_cpu_score()
     best = max(cached or 0.0, measured)
     if best > (cached or 0.0):

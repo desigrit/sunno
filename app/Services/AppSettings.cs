@@ -85,6 +85,9 @@ public sealed class AppSettings
     /// </summary>
     public bool CompactMode { get; set; }
 
+    /// <summary>Keep the sidebar folded independently of the compact caption window.</summary>
+    public bool SidebarCollapsed { get; set; }
+
     /// <summary>
     /// Where the window sat in each mode, kept separately.
     ///

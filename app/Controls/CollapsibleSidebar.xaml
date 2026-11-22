@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Sunno.Controls.CollapsibleSidebar"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    IsTabStop="False">
+    <Border Background="{ThemeResource LayerFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="0,1,1,0">
+        <Grid Padding="0,6,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid Margin="0,0,0,4" Height="32">
+                <TextBlock x:Name="Heading" Text="Speakers" Margin="16,0,40,0"
+                           VerticalAlignment="Center"
+                           Style="{StaticResource BodyStrongTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Button x:Name="SidebarToggle" Click="OnToggle"
+                        Width="32" Height="32" MinWidth="32" MinHeight="32"
+                        HorizontalAlignment="Right" Margin="0,0,4,0" Padding="0"
+                        Background="Transparent" BorderThickness="0"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        AutomationProperties.Name="Collapse sidebar"
+                        ToolTipService.ToolTip="Collapse sidebar">
+                    <FontIcon x:Name="Chevron" Glyph="&#xE76B;" FontSize="12" />
+                </Button>
+            </Grid>
+            <ContentPresenter x:Name="PanePresenter" Grid.Row="1"
+                              HorizontalContentAlignment="Stretch"
+                              VerticalContentAlignment="Stretch"
+                              Content="{x:Bind PaneContent, Mode=OneWay}" />
+        </Grid>
+    </Border>
+</UserControl>

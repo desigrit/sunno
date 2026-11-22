@@ -283,6 +283,24 @@ class ModelStatus:
     path: str | None = None
 
 
+def local_whisper_path(model_id: str) -> str:
+    """Resolve complete CT2 weights without a network lookup or implicit download."""
+    from pathlib import Path
+
+    path = Path(model_id)
+    if not path.is_dir():
+        from huggingface_hub import snapshot_download
+
+        path = Path(snapshot_download(_repo_id(model_id), allow_patterns=_ALLOW_PATTERNS,
+                                      local_files_only=True))
+    # faster-whisper fetches a tokenizer online if this file is absent, even when
+    # given a local folder. Send incomplete caches through explicit model setup.
+    for name in ("config.json", "model.bin", "tokenizer.json"):
+        if not (path / name).is_file():
+            raise FileNotFoundError("The cached Whisper model is incomplete. Retry model setup.")
+    return str(path)
+
+
 def is_available(model_id: str) -> ModelStatus:
     """True when the model is already in the local cache, so no download is needed.
 
@@ -295,8 +313,6 @@ def is_available(model_id: str) -> ModelStatus:
     from .experimental_models import MODEL_IDS, status
     if model_id in MODEL_IDS:
         return ModelStatus(model_id, bool(status(model_id).get("available")))
-
-    from huggingface_hub import snapshot_download
 
     if is_stream_model(model_id):
         try:
@@ -314,12 +330,7 @@ def is_available(model_id: str) -> ModelStatus:
             return ModelStatus(model_id, False)
 
     try:
-        path = snapshot_download(
-            _repo_id(model_id),
-            allow_patterns=_ALLOW_PATTERNS,
-            local_files_only=True,
-        )
-        return ModelStatus(model_id, True, path)
+        return ModelStatus(model_id, True, local_whisper_path(model_id))
     except Exception:
         return ModelStatus(model_id, False)
 

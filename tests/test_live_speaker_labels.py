@@ -223,5 +223,68 @@ class RecordingCorrectionTests(unittest.TestCase):
             self.assertNotIn("_session", rows[0])
 
 
+class LazySpeakerTests(unittest.TestCase):
+    def test_off_never_constructs_the_speaker_model(self):
+        factory = Mock(return_value=identifier())
+        labels = LiveSpeakerLabels(None, lambda event: None, False, factory=factory)
+        self.addCleanup(labels.close)
+        labels.start()
+        labels.set_enabled(False)
+        factory.assert_not_called()
+        self.assertTrue(labels.state()["available"])
+        self.assertEqual(labels.state()["mode"], "off")
+
+    def test_automatic_loads_once_without_blocking_captions_and_honors_late_off(self):
+        entered, release = threading.Event(), threading.Event()
+        def load():
+            entered.set()
+            release.wait(2)
+            return identifier()
+        events = []
+        factory = Mock(side_effect=load)
+        labels = LiveSpeakerLabels(None, events.append, True, factory=factory)
+        self.addCleanup(labels.close)
+        labels.set_enabled(True)
+        factory.assert_not_called()  # Caption startup still has priority.
+        labels.start()
+        self.assertTrue(entered.wait(1))
+        labels.emit_caption({"type": "partial", "id": 1, "text": "already captioning"})
+        self.assertEqual(events[-1]["text"], "already captioning")
+        labels.set_enabled(True)
+        labels.set_enabled(False)
+        release.set()
+        labels._loader.join(2)
+        self.assertFalse(labels.enabled)
+        self.assertEqual(labels.state()["mode"], "off")
+        labels.set_enabled(True)
+        self.assertTrue(labels.enabled)
+        factory.assert_called_once()
+
+    def test_load_completion_after_close_does_not_publish(self):
+        entered, release = threading.Event(), threading.Event()
+        def load():
+            entered.set()
+            release.wait(2)
+            return identifier()
+        events = []
+        labels = LiveSpeakerLabels(None, events.append, True, factory=load)
+        labels.start()
+        self.assertTrue(entered.wait(1))
+        labels.close()
+        release.set()
+        labels._loader.join(2)
+        self.assertEqual(events, [])
+
+    def test_load_failure_does_not_disable_captions(self):
+        events = []
+        labels = LiveSpeakerLabels(None, events.append, True, factory=Mock(side_effect=RuntimeError))
+        self.addCleanup(labels.close)
+        labels.start()
+        labels._loader.join(2)
+        self.assertFalse(labels.state()["available"])
+        labels.emit_caption({"type": "final", "id": 1, "text": "still captioning"})
+        self.assertEqual(events[-1]["text"], "still captioning")
+
+
 if __name__ == "__main__":
     unittest.main()

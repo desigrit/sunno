@@ -388,7 +388,18 @@ def finalise(folder: Path, started_at: float | None = None) -> Saved:
     return Saved(folder.name, folder, round(duration, 2), len(lines), audio)
 
 
-def recover(root: Path, skip: Path | str | None = None) -> list[Saved]:
+def recovery_candidates(root: Path, skip: Path | str | None = None) -> tuple[Path, ...]:
+    """Snapshot only pre-existing unfinished recordings before control clients connect."""
+    root = Path(root)
+    keep = Path(skip).resolve() if skip else None
+    if not root.is_dir():
+        return ()
+    return tuple(folder.resolve() for folder in sorted(root.iterdir())
+                 if folder.is_dir() and folder.resolve() != keep and is_unfinished(folder))
+
+
+def recover(root: Path, skip: Path | str | None = None,
+            *, candidates: tuple[Path, ...] | None = None) -> list[Saved]:
     """Finish any recording the last run did not.
 
     Args:
@@ -401,7 +412,7 @@ def recover(root: Path, skip: Path | str | None = None) -> list[Saved]:
         return []
     keep = Path(skip).resolve() if skip else None
     done: list[Saved] = []
-    for folder in sorted(root.iterdir()):
+    for folder in recovery_candidates(root, skip) if candidates is None else candidates:
         if not folder.is_dir() or not is_unfinished(folder):
             continue
         if keep is not None and folder.resolve() == keep:

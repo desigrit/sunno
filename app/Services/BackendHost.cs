@@ -29,6 +29,7 @@ public sealed class BackendHost : IDisposable
     private bool _engineUnloadableOnArm;
 
     public event Action<string>? Output;
+    public event Action? ControlReady;
 
     /// <summary>
     /// Raised when the backend exits without being asked to. Without this a crashed backend is
@@ -228,6 +229,7 @@ public sealed class BackendHost : IDisposable
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.Environment["PYTHONUTF8"] = "1";
         psi.Environment["PYTHONUNBUFFERED"] = "1";
+        psi.Environment["PYTHONPYCACHEPREFIX"] = Path.Combine(Path.GetDirectoryName(LogPath)!, "pycache");
         // Tell the backend explicitly whether it is running from a package, rather than
         // leaving paths.is_packaged() to infer it from a "WindowsApps" path substring.
         if (IsPackaged())
@@ -362,6 +364,13 @@ public sealed class BackendHost : IDisposable
             _log.Add(line);
             if (_log.Count > 500) _log.RemoveAt(0);
             AppendToLogFile(line);
+        }
+        if (System.Text.RegularExpressions.Regex.IsMatch(line,
+            @"^\[startup\] stage=(imports_ready|hardware|control_ready|cache_lookup|model_load|model_warmup|pipeline_ready|capture_ready|speaker_load|recording_recovery|catalog|correction_load|correction_warmup) duration_ms=\d+ elapsed_ms=\d+ result=(ok|failed)$"))
+        {
+            App.Trace(line);
+            if (line.StartsWith("[startup] stage=control_ready ", StringComparison.Ordinal)
+                && line.EndsWith("result=ok", StringComparison.Ordinal)) ControlReady?.Invoke();
         }
         Output?.Invoke(line);
     }

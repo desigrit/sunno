@@ -116,11 +116,14 @@ class CTranslate2Engine:
     def __init__(self, settings: Settings) -> None:
         from faster_whisper import WhisperModel
 
+        from .models import local_whisper_path
+
         self.settings = settings
         self._model = WhisperModel(
-            settings.model_size,
+            local_whisper_path(settings.model_size),
             device=settings.device,
             compute_type=settings.compute_type,
+            local_files_only=True,
         )
         self._context: deque[str] = deque(maxlen=6)
         self._context_updated = 0.0

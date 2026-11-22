@@ -127,7 +127,7 @@ public sealed partial class MainWindow
 
         foreach (var control in new Control[]
                  {
-                     SpeakerList, ModelToggle, ModelPanel, CaptionScroller,
+                     SpeakerPane, SpeakerList, ModelToggle, ModelPanel, CaptionScroller,
                      DevicePicker, ToggleButton, MoreButton, MicInfoBar,
                      CompactEnterButton, RefreshDevicesButton,
                  })
