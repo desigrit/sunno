@@ -89,7 +89,10 @@ class OnnxEngine:
         return buffer.getvalue()
 
     def set_language(self, language):
-        self._prompt = _PROMPT_TEMPLATE.format(lang=language)
+        from .spoken_language import script_hint
+        self._hint = script_hint(self.settings.model_size, language)
+        context = f"<|startofprev|> {self._hint}" if self._hint else ""
+        self._prompt = context + _PROMPT_TEMPLATE.format(lang=language)
 
     def detect_language(self, audio):
         audios = self._og.Audios.open_bytes(self._to_wav(audio))
@@ -111,12 +114,15 @@ class OnnxEngine:
         inputs = self._processor(prompt=self._prompt, audios=audios)
 
         params = og.GeneratorParams(self._model)
+        if self._hint:
+            params.set_search_options(no_repeat_ngram_size=4)
         generator = og.Generator(self._model, params)
         generator.set_inputs(inputs)
+        prefix_length = len(generator.get_sequence(0))
         while not generator.is_done():
             generator.generate_next_token()
 
-        text = self._processor.decode(generator.get_sequence(0))
+        text = self._processor.decode(generator.get_sequence(0)[prefix_length:])
 
         return Transcript(
             text=self._clean(text.strip()),

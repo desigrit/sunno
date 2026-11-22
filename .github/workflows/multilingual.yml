@@ -6,6 +6,29 @@ on:
 permissions:
   contents: read
 jobs:
+  winui:
+    runs-on: windows-2025
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Compile the native app
+        run: dotnet build app/Sunno.csproj -c Release -p:Platform=x64 -r win-x64
+      - name: Exercise the native language pickers
+        run: |
+          dotnet publish tests/windows-ui/AppearanceTests.csproj -c Release -o "$env:RUNNER_TEMP/pickers"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:SUNNO_LANGUAGE_TEST_ONLY = "1"
+          $env:SUNNO_APPEARANCE_TEST_OUTPUT = "$env:GITHUB_WORKSPACE/picker-images"
+          $probe = Start-Process "$env:RUNNER_TEMP/pickers/AppearanceTests.exe" -Wait -PassThru -WindowStyle Hidden
+          exit $probe.ExitCode
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winui-language-pickers
+          path: picker-images
+          retention-days: 1
   native-windows:
     strategy:
       fail-fast: false

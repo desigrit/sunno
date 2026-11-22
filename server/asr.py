@@ -146,10 +146,14 @@ class CTranslate2Engine:
         expired because unbounded feedback of the model's own output can seed hallucination
         loops - the same reason condition_on_previous_text stays off.
         """
+        from .spoken_language import script_hint
+        hint = script_hint(self.settings.model_size, self._language)
+        if hint and self._language == "hi":
+            hint = "यह हिंदी में लिखा हुआ वाक्य है।"
         if not self.settings.use_context_prompt:
-            return None
+            return hint
 
-        parts: list[str] = []
+        parts: list[str] = [hint] if hint else []
         if self.settings.vocabulary:
             parts.append(", ".join(self.settings.vocabulary) + ".")
 

@@ -22,6 +22,18 @@ Read about the [product decisions and model judgment](#product-decisions-and-mod
 
 ## What it does
 
+### Spoken language and translation
+
+Under **Speech model**, open **Spoken language** to search by language name. English is the default.
+Choose a language to keep captions in it, or choose **Auto** on a multilingual Whisper model.
+Auto shows the language it detects and waits for sustained speech before switching. English-only
+models show English. Sunno remembers your preference when you return to a compatible model.
+
+Choose **Translate to** to read completed phrases in another language. The first use downloads
+a 638 MB translation model. Recognition and translation run on your device. Saved transcripts
+keep the original words and timestamps alongside completed translations.
+
+
 ### Engine preview in 1.0.84
 
 The model picker now includes Moonshine Tiny, Small and Medium Streaming for English,

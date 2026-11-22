@@ -14,7 +14,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from fleurs_samples import CONFIGS, fetch
+from fleurs_samples import CONFIGS, accented_english, fetch
 from server.config import FRAME_SAMPLES, SAMPLE_RATE, Settings
 from server.pipeline import CaptionPipeline
 from server.recorder import Recorder
@@ -86,6 +86,11 @@ def main():
             report["captions"].append(dict(language=code, reference=reference, caption=result.text,
                 similarity=round(score, 3), detected=guessed, confidence=round(float(confidence), 3)))
             print(code, round(score, 2), guessed, flush=True)
+        path, reference, accent = accented_english(args.fixtures)
+        model.set_language("en")
+        caption = model.final(load_audio(path)).text
+        report["accented_english"] = dict(accent=accent, reference=reference, caption=caption,
+            similarity=round(SequenceMatcher(None, normalize(reference), normalize(caption), autojunk=False).ratio(), 3))
         recorder.stop()
         stored = json.loads((recorder.folder / "transcript.json").read_text(encoding="utf-8"))["lines"]
         plain = (recorder.folder / "transcript.txt").read_text(encoding="utf-8")
@@ -129,6 +134,7 @@ def main():
                       sustained_switch_s=round(switch,3) if switch is not None else None)
         args.report.write_text(json.dumps(report, indent=2, ensure_ascii=False),encoding="utf-8")
         print(json.dumps({k:v for k,v in report.items() if k!="captions"}), flush=True)
+        assert report["accented_english"]["similarity"] > .35
         assert first is not None and switch is not None and not premature, "Live language switch check failed"
         assert all(row["similarity"] > .12 for row in report["captions"]), "Reference and caption disagree"
 

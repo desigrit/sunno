@@ -102,7 +102,9 @@ public partial class App : Application
             started = true;
             try
             {
-                if (Environment.GetEnvironmentVariable("SUNNO_UPDATE_TEST_ONLY") == "1")
+                if (Environment.GetEnvironmentVariable("SUNNO_LANGUAGE_TEST_ONLY") == "1")
+                    await RunLanguageChecks(root);
+                else if (Environment.GetEnvironmentVariable("SUNNO_UPDATE_TEST_ONLY") == "1")
                     await RunUpdateChecks(root);
                 else
                 {
@@ -134,6 +136,41 @@ public partial class App : Application
         if (!condition) throw new Exception(message);
         _checks++;
         Console.WriteLine($"PASS {message}");
+    }
+
+    private async Task RunLanguageChecks(Grid root)
+    {
+        var panel = new StackPanel { Width = 240, VerticalAlignment = VerticalAlignment.Center };
+        var spoken = new LanguagePicker();
+        var translate = new LanguagePicker();
+        panel.Children.Add(spoken);
+        panel.Children.Add(translate);
+        root.Children.Clear();
+        root.Children.Add(panel);
+        spoken.Configure("Spoken language", new[] { "en" }, "en");
+        Check(!spoken.IsEnabled, "English-only model offers a single language");
+        spoken.Configure("Spoken language", new[] { "auto", "en", "es", "fr", "ja", "ar" }, "auto", "es");
+        translate.Configure("Translate to", new[] { "off", "pt", "de" }, "off");
+        Check(AutomationProperties.GetName(spoken).Contains("Auto ("), "Detected language is announced");
+        foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
+        {
+            root.RequestedTheme = theme;
+            await Task.Delay(120);
+            await Capture(root, $"languages-{theme}.png");
+        }
+        var menu = (Flyout)spoken.Flyout;
+        menu.ShowAt(spoken);
+        await Task.Delay(150);
+        var content = (StackPanel)menu.Content;
+        var input = content.Children.OfType<TextBox>().Single();
+        var choices = content.Children.OfType<ListView>().Single();
+        input.Text = "français";
+        Check(choices.Items.Count == 1, "Search finds a language by its native name");
+        input.Text = "zzzzzz";
+        Check(choices.Items.Count == 0, "No matching language is selectable");
+        input.Text = "ja";
+        await Capture(content, "language-search.png");
+        menu.Hide();
     }
 
     private async Task RunChecks(Grid root, AppearancePicker picker)

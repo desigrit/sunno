@@ -22,6 +22,8 @@ public sealed class LanguagePicker : Button
     private readonly TextBox _search = new() { PlaceholderText = "Search languages" };
     private readonly ListView _list = new() { MaxHeight = 250, IsItemClickEnabled = true };
     private readonly TextBlock _empty = new() { Text = "No matching languages", Margin = new Thickness(6) };
+    private readonly TextBlock _download = new() { Text = "First use downloads a 638 MB translation model.",
+        TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(6, 4, 6, 0) };
     private readonly Flyout _menu = new();
     private Option[] _options = Array.Empty<Option>();
     private string _selected = "";
@@ -48,6 +50,7 @@ public sealed class LanguagePicker : Button
         panel.Children.Add(_search);
         panel.Children.Add(_list);
         panel.Children.Add(_empty);
+        panel.Children.Add(_download);
         _menu.Content = panel;
         Flyout = _menu;
         _menu.Opened += (_, _) => { _search.Text = ""; Filter(); _search.Focus(FocusState.Programmatic); };
@@ -61,6 +64,7 @@ public sealed class LanguagePicker : Button
                           bool preparing = false)
     {
         _selected = selected;
+        _download.Visibility = title == "Translate to" && selected == "off" ? Visibility.Visible : Visibility.Collapsed;
         _title.Text = title;
         _options = codes.Select(code => new Option(code, LanguageName(code), LanguageName(code, native: true)))
             .OrderBy(o => o.Code is "off" or "auto" ? 0 : 1)
@@ -72,7 +76,7 @@ public sealed class LanguagePicker : Button
         AutomationProperties.SetName(this, $"{title}, {_value.Text}");
         AutomationProperties.SetName(_list, title);
         ToolTipService.SetToolTip(this, title == "Translate to" && selected == "off"
-            ? "Translate completed captions locally. The first language downloads a 635 MB model." : $"{title}, {value}");
+            ? "Translate completed captions locally. The first language downloads a 638 MB model." : $"{title}, {value}");
         if (_menu.IsOpen) Filter();
     }
 

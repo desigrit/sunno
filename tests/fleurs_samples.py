@@ -40,3 +40,22 @@ def fetch(directory, language, count=2):
     index.write_text(json.dumps(clips, ensure_ascii=False), encoding="utf-8")
     return [(directory / c["file"], c["text"]) for c in clips]
 
+
+
+def accented_english(directory):
+    """EDACC validation row 6, an accent-labeled Southern British English speaker."""
+    directory = Path(directory) / "edacc"
+    directory.mkdir(parents=True, exist_ok=True)
+    path, info = directory / "en.wav", directory / "reference.json"
+    if not path.is_file() or not info.is_file():
+        url = ("https://datasets-server.huggingface.co/rows?dataset=edinburghcstr%2Fedacc"
+               "&config=default&split=validation&offset=6&length=1")
+        with urllib.request.urlopen(url, timeout=60) as response:
+            row = json.load(response)["rows"][0]["row"]
+        if row["speaker"] != "EDACC-C06-A" or row["accent"] != "Southern British English":
+            raise RuntimeError("EDACC reference row has changed.")
+        with urllib.request.urlopen(row["audio"][0]["src"], timeout=60) as response:
+            path.write_bytes(response.read())
+        info.write_text(json.dumps({"accent": row["accent"], "text": row["text"]}), encoding="utf-8")
+    meta = json.loads(info.read_text(encoding="utf-8"))
+    return path, meta["text"], meta["accent"]
