@@ -86,7 +86,7 @@ def main():
             report["captions"].append(dict(language=code, reference=reference, caption=result.text,
                 similarity=round(score, 3), detected=guessed, confidence=round(float(confidence), 3)))
             print(code, round(score, 2), guessed, flush=True)
-        path, reference, accent = accented_english(args.fixtures)
+        path, reference, accent = accented_english()
         model.set_language("en")
         caption = model.final(load_audio(path)).text
         report["accented_english"] = dict(accent=accent, reference=reference, caption=caption,

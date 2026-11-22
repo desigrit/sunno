@@ -22,9 +22,12 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $env:SUNNO_LANGUAGE_TEST_ONLY = "1"
           $env:SUNNO_APPEARANCE_TEST_OUTPUT = "$env:GITHUB_WORKSPACE/picker-images"
-          $probe = Start-Process "$env:RUNNER_TEMP/pickers/AppearanceTests.exe" -Wait -PassThru -WindowStyle Hidden
+          $probe = Start-Process "$env:RUNNER_TEMP/pickers/AppearanceTests.exe" -Wait -PassThru -WindowStyle Hidden -RedirectStandardError "$env:RUNNER_TEMP/picker-stderr" -RedirectStandardOutput "$env:RUNNER_TEMP/picker-stdout"
+          Get-Content "$env:RUNNER_TEMP/picker-stderr","$env:RUNNER_TEMP/picker-stdout"
+          if (Test-Path picker-images/failure.txt) { Get-Content picker-images/failure.txt }
           exit $probe.ExitCode
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: winui-language-pickers
           path: picker-images

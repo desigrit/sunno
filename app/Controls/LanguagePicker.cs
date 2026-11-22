@@ -26,6 +26,7 @@ public sealed class LanguagePicker : Button
         TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(6, 4, 6, 0) };
     private readonly Flyout _menu = new();
     private Option[] _options = Array.Empty<Option>();
+    private Option[] _matches = Array.Empty<Option>();
     private string _selected = "";
     public event Action<string>? Chosen;
 
@@ -35,7 +36,8 @@ public sealed class LanguagePicker : Button
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
         Margin = new Thickness(8, 0, 8, 0);
         Padding = new Thickness(8, 4, 8, 4);
-        Style = (Style)Application.Current.Resources["SubtleButtonStyle"];
+        if (Application.Current.Resources.TryGetValue("SubtleButtonStyle", out var subtle) && subtle is Style style)
+            Style = style;
         var row = new Grid { ColumnSpacing = 6 };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -56,7 +58,10 @@ public sealed class LanguagePicker : Button
         _menu.Opened += (_, _) => { _search.Text = ""; Filter(); _search.Focus(FocusState.Programmatic); };
         _search.TextChanged += (_, _) => Filter();
         _search.KeyDown += OnSearchKey;
-        _list.ItemClick += (_, e) => Select((Option)e.ClickedItem);
+        _list.ItemClick += (_, e) =>
+        {
+            if (_matches.FirstOrDefault(o => o.Name == e.ClickedItem as string) is Option chosen) Select(chosen);
+        };
         AutomationProperties.SetName(_search, "Search languages");
     }
 
@@ -94,17 +99,17 @@ public sealed class LanguagePicker : Button
     private void Filter()
     {
         string query = _search.Text.Trim();
-        var options = _options.Where(o => new[] { o.Code, o.Name, o.Native }.Any(s =>
+        _matches = _options.Where(o => new[] { o.Code, o.Name, o.Native }.Any(s =>
             CultureInfo.CurrentCulture.CompareInfo.IndexOf(s, query,
                 CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace) >= 0)).ToArray();
-        _list.ItemsSource = options;
-        _list.SelectedItem = options.FirstOrDefault(o => o.Code == _selected);
-        _empty.Visibility = options.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        _list.ItemsSource = _matches.Select(o => o.Name).ToArray();
+        _list.SelectedIndex = Array.FindIndex(_matches, o => o.Code == _selected);
+        _empty.Visibility = _matches.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnSearchKey(object sender, KeyRoutedEventArgs e)
     {
-        if (_list.Items.FirstOrDefault() is not Option first) return;
+        if (_matches.FirstOrDefault() is not Option first) return;
         if (e.Key == VirtualKey.Enter) { Select(first); e.Handled = true; }
         if (e.Key == VirtualKey.Down)
         {

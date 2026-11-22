@@ -34,7 +34,7 @@ public partial class App : Application
         InitializeComponent();
         UnhandledException += (_, args) =>
         {
-            Console.Error.WriteLine(args.Exception);
+            ReportFailure(args.Exception);
             args.Handled = true;
             Environment.Exit(1);
         };
@@ -120,7 +120,7 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine(ex);
+                ReportFailure(ex);
                 _appearance.Dispose();
                 _window.Close();
                 Environment.Exit(1);
@@ -129,6 +129,15 @@ public partial class App : Application
         _window.AppWindow.Resize(new SizeInt32(720, 430));
         // Show without activating, so the user's existing Sunno stays undisturbed.
         _window.AppWindow.Show(false);
+    }
+
+    private static void ReportFailure(Exception ex)
+    {
+        Console.Error.WriteLine(ex);
+        var output = Environment.GetEnvironmentVariable("SUNNO_APPEARANCE_TEST_OUTPUT");
+        if (string.IsNullOrEmpty(output)) return;
+        Directory.CreateDirectory(output);
+        File.WriteAllText(Path.Combine(output, "failure.txt"), ex.ToString());
     }
 
     private void Check(bool condition, string message)
