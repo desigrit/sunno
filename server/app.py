@@ -340,8 +340,13 @@ async def run(settings: Settings, args: argparse.Namespace) -> None:
         loop.call_soon_threadsafe(events.put_nowait, event)
         if event.get("type") in ("final", "correction"):
             translations.submit(event)
-        elif event.get("type") == "translation" and recorder["active"] is not None:
-            recorder["active"].add_translation(event)
+        elif event.get("type") == "translation":
+            active = recorder["active"]
+            if active is not None:
+                try:
+                    active.add_translation(event)
+                except OSError:
+                    pass
 
     # One recording at a time, held in a dict so the closures below and the audio tap all see
     # the same object without a nonlocal chain through several nested functions.

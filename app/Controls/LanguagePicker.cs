@@ -99,21 +99,39 @@ public sealed class LanguagePicker : Button
     private void Filter()
     {
         string query = _search.Text.Trim();
-        _matches = _options.Where(o => new[] { o.Code, o.Name, o.Native }.Any(s =>
-            CultureInfo.CurrentCulture.CompareInfo.IndexOf(s, query,
-                CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace) >= 0)).ToArray();
+        var compare = CultureInfo.CurrentCulture.CompareInfo;
+        const CompareOptions comparison = CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace;
+        int Rank(Option option)
+        {
+            int rank = 3;
+            foreach (var value in new[] { option.Code, option.Name, option.Native })
+            {
+                if (compare.Compare(value, query, comparison) == 0) return 0;
+                var index = compare.IndexOf(value, query, comparison);
+                if (index >= 0) rank = Math.Min(rank, index == 0 ? 1 : 2);
+            }
+            return rank;
+        }
+        _matches = query.Length == 0 ? _options : _options.Select(o => (Option: o, Rank: Rank(o)))
+            .Where(item => item.Rank < 3).OrderBy(item => item.Rank).Select(item => item.Option).ToArray();
         _list.ItemsSource = _matches.Select(o => o.Name).ToArray();
-        _list.SelectedIndex = Array.FindIndex(_matches, o => o.Code == _selected);
+        _list.SelectedIndex = query.Length == 0 ? Array.FindIndex(_matches, o => o.Code == _selected)
+            : _matches.Length == 0 ? -1 : 0;
+        if (_list.SelectedItem != null) _list.ScrollIntoView(_list.SelectedItem);
         _empty.Visibility = _matches.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnSearchKey(object sender, KeyRoutedEventArgs e)
     {
-        if (_matches.FirstOrDefault() is not Option first) return;
-        if (e.Key == VirtualKey.Enter) { Select(first); e.Handled = true; }
+        if (_matches.Length == 0) return;
+        if (e.Key == VirtualKey.Enter && _list.SelectedIndex >= 0)
+        {
+            Select(_matches[_list.SelectedIndex]);
+            e.Handled = true;
+        }
         if (e.Key == VirtualKey.Down)
         {
-            _list.SelectedIndex = 0;
+            if (_list.SelectedIndex < 0) _list.SelectedIndex = 0;
             _list.Focus(FocusState.Keyboard);
             e.Handled = true;
         }

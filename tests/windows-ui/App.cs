@@ -43,6 +43,30 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         _window = new Window { Title = "Sunno appearance check" };
+        if (Environment.GetEnvironmentVariable("SUNNO_LANGUAGE_TEST_ONLY") == "1")
+        {
+            var page = new LanguageTestPage();
+            _window.Content = page;
+            page.Loaded += async (_, _) =>
+            {
+                try
+                {
+                    await RunLanguageChecks(page.TestSurface);
+                    Console.WriteLine($"{_checks} language UI checks passed.");
+                    _window.Close();
+                    Environment.Exit(0);
+                }
+                catch (Exception ex)
+                {
+                    ReportFailure(ex);
+                    _window.Close();
+                    Environment.Exit(1);
+                }
+            };
+            _window.AppWindow.Resize(new SizeInt32(350, 260));
+            _window.AppWindow.Show(false);
+            return;
+        }
         var root = (Grid)XamlReader.Load("""
             <Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                   Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
@@ -102,9 +126,7 @@ public partial class App : Application
             started = true;
             try
             {
-                if (Environment.GetEnvironmentVariable("SUNNO_LANGUAGE_TEST_ONLY") == "1")
-                    await RunLanguageChecks(root);
-                else if (Environment.GetEnvironmentVariable("SUNNO_UPDATE_TEST_ONLY") == "1")
+                if (Environment.GetEnvironmentVariable("SUNNO_UPDATE_TEST_ONLY") == "1")
                     await RunUpdateChecks(root);
                 else
                 {
@@ -158,7 +180,7 @@ public partial class App : Application
         root.Children.Add(panel);
         spoken.Configure("Spoken language", new[] { "en" }, "en");
         Check(!spoken.IsEnabled, "English-only model offers a single language");
-        spoken.Configure("Spoken language", new[] { "auto", "en", "es", "fr", "ja", "ar" }, "auto", "es");
+        spoken.Configure("Spoken language", new[] { "auto", "en", "es", "fr", "ja", "ar", "hi", "zh" }, "auto", "es");
         translate.Configure("Translate to", new[] { "off", "pt", "de" }, "off");
         Check(AutomationProperties.GetName(spoken).Contains("Auto ("), "Detected language is announced");
         foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
@@ -173,6 +195,9 @@ public partial class App : Application
         var content = (StackPanel)menu.Content;
         var input = content.Children.OfType<TextBox>().Single();
         var choices = content.Children.OfType<ListView>().Single();
+        Check(choices.SelectedItem as string == "Auto", "Opening the picker preserves the selected value");
+        input.Text = "hi";
+        Check(choices.SelectedItem as string == "Hindi", "An exact language code wins over a substring");
         input.Text = "français";
         Check(choices.Items.Count == 1, "Search finds a language by its native name");
         input.Text = "zzzzzz";
