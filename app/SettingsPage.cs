@@ -338,6 +338,7 @@ public sealed partial class MainWindow
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex,
             computeDevice: _settings.ForceCpu ? "cpu" : "auto",
+            spokenLanguage: _settings.SpokenLanguage, translateTo: _settings.TranslateTo,
             recordingsPath: _settings.RecordingsPath,
             // Handed straight back so the restart continues the same recording instead of
             // quietly ending it and beginning another. Changing microphone mid-meeting is a

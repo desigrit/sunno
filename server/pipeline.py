@@ -25,6 +25,9 @@ from .config import FRAME_MS, FRAME_SAMPLES, SAMPLE_RATE, Settings
 Emit = Callable[[dict], None]
 
 
+from .spoken_language import Choice, PhraseLanguages, pin
+
+
 class SessionController:
     """Run/pause state shared between the WebSocket handler and the capture thread.
 
@@ -70,6 +73,7 @@ class SessionController:
 
 @dataclass
 class _Job:
+    # The selection is captured on speech onset, before partials or finals are queued.
     utterance_id: int
     audio: np.ndarray | None
     is_final: bool
@@ -79,6 +83,9 @@ class _Job:
     chunks: tuple[np.ndarray, ...] = ()
     generation: int = 0
     queued_at: float = 0.0
+    choice: Choice | None = None
+    voiced: tuple = ()
+    language: str | None = None
     reset_only: bool = False
 
     def samples(self) -> np.ndarray:
@@ -90,8 +97,9 @@ class _Job:
 class AsrWorker:
     """Serialises GPU work, preferring finals and collapsing superseded partials."""
 
-    def __init__(self, engine: SpeechEngine, emit: Emit) -> None:
+    def __init__(self, engine: SpeechEngine, emit: Emit, languages=None) -> None:
         self._engine = engine
+        self._languages = PhraseLanguages(languages) if languages else None
         self._emit = emit
         self._lock = threading.Condition()
         self._pending_partial: _Job | None = None
@@ -253,6 +261,13 @@ class AsrWorker:
                 continue
             started = time.monotonic()
             try:
+                if self._languages and job.choice:
+                    job.language = self._languages.for_job(self._engine, job)
+                    if job.language is None:
+                        if job.is_final:
+                            self._emit({"type": "discard", "id": job.utterance_id})
+                        continue
+                    pin(self._engine, job.language)
                 result = self._decode(job)
             except Exception as exc:  # keep the pipeline alive on a bad decode
                 self._recover_stream()
@@ -285,6 +300,7 @@ class AsrWorker:
                     "type": "final" if job.is_final else "partial",
                     "id": job.utterance_id,
                     "text": result.text,
+                    "language": job.language,
                     "speaker_id": job.speaker_id,
                     "speaker": job.speaker_label,
                     "clarity": result.clarity,
@@ -327,11 +343,13 @@ class CaptionPipeline:
         speaker: "SpeakerIdentifier | None" = None,
         on_audio: Callable[[np.ndarray], None] | None = None,
         speaker_labels=None,
+        languages=None,
     ) -> None:
         from .preprocess import StreamingAudioConditioner
         from .vad import StreamingSileroVAD
 
         self.settings = settings
+        self.languages = languages
         self._emit = emit
         self._should_run = should_run or (lambda: True)
         # Set once and read on every frame. A recording outlives any one capture session --
@@ -345,7 +363,7 @@ class CaptionPipeline:
             speaker, emit, settings.enable_speakers and settings.speaker_labels)
         self._owns_labels = speaker_labels is None
         self._condition = StreamingAudioConditioner(settings)
-        self._worker = AsrWorker(engine, self._labels.emit_caption)
+        self._worker = AsrWorker(engine, self._labels.emit_caption, languages)
         self._worker_started = False
 
         pre_roll_frames = max(1, int(settings.pre_roll_ms / FRAME_MS))
@@ -366,6 +384,8 @@ class CaptionPipeline:
         self._speech_run = 0
         self._silence_run = 0
         self._buffer = []
+        self._phrase_choice = None
+        self._voiced = []
         self._last_partial_at = 0.0
         self._utterance_started_at = 0.0
         self._pre_roll.clear()
@@ -454,6 +474,9 @@ class CaptionPipeline:
             return
 
         self._buffer.append(conditioned)
+        if (self._phrase_choice and self._phrase_choice.code == 'auto'
+                and prob >= self.settings.vad_end_threshold):
+            self._voiced.append(conditioned)
         if self._labels.enabled and prob >= self.settings.vad_end_threshold:
             self._speaker_buffer.append(conditioned)
             self._speaker_frames += 1
@@ -478,6 +501,9 @@ class CaptionPipeline:
         self._speech_run = 0
         self._silence_run = 0
         self._utterance_id += 1
+        self._phrase_choice = self.languages.choice() if self.languages else None
+        self._voiced = (list(self._pre_roll)[-self.settings.start_frames:]
+                        if self._phrase_choice and self._phrase_choice.code == 'auto' else [])
         self._utterance_started_at = time.time()
         self._buffer = list(self._pre_roll)  # keep word onsets
         self._speaker_buffer = deque((f for f in self._speaker_pre_roll if f is not None),
@@ -504,7 +530,7 @@ class CaptionPipeline:
                                  expected_generation=self._speaker_generation)
         self._worker.submit_partial(
             _Job(self._utterance_id, None, is_final=False, chunks=tuple(self._buffer),
-                 started_at=self._utterance_started_at)
+                 started_at=self._utterance_started_at, choice=self._phrase_choice, voiced=tuple(self._voiced))
         )
 
     def _finalise(self, continued: bool = False) -> None:
@@ -520,7 +546,7 @@ class CaptionPipeline:
                                  expected_generation=self._speaker_generation)
             self._worker.submit_final(
                 _Job(self._utterance_id, None, is_final=True, chunks=tuple(buffer),
-                     started_at=self._utterance_started_at)
+                     started_at=self._utterance_started_at, choice=self._phrase_choice, voiced=tuple(self._voiced))
             )
         else:
             self._labels.discard(self._utterance_id)

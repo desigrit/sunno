@@ -262,6 +262,13 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </ScrollViewer>
+                        <StackPanel x:Name="LanguageControls">
+                            <controls:LanguagePicker x:Name="SpokenPicker" />
+                            <controls:LanguagePicker x:Name="TranslationPicker" />
+                            <TextBlock x:Name="LanguageNotice" Visibility="Collapsed" Margin="16,2,16,4"
+                                       TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                       AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
             </controls:CollapsibleSidebar>
@@ -327,7 +334,7 @@
                                          what makes per-word confidence on hover possible.
                                          Content is built in code so each word can be styled
                                          and located individually. -->
-                                    <RichTextBlock local:WordInlines.Line="{x:Bind}"
+                                    <RichTextBlock TextReadingOrder="DetectFromContent" local:WordInlines.Line="{x:Bind}"
                                                    IsTextSelectionEnabled="True"
                                                    TextWrapping="Wrap"
                                                    Opacity="{x:Bind local:MainWindow.LineOpacity(IsFinal, IsSelf), Mode=OneWay}"

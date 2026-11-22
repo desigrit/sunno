@@ -1,0 +1,44 @@
+name: Multilingual captions
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/spoken-languages]
+permissions:
+  contents: read
+jobs:
+  native-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            engine: ct2
+            arch: x64
+          - runner: windows-11-arm
+            engine: onnx
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.arch }}
+      - run: python -m pip install numpy av onnxruntime sentencepiece==0.2.1 huggingface_hub
+      - if: matrix.engine == 'onnx'
+        run: python -m pip install onnxruntime-genai==0.15.2
+      - if: matrix.engine == 'ct2'
+        run: python -m pip install faster-whisper==1.2.1
+      - run: python tests/test_spoken_languages.py
+      - name: Measure native speech recognition and check saved captions
+        run: python tests/benchmark_multilingual.py --engine ${{ matrix.engine }} --fixtures "$env:RUNNER_TEMP/fleurs" --report report.json --download
+      - name: Verify local French to Portuguese translation
+        run: python tests/test_local_translation.py --real
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-${{ matrix.arch }}-language-results
+          path: report.json
+          retention-days: 1
+

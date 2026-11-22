@@ -167,11 +167,13 @@ class Recorder:
         row = {
             "_session": self._session,
             "id": event.get("id"),
+            "_started_at": event.get("started_at"),
             "at": round(at, 2),
             "speaker": event.get("speaker"),
             "speaker_id": event.get("speaker_id"),
             "text": event.get("text", ""),
             "words": event.get("words") or [],
+            "language": event.get("language"),
         }
         with self._transcript_lock:
             if self._closed:
@@ -189,6 +191,15 @@ class Recorder:
                 return
             self._jsonl.write(json.dumps({**event, "_session": self._session},
                                         ensure_ascii=False) + "\n")
+            self._jsonl.flush()
+
+    def add_translation(self, event: dict) -> None:
+        record = {k: event[k] for k in ("type", "id", "started_at", "original", "text", "target_language")}
+        with self._transcript_lock:
+            if self._closed:
+                return
+            record["_session"] = self._session
+            self._jsonl.write(json.dumps(record, ensure_ascii=False) + "\n")
             self._jsonl.flush()
 
     def detach(self) -> None:
@@ -214,6 +225,7 @@ class Recorder:
 
 def _read_lines(folder: Path) -> list[dict]:
     out: list[dict] = []
+    translated = {}
     corrections: dict[tuple, dict] = {}
     merges: dict[tuple, int] = {}
     names: dict[tuple, str] = {}
@@ -234,7 +246,9 @@ def _read_lines(folder: Path) -> list[dict]:
             continue
         session = row.get("_session")
         kind = row.get("type")
-        if kind == "speaker_label":
+        if kind == "translation":
+            translated[(session, row["id"], row["started_at"], row["original"])] = row
+        elif kind == "speaker_label":
             corrections[(session, row.get("id"))] = row
         elif kind == "speaker_merged":
             merges[(session, row["from"])] = row["into"]
@@ -248,6 +262,9 @@ def _read_lines(folder: Path) -> list[dict]:
     for row in out:
         session = row.pop("_session", None)
         utterance = row.pop("id", None)
+        match = translated.get((session, utterance, row.pop("_started_at", None), row.get("text")))
+        if match:
+            row["translation"] = {"language": match["target_language"], "text": match["text"]}
         correction = corrections.get((session, utterance)) if utterance is not None else None
         if correction is not None:
             row["speaker_id"] = correction.get("speaker_id")
@@ -380,6 +397,8 @@ def finalise(folder: Path, started_at: float | None = None) -> Saved:
     for ln in lines:
         who = ln.get("speaker") or "Speaker"
         body.append(f"[{_clock(ln.get('at', 0.0))}] {who}: {ln.get('text', '')}".rstrip())
+        if translated := ln.get("translation"):
+            body.append(f"    [{translated['language']}] {translated['text']}")
     (folder / TRANSCRIPT_TXT).write_text("\n".join(body) + "\n", encoding="utf-8")
 
     (folder / JSONL_NAME).unlink(missing_ok=True)

@@ -37,3 +37,5 @@ nvidia-cudnn-cu12==9.*
 # sounddevice/PortAudio has no loopback flag; this PyAudio fork exposes output
 # endpoints as input devices. ~0.09 MB, used only by server/loopback.py.
 pyaudiowpatch
+
+sentencepiece==0.2.1

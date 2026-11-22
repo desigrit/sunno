@@ -12,6 +12,8 @@ namespace Sunno.Services;
 /// </summary>
 public sealed class AppSettings
 {
+    public string SpokenLanguage { get; set; } = "en";
+    public string TranslateTo { get; set; } = "off";
     public string Model { get; set; } = "large-v3";
     public int? DeviceIndex { get; set; }
     /// <summary>A WASAPI output endpoint to caption instead of a microphone.</summary>

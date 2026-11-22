@@ -83,7 +83,7 @@ public static class WordInlines
     private static void OnLinePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (sender is not CaptionLine line) return;
-        if (e.PropertyName is not (nameof(CaptionLine.Text) or nameof(CaptionLine.Words))) return;
+        if (e.PropertyName is not (nameof(CaptionLine.Text) or nameof(CaptionLine.Words) or nameof(CaptionLine.Translation))) return;
         if (_owners.TryGetValue(line, out var block)) Render(block, line);
     }
 
@@ -96,10 +96,10 @@ public static class WordInlines
             block.Blocks.Add(paragraph);
 
             var words = line.Words;
-            if (words is null || words.Count == 0)
+            if (line.Translation is not null || words is null || words.Count == 0)
             {
                 // Provisional text, or a model that returned no word data.
-                paragraph.Inlines.Add(new Run { Text = line.Text });
+                paragraph.Inlines.Add(new Run { Text = line.Translation ?? line.Text });
                 block.SetValue(RangesProperty, null);
                 AttachTooltip(block);
                 return;
@@ -183,7 +183,7 @@ public static class WordInlines
             {
                 block.Blocks.Clear();
                 var p = new Paragraph();
-                p.Inlines.Add(new Run { Text = line.Text });
+                p.Inlines.Add(new Run { Text = line.Translation ?? line.Text });
                 block.Blocks.Add(p);
                 block.SetValue(RangesProperty, null);
                 AttachTooltip(block);

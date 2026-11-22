@@ -92,6 +92,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private readonly CaptionScrollFollower _captionScroll;
 
     private CaptionLine? _provisional;
+    private string _translationTarget = "off";
     private int _currentUtterance = -1;
     private bool _running = true;
     private bool _captureWanted = true;
@@ -253,6 +254,19 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         }
 
         _client.Partial += ev => _ui.TryEnqueue(() => OnPartial(ev));
+        SpokenPicker.Configure("Spoken language", Array.Empty<string>(), "en");
+        TranslationPicker.Configure("Translate to", Array.Empty<string>(), "off");
+        SpokenPicker.Chosen += code => _ = _client.SetLanguageAsync(code, false);
+        TranslationPicker.Chosen += code => _ = _client.SetLanguageAsync(code, true);
+        _client.LanguageChanged += state => QueueCurrentClientEvent(() => OnLanguageState(state));
+        _client.Translated += translation => QueueCurrentClientEvent(() =>
+        {
+            if (translation.Target != _translationTarget) return;
+            var at = (long)(translation.StartedAt * 1000);
+            var line = Lines.LastOrDefault(l => l.IsFinal && l.UtteranceId == translation.Id &&
+                l.SpokenAt?.ToUnixTimeMilliseconds() == at && l.Text == translation.Original);
+            if (line != null) line.Translation = translation.Text;
+        });
         _client.Final += ev => _ui.TryEnqueue(() => OnFinal(ev));
         _client.Discarded += id => _ui.TryEnqueue(() => OnDiscarded(id));
         _client.Level += lv => _ui.TryEnqueue(() => OnLevel(lv));
@@ -359,6 +373,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex,
             computeDevice: _settings.ForceCpu ? "cpu" : "auto",
+            spokenLanguage: _settings.SpokenLanguage, translateTo: _settings.TranslateTo,
             recordingsPath: _settings.RecordingsPath,
             // Handed straight back so the restart continues the same recording instead of
             // quietly ending it and beginning another. Changing microphone mid-meeting is a
@@ -497,6 +512,26 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     }
 
     // ---------- caption stream ----------
+
+    private void OnLanguageState(LanguageState state)
+    {
+        if (state.Kind == "spoken_language")
+        {
+            SpokenPicker.Configure("Spoken language", state.Choices, state.Selected, state.Detected);
+            if (state.Accepted is string code) _settings.SpokenLanguage = code;
+        }
+        else
+        {
+            if (_translationTarget != state.Selected)
+                foreach (var line in Lines) line.Translation = null;
+            _translationTarget = state.Selected;
+            TranslationPicker.Configure("Translate to", state.Choices, state.Selected, preparing: state.Preparing);
+            if (state.Accepted is string code) _settings.TranslateTo = code;
+        }
+        if (state.Accepted != null) _settings.Save();
+        LanguageNotice.Text = state.Message ?? "";
+        LanguageNotice.Visibility = state.Message == null ? Visibility.Collapsed : Visibility.Visible;
+    }
 
     private void OnPartial(CaptionEvent ev)
     {
@@ -1602,7 +1637,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         var limit = ModelPickerLayout.MaximumListHeight(
             SpeakerPaneLayout.ActualHeight,
             SpeakerPaneLayout.Padding.Top + SpeakerPaneLayout.Padding.Bottom,
-            ModelToggle.DesiredSize.Height,
+            ModelToggle.DesiredSize.Height + LanguageControls.ActualHeight,
             ModelSection.Margin.Top + ModelSection.Margin.Bottom);
         ModelPanel.MaxHeight = limit;
         return Math.Min(ModelOptions.DesiredSize.Height, limit);
@@ -1798,6 +1833,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             startStopped: _startedPaused,
             loopbackDevice: _settings.LoopbackDeviceIndex,
             computeDevice: _settings.ForceCpu ? "cpu" : "auto",
+            spokenLanguage: _settings.SpokenLanguage, translateTo: _settings.TranslateTo,
             recordingsPath: _settings.RecordingsPath,
             // Handed straight back so the restart continues the same recording instead of
             // quietly ending it and beginning another. Changing microphone mid-meeting is a
@@ -1934,6 +1970,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void OnConnection(bool connected)
     {
         _connected = connected;
+        LanguageControls.IsHitTestVisible = connected;
+        if (!connected)
+        {
+            SpokenPicker.IsEnabled = false;
+            TranslationPicker.IsEnabled = false;
+        }
         if (connected)
         {
             _ = _client.SetSpeakerLabelsAsync(_settings.SpeakerLabelsEnabled);

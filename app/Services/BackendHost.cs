@@ -132,7 +132,8 @@ public sealed class BackendHost : IDisposable
     public string Start(string? device = null, string model = "large-v3", string? vocabulary = null,
                         bool startStopped = false, int? loopbackDevice = null,
                         string? computeDevice = null, string? recordingsPath = null,
-                        string? resumeRecording = null, AudioInputTarget? input = null)
+                        string? resumeRecording = null, AudioInputTarget? input = null,
+                        string spokenLanguage = "en", string translateTo = "off")
     {
         if (IsRunning) return "already running";
 
@@ -171,7 +172,8 @@ public sealed class BackendHost : IDisposable
                    + "Reinstalling Sunno should replace it.";
         }
 
-        var args = new List<string> { "-m", "server.app", "--model", model };
+        var args = new List<string> { "-m", "server.app", "--model", model,
+            "--language", spokenLanguage, "--translate-to", translateTo };
         if (input is not null)
         {
             args.Add("--input-kind"); args.Add(input.Kind);
@@ -303,7 +305,8 @@ public sealed class BackendHost : IDisposable
     public string Restart(string? device, string model, string? vocabulary,
                           bool startStopped = false, int? loopbackDevice = null,
                           string? computeDevice = null, string? recordingsPath = null,
-                          string? resumeRecording = null, AudioInputTarget? input = null)
+                          string? resumeRecording = null, AudioInputTarget? input = null,
+                        string spokenLanguage = "en", string translateTo = "off")
     {
         _stopping = true;
         try
@@ -328,18 +331,19 @@ public sealed class BackendHost : IDisposable
             _stopping = false;
         }
         return Start(device, model, vocabulary, startStopped, loopbackDevice, computeDevice,
-                     recordingsPath, resumeRecording, input);
+                     recordingsPath, resumeRecording, input, spokenLanguage, translateTo);
     }
 
     public async Task<string> RestartAsync(string? device, string model, string? vocabulary,
         bool startStopped = false, int? loopbackDevice = null, string? computeDevice = null,
-        string? recordingsPath = null, string? resumeRecording = null, AudioInputTarget? input = null)
+        string? recordingsPath = null, string? resumeRecording = null, AudioInputTarget? input = null,
+                        string spokenLanguage = "en", string translateTo = "off")
     {
         await _restartLock.WaitAsync();
         try
         {
             return await Task.Run(() => Restart(device, model, vocabulary, startStopped,
-                loopbackDevice, computeDevice, recordingsPath, resumeRecording, input));
+                loopbackDevice, computeDevice, recordingsPath, resumeRecording, input, spokenLanguage, translateTo));
         }
         finally { _restartLock.Release(); }
     }

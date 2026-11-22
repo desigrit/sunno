@@ -119,6 +119,7 @@ class CTranslate2Engine:
         from .models import local_whisper_path
 
         self.settings = settings
+        self._language = settings.language or 'en'
         self._model = WhisperModel(
             local_whisper_path(settings.model_size),
             device=settings.device,
@@ -129,6 +130,15 @@ class CTranslate2Engine:
         self._context_updated = 0.0
 
     # --- context -------------------------------------------------------
+    def set_language(self, language):
+        if language != self._language:
+            self._language = language
+            self.clear_context()
+
+    def detect_language(self, audio):
+        code, probability, _ = self._model.detect_language(audio=audio)
+        return code, probability
+
     def _build_prompt(self) -> str | None:
         """Vocabulary plus recent conversation, as Whisper's initial_prompt.
 
@@ -166,7 +176,8 @@ class CTranslate2Engine:
         cfg = self.settings
         segments, _info = self._model.transcribe(
             audio,
-            language=cfg.language,
+            language=self._language,
+            task="transcribe",
             beam_size=beam_size,
             # Temperature fallback only on the final pass: provisional text is replaced
             # moments later anyway, and retries would blow the partial latency budget.
@@ -188,7 +199,7 @@ class CTranslate2Engine:
             seg for seg in segments
             if seg.no_speech_prob < cfg.drop_no_speech_above
         ]
-        text = " ".join(seg.text.strip() for seg in collected).strip()
+        text = "".join(seg.text for seg in collected).strip()
 
         clarity = None
         if collected:
