@@ -196,13 +196,26 @@ public partial class App : Application
         var input = content.Children.OfType<TextBox>().Single();
         var choices = content.Children.OfType<ListView>().Single();
         Check(choices.SelectedItem as string == "Auto", "Opening the picker preserves the selected value");
-        input.Text = "hi";
-        Check(choices.SelectedItem as string == "Hindi", "An exact language code wins over a substring");
-        input.Text = "français";
+        async Task Search(string query)
+        {
+            var changed = new TaskCompletionSource();
+            void Changed(object sender, TextChangedEventArgs e) => changed.TrySetResult();
+            input.TextChanged += Changed;
+            try
+            {
+                input.Text = query;
+                await changed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            }
+            finally { input.TextChanged -= Changed; }
+        }
+        await Search("hi");
+        var hindi = System.Globalization.CultureInfo.GetCultureInfo("hi").DisplayName;
+        Check(Equals(choices.SelectedItem, hindi), $"An exact language code wins over a substring (selected {choices.SelectedItem})");
+        await Search("français");
         Check(choices.Items.Count == 1, "Search finds a language by its native name");
-        input.Text = "zzzzzz";
+        await Search("zzzzzz");
         Check(choices.Items.Count == 0, "No matching language is selectable");
-        input.Text = "ja";
+        await Search("ja");
         await Capture(content, "language-search.png");
         menu.Hide();
     }
