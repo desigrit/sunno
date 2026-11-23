@@ -262,13 +262,8 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </ScrollViewer>
-                        <StackPanel x:Name="LanguageControls">
-                            <controls:LanguagePicker x:Name="SpokenPicker" />
-                            <controls:LanguagePicker x:Name="TranslationPicker" />
-                            <TextBlock x:Name="LanguageNotice" Visibility="Collapsed" Margin="16,2,16,4"
-                                       TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
-                                       AutomationProperties.LiveSetting="Polite" />
-                        </StackPanel>
+                        <controls:LanguageSection x:Name="LanguageControls"
+                                                  SizeChanged="OnSpeakerPaneSizeChanged" />
                     </StackPanel>
                 </Grid>
             </controls:CollapsibleSidebar>

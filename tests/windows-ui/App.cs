@@ -172,10 +172,10 @@ public partial class App : Application
     private async Task RunLanguageChecks(Grid root)
     {
         var panel = new StackPanel { Width = 240, VerticalAlignment = VerticalAlignment.Center };
-        var spoken = new LanguagePicker();
-        var translate = new LanguagePicker();
-        panel.Children.Add(spoken);
-        panel.Children.Add(translate);
+        var section = new LanguageSection();
+        var spoken = section.SpokenPicker;
+        var translate = section.TranslationPicker;
+        panel.Children.Add(section);
         root.Children.Clear();
         root.Children.Add(panel);
         spoken.Configure("Spoken language", new[] { "en" }, "en");
@@ -187,11 +187,30 @@ public partial class App : Application
         {
             root.RequestedTheme = theme;
             await Task.Delay(120);
+            var peer = FrameworkElementAutomationPeer.CreatePeerForElement(section.Disclosure);
+            var disclosure = (IExpandCollapseProvider)peer.GetPattern(PatternInterface.ExpandCollapse);
+            Check(peer.GetName() == "Language" && disclosure.ExpandCollapseState == ExpandCollapseState.Collapsed,
+                  "Language is a named, collapsed disclosure");
+            var closedHeight = section.ActualHeight;
+            await Capture(root, $"language-collapsed-{theme}.png");
+            disclosure.Expand();
+            await Task.Delay(350);
+            root.UpdateLayout();
+            Check(section.ActualHeight >= closedHeight + spoken.ActualHeight + translate.ActualHeight - 2 &&
+                  spoken.ActualHeight > 0 && translate.ActualHeight > 0,
+                  "Expanding reveals both language pickers");
             var selectedLabel = ((Panel)spoken.Content).Children.OfType<TextBlock>().Last();
             Check(selectedLabel.Text.Contains("Spanish") && !selectedLabel.IsTextTrimmed,
                   "The detected language fits within the sidebar");
             await Capture(root, $"languages-{theme}.png");
+            disclosure.Collapse();
+            await Task.Delay(350);
+            root.UpdateLayout();
+            Check(Math.Abs(section.ActualHeight - closedHeight) < 1 && AutomationProperties.GetName(spoken).Contains("Spanish"),
+                  "Collapsing reclaims the sidebar space and preserves the detected language");
         }
+        section.Disclosure.IsExpanded = true;
+        await Task.Delay(350);
         var menu = (Flyout)spoken.Flyout;
         menu.ShowAt(spoken);
         await Task.Delay(150);

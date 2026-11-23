@@ -28,6 +28,8 @@
     <Compile Include="../../app/Controls/SkipToCurrentButton.xaml.cs" Link="Controls/SkipToCurrentButton.xaml.cs" />
     <Compile Include="../../app/Services/AppearancePreference.cs" Link="Services/AppearancePreference.cs" />
     <Compile Include="../../app/Models/CaptionLine.cs" Link="Models/CaptionLine.cs" />
+    <Page Include="../../app/Controls/LanguageSection.xaml" Link="Controls/LanguageSection.xaml" />
+    <Compile Include="../../app/Controls/LanguageSection.xaml.cs" Link="Controls/LanguageSection.xaml.cs" />
     <Compile Include="../../app/Controls/LanguagePicker.cs" Link="Controls/LanguagePicker.cs" />
     <Compile Include="../../app/WordInlines.cs" Link="WordInlines.cs" />
     <Page Include="../../app/Controls/AppUpdatePanel.xaml" Link="Controls/AppUpdatePanel.xaml" />
