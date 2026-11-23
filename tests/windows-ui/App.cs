@@ -171,7 +171,41 @@ public partial class App : Application
 
     private async Task RunLanguageChecks(Grid root)
     {
+        static IEnumerable<FrameworkElement> Descendants(DependencyObject parent)
+        {
+            for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, index);
+                if (child is FrameworkElement element) yield return element;
+                foreach (var descendant in Descendants(child)) yield return descendant;
+            }
+        }
+
+        async Task Settle(Func<bool> ready)
+        {
+            var deadline = Environment.TickCount64 + 2500;
+            do
+            {
+                await Task.Delay(32);
+                root.UpdateLayout();
+            } while (!ready() && Environment.TickCount64 < deadline);
+        }
+
         var panel = new StackPanel { Width = 240, VerticalAlignment = VerticalAlignment.Center };
+        var model = new SidebarDisclosure
+        {
+            Header = XamlReader.Load("""
+                <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+                    <TextBlock Text="Speech model" Style="{StaticResource BodyStrongTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock Text="Whisper large-v3" Style="{StaticResource SidebarDetailTextStyle}"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                </StackPanel>
+                """),
+            Content = new ScrollViewer { MaxHeight = 56, Content = new TextBlock { Text = "Whisper large-v3", Margin = new Thickness(16, 6, 16, 6) } }
+        };
+        AutomationProperties.SetName(model, "Speech model");
+        panel.Children.Add(model);
         var section = new LanguageSection();
         var spoken = section.SpokenPicker;
         var translate = section.TranslationPicker;
@@ -191,21 +225,45 @@ public partial class App : Application
             var disclosure = (IExpandCollapseProvider)peer.GetPattern(PatternInterface.ExpandCollapse);
             Check(peer.GetName() == "Language" && disclosure.ExpandCollapseState == ExpandCollapseState.Collapsed,
                   "Language is a named, collapsed disclosure");
+            var modelPeer = FrameworkElementAutomationPeer.CreatePeerForElement(model);
+            var modelPattern = (IExpandCollapseProvider)modelPeer.GetPattern(PatternInterface.ExpandCollapse);
+            Check(modelPattern.ExpandCollapseState == ExpandCollapseState.Collapsed, "Both sections start closed");
+            var subtitle = (TextBlock)((StackPanel)model.Header).Children[1];
+            var label = (TextBlock)section.Disclosure.Header;
+            Check(label.FontSize == subtitle.FontSize && label.FontWeight.Weight == subtitle.FontWeight.Weight &&
+                  label.LineHeight == subtitle.LineHeight && label.FontSize == 11.5, "Language uses the model subtitle typography");
+            var languageLeft = label.TransformToVisual(panel).TransformPoint(new());
+            var modelLeft = subtitle.TransformToVisual(panel).TransformPoint(new());
+            Check(Math.Abs(languageLeft.X - modelLeft.X) < 1 && section.Disclosure.HeaderHeight >= 32,
+                  "Both headers share the same leading edge and Language keeps a full-height target");
             var closedHeight = section.ActualHeight;
+            Check(Math.Abs(closedHeight - section.Disclosure.HeaderHeight) < 1,
+                  "The collapsed row reserves only its clickable header height");
             await Capture(root, $"language-collapsed-{theme}.png");
-            disclosure.Expand();
-            await Task.Delay(350);
-            root.UpdateLayout();
-            Check(section.ActualHeight >= closedHeight + spoken.ActualHeight + translate.ActualHeight - 2 &&
-                  spoken.ActualHeight > 0 && translate.ActualHeight > 0,
-                  "Expanding reveals both language pickers");
+            var header = Descendants(section.Disclosure).OfType<Microsoft.UI.Xaml.Controls.Primitives.ToggleButton>()
+                .Single(button => AutomationProperties.GetAutomationId(button) == "ExpanderToggleButton");
+            var viewport = Descendants(section.Disclosure).OfType<Border>().Single(border => border.Name == "ExpanderContentClip");
+            var togglePeer = FrameworkElementAutomationPeer.CreatePeerForElement(header);
+            var toggle = (IToggleProvider)togglePeer.GetPattern(PatternInterface.Toggle);
+            modelPattern.Expand();
+            toggle.Toggle();
+            bool BothRowsVisible() => spoken.ActualHeight > 0 && translate.ActualHeight > 0 &&
+                section.ActualHeight >= closedHeight + spoken.ActualHeight + translate.ActualHeight - 2;
+            await Settle(() => BothRowsVisible() && double.IsNaN(viewport.Height));
+            await Capture(root, $"languages-{theme}.png");
+            Check(disclosure.ExpandCollapseState == ExpandCollapseState.Expanded && BothRowsVisible(),
+                  $"Expanding reveals both pickers (expanded={section.Disclosure.IsExpanded}, clip={viewport.Visibility}, " +
+                  $"clip height={viewport.Height}/{viewport.ActualHeight}, group={closedHeight}/{section.ActualHeight}, " +
+                  $"rows={spoken.ActualHeight}+{translate.ActualHeight}, body={section.Disclosure.Content?.GetType().Name})");
             var selectedLabel = ((Panel)spoken.Content).Children.OfType<TextBlock>().Last();
             Check(selectedLabel.Text.Contains("Spanish") && !selectedLabel.IsTextTrimmed,
                   "The detected language fits within the sidebar");
-            await Capture(root, $"languages-{theme}.png");
+            Check(model.IsExpanded && model.ActualHeight > model.HeaderHeight, "Both panels can be open together");
+            modelPattern.Collapse();
+            Check(section.Disclosure.IsExpanded, "The headers operate independently");
             disclosure.Collapse();
-            await Task.Delay(350);
-            root.UpdateLayout();
+            await Settle(() => viewport.Visibility == Visibility.Collapsed);
+            Check(viewport.Visibility == Visibility.Collapsed, "Collapsed pickers leave the focus and accessibility trees");
             Check(Math.Abs(section.ActualHeight - closedHeight) < 1 && AutomationProperties.GetName(spoken).Contains("Spanish"),
                   "Collapsing reclaims the sidebar space and preserves the detected language");
         }

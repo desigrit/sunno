@@ -13,6 +13,15 @@ namespace Sunno.Services;
 /// </summary>
 public sealed class AppearanceController : IDisposable
 {
+    internal static bool AnimationsEnabled
+    {
+        get
+        {
+            try { return new UISettings().AnimationsEnabled; }
+            catch { return true; }
+        }
+    }
+
     private readonly Window _window;
     private readonly FrameworkElement _root;
     private readonly DispatcherQueue _dispatcher;
