@@ -254,10 +254,10 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         }
 
         _client.Partial += ev => _ui.TryEnqueue(() => OnPartial(ev));
-        SpokenPicker.Configure("Spoken language", Array.Empty<string>(), "en");
-        TranslationPicker.Configure("Translate to", Array.Empty<string>(), "off");
-        SpokenPicker.Chosen += code => _ = _client.SetLanguageAsync(code, false);
-        TranslationPicker.Chosen += code => _ = _client.SetLanguageAsync(code, true);
+        LanguageControls.SpokenPicker.Configure("Spoken language", Array.Empty<string>(), "en");
+        LanguageControls.TranslationPicker.Configure("Translate to", Array.Empty<string>(), "off");
+        LanguageControls.SpokenPicker.Chosen += code => _ = _client.SetLanguageAsync(code, false);
+        LanguageControls.TranslationPicker.Chosen += code => _ = _client.SetLanguageAsync(code, true);
         _client.LanguageChanged += state => QueueCurrentClientEvent(() => OnLanguageState(state));
         _client.Translated += translation => QueueCurrentClientEvent(() =>
         {
@@ -517,7 +517,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     {
         if (state.Kind == "spoken_language")
         {
-            SpokenPicker.Configure("Spoken language", state.Choices, state.Selected, state.Detected);
+            LanguageControls.SpokenPicker.Configure("Spoken language", state.Choices, state.Selected, state.Detected);
             if (state.Accepted is string code) _settings.SpokenLanguage = code;
         }
         else
@@ -525,12 +525,12 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
             if (_translationTarget != state.Selected)
                 foreach (var line in Lines) line.Translation = null;
             _translationTarget = state.Selected;
-            TranslationPicker.Configure("Translate to", state.Choices, state.Selected, preparing: state.Preparing);
+            LanguageControls.TranslationPicker.Configure("Translate to", state.Choices, state.Selected, preparing: state.Preparing);
             if (state.Accepted is string code) _settings.TranslateTo = code;
         }
         if (state.Accepted != null) _settings.Save();
-        LanguageNotice.Text = state.Message ?? "";
-        LanguageNotice.Visibility = state.Message == null ? Visibility.Collapsed : Visibility.Visible;
+        LanguageControls.Notice.Text = state.Message ?? "";
+        LanguageControls.Notice.Visibility = state.Message == null ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void OnPartial(CaptionEvent ev)
@@ -1970,11 +1970,11 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
     private void OnConnection(bool connected)
     {
         _connected = connected;
-        LanguageControls.IsHitTestVisible = connected;
+        LanguageControls.PickerRows.IsHitTestVisible = connected;
         if (!connected)
         {
-            SpokenPicker.IsEnabled = false;
-            TranslationPicker.IsEnabled = false;
+            LanguageControls.SpokenPicker.IsEnabled = false;
+            LanguageControls.TranslationPicker.IsEnabled = false;
         }
         if (connected)
         {

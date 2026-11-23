@@ -24,7 +24,7 @@ Read about the [product decisions and model judgment](#product-decisions-and-mod
 
 ### Spoken language and translation
 
-Under **Speech model**, open **Spoken language** to search by language name. English is the default.
+In the sidebar, expand **Language** and choose **Spoken language** to search by name. English is the default.
 Choose a language to keep captions in it, or choose **Auto** on a multilingual Whisper model.
 Auto shows the language it detects and waits for sustained speech before switching. English-only
 models show English. Sunno remembers your preference when you return to a compatible model.
