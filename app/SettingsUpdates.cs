@@ -13,8 +13,6 @@ public sealed partial class MainWindow
     private CancellationTokenSource? _updateRequest;
     private AppRelease? _availableUpdate;
     private string? _downloadedUpdate;
-    private static string UpdateDownloadFolder => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Sunno", "Updates");
 
     private static (Version Version, string Architecture)? InstalledUpdateIdentity()
     {
@@ -66,7 +64,7 @@ public sealed partial class MainWindow
         try
         {
             // Reclaim only this updater's cached packages already installed or superseded.
-            await Task.Run(() => AppUpdates.ClearInstalledDownloads(UpdateDownloadFolder,
+            await Task.Run(() => AppUpdates.ClearInstalledDownloads(
                 installed.Version, installed.Architecture), request.Token);
             var result = await new AppUpdates(_updateHttp).CheckAsync(installed.Version, installed.Architecture, request.Token);
             request.Token.ThrowIfCancellationRequested();
@@ -104,7 +102,7 @@ public sealed partial class MainWindow
             });
             // No model, settings or recording directory is involved in an update download.
             var downloaded = await Task.Run(() => new AppUpdates(_updateHttp).DownloadAsync(
-                release, installed.Version, installed.Architecture, UpdateDownloadFolder, progress, request.Token), request.Token);
+                release, installed.Version, installed.Architecture, AppUpdates.DownloadDirectory, progress, request.Token), request.Token);
             request.Token.ThrowIfCancellationRequested();
             _downloadedUpdate = downloaded;
             AppUpdatePanel.Show(UpdateActionLabel, ReadyMessage(release));

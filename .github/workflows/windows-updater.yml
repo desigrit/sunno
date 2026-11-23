@@ -1,0 +1,30 @@
+name: Windows updater
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'app/SettingsUpdates.cs'
+      - 'app/Services/AppUpdates*.cs'
+      - 'app/Package.appxmanifest'
+      - 'tests/updates/**'
+      - '.github/workflows/windows-updater.yml'
+permissions:
+  contents: read
+jobs:
+  packaged-handoff:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Check release selection, download verification and cleanup
+        run: dotnet run --project tests/updates/UpdateTests.csproj -c Release
+      - name: Check the installer path from outside the app package
+        shell: powershell
+        run: |
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name AllowDevelopmentWithoutDevLicense -PropertyType DWord -Value 1 -Force | Out-Null
+          ./tests/updates/Test-PackagedHandoff.ps1

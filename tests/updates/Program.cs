@@ -61,6 +61,23 @@ byte[] Package(string name = AppUpdates.PackageName, string publisher = AppUpdat
 }
 var payload = Package();
 AppRelease Asset(byte[] bytes) => new(next, new Uri("https://github.com/desigrit/sunno/releases/download/v1.0.91.0/Sunno_1.0.91.0_x64.msix"), bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)));
+#if WINDOWS
+if (args is ["--packaged-handoff", var report])
+{
+    if (Windows.ApplicationModel.Package.Current.Id.Name != "Sunno.UpdatePathCheck")
+        throw new InvalidOperationException("This check requires the test package identity.");
+    using var http = new HttpClient(new StubHandler(_ =>
+        new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(payload) }));
+    var release = Asset(payload);
+    var installerPath = await new AppUpdates(http).DownloadAsync(release, current, "x64",
+        AppUpdates.DownloadDirectory, null, default);
+    AppUpdates.ClearInstalledDownloads(current, "x64");
+    // An unpackaged process will reopen this exact path after this process exits.
+    File.WriteAllText(report + ".tmp", JsonSerializer.Serialize(new { installerPath, release.Sha256 }));
+    File.Move(report + ".tmp", report);
+    return;
+}
+#endif
 var folder = Path.Combine(Path.GetTempPath(), "SunnoUpdateTests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(folder);
 try

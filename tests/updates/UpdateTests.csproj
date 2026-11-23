@@ -2,10 +2,12 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework Condition="'$(PackagedHandoff)' == 'true'">net8.0-windows10.0.19041.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../app/Services/AppUpdates.cs" Link="AppUpdates.cs" />
+    <Compile Condition="'$(PackagedHandoff)' == 'true'" Include="../../app/Services/AppUpdates.Windows.cs" Link="AppUpdates.Windows.cs" />
   </ItemGroup>
 </Project>
