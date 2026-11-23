@@ -1510,155 +1510,31 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         _deviceNotice = null;
     }
 
-    private bool _modelSectionOpen;
-
-    /// <summary>
-    /// Open or close the model list with a single eased height animation.
-    ///
-    /// Layout properties need <c>EnableDependentAnimation</c> — without it the animation is
-    /// silently dropped and the panel jumps, which is the exact jarring motion this replaced.
-    /// The list is measured while collapsed because the ScrollViewer gives its child unbounded
-    /// height, so the target is known before the animation starts.
-    /// </summary>
-    private void OnToggleModelSection(object sender, RoutedEventArgs e)
+    private void OnModelSectionExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
-        _modelSectionOpen = !_modelSectionOpen;
-
-        // Re-ask for the catalogue on open. The delay figures are learned from real decodes,
-        // and the first fetch happens on connect before a single utterance has been timed —
-        // so without this the user would keep seeing the shipped estimate all session and
-        // only get their own machine's number after a restart.
-        if (_modelSectionOpen && _connected) _ = _client.RequestModelsAsync();
-
-        AnimateModelPanel(_modelSectionOpen ? MeasureModelPanelHeight() : 0);
-        AnimateChevron(_modelSectionOpen ? 180 : 0);
+        UpdateModelListLimit();
+        // Refresh the per-device delay estimates when the model picker opens.
+        if (_connected) _ = _client.RequestModelsAsync();
     }
 
-    /// <summary>
-    /// Whether the user wants animation at all.
-    ///
-    /// Settings > Accessibility > Visual effects > Animation effects. Sunno exists for people
-    /// with a disability, and motion sensitivity is one; someone who has turned animation off
-    /// system-wide has asked every app to stop, and an accessibility app has less excuse than
-    /// most to ignore that. Read per use rather than cached, because the setting can change
-    /// while the app is running.
-    /// </summary>
-    private static bool AnimationsWanted
+    private void OnSpeakerPaneSizeChanged(object sender, SizeChangedEventArgs args) => UpdateModelListLimit();
+
+    private void UpdateModelListLimit()
     {
-        get
-        {
-            try { return new Windows.UI.ViewManagement.UISettings().AnimationsEnabled; }
-            catch { return true; }   // never let a diagnostics lookup break the UI
-        }
-    }
-
-    // Held so they can be stopped before a direct assignment. A completed Storyboard defaults to
-    // FillBehavior.HoldEnd, and an animation value outranks a local value in dependency-property
-    // precedence, so assigning Height or Angle directly while a previous run still holds the
-    // property is silently ignored. Reachable by animating with effects on, then turning
-    // "Animation effects" off — which AnimationsWanted is written to observe live — and then
-    // collapsing the panel, which would otherwise refuse to close.
-    private Storyboard? _modelPanelStory;
-    private Storyboard? _chevronStory;
-
-    private void AnimateModelPanel(double toHeight)
-    {
-        // Preserve the current animated height when reversing an unfinished toggle.
-        var fromHeight = ModelPanel.ActualHeight;
-        _modelPanelStory?.Stop();
-        ModelPanel.Height = fromHeight;
-
-        if (!AnimationsWanted)
-        {
-            ModelPanel.Height = toHeight;
-            return;
-        }
-
-        var animation = new DoubleAnimation
-        {
-            From = fromHeight,
-            To = toHeight,
-            Duration = new Duration(TimeSpan.FromMilliseconds(220)),
-            EnableDependentAnimation = true,
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-        };
-        Storyboard.SetTarget(animation, ModelPanel);
-        Storyboard.SetTargetProperty(animation, "Height");
-
-        var story = new Storyboard();
-        story.Children.Add(animation);
-        story.Completed += (_, _) =>
-        {
-            if (_modelPanelStory != story) return;
-            // Persist the final size and release HoldEnd, so window resizes and a
-            // refreshed catalogue can change Height after the animation finishes.
-            ModelPanel.Height = toHeight;
-            story.Stop();
-            _modelPanelStory = null;
-        };
-        _modelPanelStory = story;
-        story.Begin();
-    }
-
-    private void AnimateChevron(double angle)
-    {
-        _chevronStory?.Stop();
-
-        if (!AnimationsWanted)
-        {
-            ModelChevronRotate.Angle = angle;
-            return;
-        }
-
-        var animation = new DoubleAnimation
-        {
-            To = angle,
-            Duration = new Duration(TimeSpan.FromMilliseconds(220)),
-            EnableDependentAnimation = true,
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-        };
-        Storyboard.SetTarget(animation, ModelChevronRotate);
-        Storyboard.SetTargetProperty(animation, "Angle");
-
-        _chevronStory = new Storyboard();
-        _chevronStory.Children.Add(animation);
-        _chevronStory.Begin();
-    }
-
-    /// <summary>
-    /// Keep the whole model section within three quarters of the available sidebar.
-    /// The remaining space belongs to speakers, even in a short window.
-    /// </summary>
-    private double MeasureModelPanelHeight()
-    {
-        var width = ModelPanel.ActualWidth > 0 ? ModelPanel.ActualWidth : 240;
-        ModelOptions.Measure(new Windows.Foundation.Size(width, double.PositiveInfinity));
-        ModelToggle.Measure(new Windows.Foundation.Size(width, double.PositiveInfinity));
+        if (ModelPanel is null || ModelDisclosure is null || LanguageControls is null || ModelDisclosure.HeaderHeight <= 0) return;
         var limit = ModelPickerLayout.MaximumListHeight(
             SpeakerPaneLayout.ActualHeight,
             SpeakerPaneLayout.Padding.Top + SpeakerPaneLayout.Padding.Bottom,
-            ModelToggle.DesiredSize.Height + LanguageControls.ActualHeight,
+            ModelDisclosure.HeaderHeight + LanguageControls.ActualHeight,
             ModelSection.Margin.Top + ModelSection.Margin.Bottom);
-        ModelPanel.MaxHeight = limit;
-        return Math.Min(ModelOptions.DesiredSize.Height, limit);
+        if (ModelPanel.MaxHeight != limit) ModelPanel.MaxHeight = limit;
     }
-
-    private void OnSpeakerPaneSizeChanged(object sender, SizeChangedEventArgs e) =>
-        ResizeModelPanelIfOpen();
 
     private void OnModelPanelPointerEntered(object sender, PointerRoutedEventArgs e) =>
         ModelPanel.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
 
     private void OnModelPanelPointerExited(object sender, PointerRoutedEventArgs e) =>
         ModelPanel.VerticalScrollBarVisibility = ScrollBarVisibility.Hidden;
-
-    private void ResizeModelPanelIfOpen()
-    {
-        if (!_modelSectionOpen) return;
-        _modelPanelStory?.Stop();
-        _modelPanelStory = null;
-        ModelPanel.Height = MeasureModelPanelHeight();
-    }
 
     /// <summary>Keep the collapsed header's summary in step with what's actually loaded.</summary>
     private void UpdateHeaderModelName()
@@ -1736,7 +1612,7 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         }
         UpdateHeaderModelName();
         // The catalogue just arrived or changed, so an open panel's content height moved.
-        ResizeModelPanelIfOpen();
+        UpdateModelListLimit();
     }
 
     /// <summary>
@@ -1889,9 +1765,9 @@ public sealed partial class MainWindow : Window, System.ComponentModel.INotifyPr
         if (_emptyStateVisible == visible) return;
         _emptyStateVisible = visible;
 
-        _emptyFadeStory?.Stop();   // see the note on _modelPanelStory about held animation values
+        _emptyFadeStory?.Stop();
 
-        if (!AnimationsWanted)
+        if (!AppearanceController.AnimationsEnabled)
         {
             EmptyState.Opacity = visible ? 1 : 0;
             EmptyState.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;

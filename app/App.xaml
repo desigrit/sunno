@@ -37,6 +37,14 @@
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
+            <Style x:Key="SidebarDetailTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="11.5" />
+                <Setter Property="FontWeight" Value="Normal" />
+                <Setter Property="LineHeight" Value="15" />
+                <Setter Property="TextWrapping" Value="NoWrap" />
+                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            </Style>
+
             <!-- Speaker palette. Everything else uses system theme resources so the app
                  follows light/dark, high contrast and the user accent colour. Mid-tone
                  hues, legible on both light and dark Mica. -->

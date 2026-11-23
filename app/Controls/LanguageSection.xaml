@@ -5,24 +5,17 @@
     xmlns:controls="using:Sunno.Controls"
     IsTabStop="False">
     <StackPanel>
-        <Expander x:Name="Disclosure" x:FieldModifier="internal"
-                  IsExpanded="False" MinHeight="32" Padding="0"
-                  HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
-                  Background="Transparent" BorderBrush="Transparent" BorderThickness="0"
-                  AutomationProperties.Name="Language">
-            <Expander.Resources>
-                <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="Transparent" />
-                <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
-            </Expander.Resources>
-            <Expander.Header>
-                <TextBlock Text="Language" Style="{StaticResource BodyStrongTextBlockStyle}"
+        <controls:SidebarDisclosure x:Name="Disclosure" x:FieldModifier="internal"
+                                    AutomationProperties.Name="Language">
+            <controls:SidebarDisclosure.Header>
+                <TextBlock Text="Language" Style="{StaticResource SidebarDetailTextStyle}"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            </Expander.Header>
+            </controls:SidebarDisclosure.Header>
             <StackPanel x:Name="PickerRows" x:FieldModifier="internal" Margin="8,0,0,0">
                 <controls:LanguagePicker x:Name="SpokenPicker" x:FieldModifier="internal" />
                 <controls:LanguagePicker x:Name="TranslationPicker" x:FieldModifier="internal" />
             </StackPanel>
-        </Expander>
+        </controls:SidebarDisclosure>
         <TextBlock x:Name="Notice" x:FieldModifier="internal" Visibility="Collapsed"
                    Margin="16,2,16,4" TextWrapping="Wrap"
                    Style="{StaticResource CaptionTextBlockStyle}"

@@ -172,6 +172,20 @@ public partial class App : Application
     private async Task RunLanguageChecks(Grid root)
     {
         var panel = new StackPanel { Width = 240, VerticalAlignment = VerticalAlignment.Center };
+        var model = new SidebarDisclosure
+        {
+            Header = XamlReader.Load("""
+                <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+                    <TextBlock Text="Speech model" Style="{StaticResource BodyStrongTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock Text="Whisper large-v3" Style="{StaticResource SidebarDetailTextStyle}"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                </StackPanel>
+                """),
+            Content = new ScrollViewer { MaxHeight = 56, Content = new TextBlock { Text = "Whisper large-v3", Margin = new Thickness(16, 6, 16, 6) } }
+        };
+        AutomationProperties.SetName(model, "Speech model");
+        panel.Children.Add(model);
         var section = new LanguageSection();
         var spoken = section.SpokenPicker;
         var translate = section.TranslationPicker;
@@ -191,8 +205,20 @@ public partial class App : Application
             var disclosure = (IExpandCollapseProvider)peer.GetPattern(PatternInterface.ExpandCollapse);
             Check(peer.GetName() == "Language" && disclosure.ExpandCollapseState == ExpandCollapseState.Collapsed,
                   "Language is a named, collapsed disclosure");
+            var modelPeer = FrameworkElementAutomationPeer.CreatePeerForElement(model);
+            var modelPattern = (IExpandCollapseProvider)modelPeer.GetPattern(PatternInterface.ExpandCollapse);
+            Check(modelPattern.ExpandCollapseState == ExpandCollapseState.Collapsed, "Both sections start closed");
+            var subtitle = (TextBlock)((StackPanel)model.Header).Children[1];
+            var label = (TextBlock)section.Disclosure.Header;
+            Check(label.FontSize == subtitle.FontSize && label.FontWeight.Weight == subtitle.FontWeight.Weight &&
+                  label.LineHeight == subtitle.LineHeight && label.FontSize == 11.5, "Language uses the model subtitle typography");
+            var languageLeft = label.TransformToVisual(panel).TransformPoint(new());
+            var modelLeft = subtitle.TransformToVisual(panel).TransformPoint(new());
+            Check(Math.Abs(languageLeft.X - modelLeft.X) < 1 && section.Disclosure.HeaderHeight >= 32,
+                  "Both headers share the same leading edge and Language keeps a full-height target");
             var closedHeight = section.ActualHeight;
             await Capture(root, $"language-collapsed-{theme}.png");
+            modelPattern.Expand();
             disclosure.Expand();
             await Task.Delay(350);
             root.UpdateLayout();
@@ -202,7 +228,10 @@ public partial class App : Application
             var selectedLabel = ((Panel)spoken.Content).Children.OfType<TextBlock>().Last();
             Check(selectedLabel.Text.Contains("Spanish") && !selectedLabel.IsTextTrimmed,
                   "The detected language fits within the sidebar");
+            Check(model.IsExpanded && model.ActualHeight > model.HeaderHeight, "Both panels can be open together");
             await Capture(root, $"languages-{theme}.png");
+            modelPattern.Collapse();
+            Check(section.Disclosure.IsExpanded, "The headers operate independently");
             disclosure.Collapse();
             await Task.Delay(350);
             root.UpdateLayout();
