@@ -14,7 +14,7 @@ public sealed record AppRelease(Version Version, Uri DownloadUrl, long Size, str
 public sealed record AppUpdateCheck(AppRelease? Update, bool HasAppReleases);
 
 /// <summary>Explicit, anonymous checks of this app's stable GitHub releases only.</summary>
-public sealed class AppUpdates(HttpClient client)
+public sealed partial class AppUpdates(HttpClient client)
 {
     public const string PackageName = "DesigritLabs.Sunno";
     public const string Publisher = "CN=A2015C41-8111-42CA-8A27-273B3309C099";
